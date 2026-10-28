@@ -56,14 +56,17 @@ composetpl releases on one or more Docker hosts, like Argo CD does for Helm
 charts on Kubernetes.
 
 Run "composecd server" to start the controller. The other commands talk to a
-running server (--server, $COMPOSECD_SERVER) with its admin token (--token,
-$COMPOSECD_TOKEN).`,
+running server (--server, $COMPOSECD_SERVER) with an API token (--token,
+$COMPOSECD_TOKEN); "composecd login" saves both.`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
+	// Flags win over the environment, which wins over `composecd login`.
+	saved := readLogin()
 	fs := root.PersistentFlags()
-	fs.StringVar(&cf.server, "server", envOr("COMPOSECD_SERVER", "http://localhost:8080"), "composecd server URL [$COMPOSECD_SERVER]")
-	fs.StringVar(&cf.token, "token", os.Getenv("COMPOSECD_TOKEN"), "API token [$COMPOSECD_TOKEN]")
+	fs.StringVar(&cf.server, "server", envOr("COMPOSECD_SERVER", orDefault(saved.Server, "http://localhost:8080")),
+		"composecd server URL [$COMPOSECD_SERVER, or as saved by login]")
+	fs.StringVar(&cf.token, "token", envOr("COMPOSECD_TOKEN", saved.Token), "API token [$COMPOSECD_TOKEN, or as saved by login]")
 	root.AddCommand(
 		newServerCmd(),
 		newValidateCmd(),
@@ -71,6 +74,11 @@ $COMPOSECD_TOKEN).`,
 		newHostCmd(cf),
 		newWindowCmd(cf),
 		newOperationCmd(cf),
+		newLoginCmd(cf),
+		newLogoutCmd(),
+		newWhoamiCmd(cf),
+		newTokenCmd(cf),
+		newUserCmd(cf),
 		&cobra.Command{
 			Use:   "refresh",
 			Short: "Fetch Git and reconcile every application now",
@@ -91,6 +99,13 @@ $COMPOSECD_TOKEN).`,
 		},
 	)
 	return root
+}
+
+func orDefault(v, def string) string {
+	if v == "" {
+		return def
+	}
+	return v
 }
 
 func envOr(key, def string) string {

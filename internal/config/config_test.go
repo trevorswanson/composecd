@@ -155,3 +155,22 @@ func TestUndecodableObjectsAreReported(t *testing.T) {
 		t.Errorf("foreign documents: %v, %+v", err, objs)
 	}
 }
+
+func TestBootstrapOIDC(t *testing.T) {
+	ok := "root: {repoURL: x}\nauth:\n  oidc: {issuer: https://auth.lan/app/, clientID: composecd, redirectURL: https://cd.lan/auth/callback, adminGroups: [admins]}\n"
+	b, err := ParseBootstrap([]byte(ok))
+	if err != nil || b.Auth.OIDC.ClientID != "composecd" {
+		t.Fatalf("oidc = %+v, %v", b.Auth.OIDC, err)
+	}
+	for name, doc := range map[string]string{
+		"http issuer":  "root: {repoURL: x}\nauth: {oidc: {issuer: http://auth.lan, clientID: c, redirectURL: https://cd.lan/cb, adminGroups: [a]}}\n",
+		"no client":    "root: {repoURL: x}\nauth: {oidc: {issuer: https://auth.lan, redirectURL: https://cd.lan/cb, adminGroups: [a]}}\n",
+		"no path":      "root: {repoURL: x}\nauth: {oidc: {issuer: https://auth.lan, clientID: c, redirectURL: https://cd.lan, adminGroups: [a]}}\n",
+		"no admins":    "root: {repoURL: x}\nauth: {oidc: {issuer: https://auth.lan, clientID: c, redirectURL: https://cd.lan/cb}}\n",
+		"and disabled": "root: {repoURL: x}\nauth: {disabled: true, oidc: {issuer: https://auth.lan, clientID: c, redirectURL: https://cd.lan/cb, adminGroups: [a]}}\n",
+	} {
+		if _, err := ParseBootstrap([]byte(doc)); err == nil {
+			t.Errorf("%s: expected an error", name)
+		}
+	}
+}

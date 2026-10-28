@@ -143,6 +143,9 @@ func newOperationCmd(cf *clientFlags) *cobra.Command {
 			return format.write(cmd.OutOrStdout(), op, func(w io.Writer) {
 				fmt.Fprintf(w, "Operation:  #%d %s of %s (%s)\n", op.ID, op.Kind, op.App, op.Trigger)
 				fmt.Fprintf(w, "Phase:      %s\n", op.Phase)
+				if op.User != "" {
+					fmt.Fprintf(w, "By:         %s\n", op.User)
+				}
 				if op.SourceRevision != "" {
 					fmt.Fprintf(w, "Source:     %s\n", op.SourceRevision)
 				}

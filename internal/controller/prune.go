@@ -90,7 +90,7 @@ func (c *Controller) leftovers(h *hosts.Host, objs *config.Objects) []*release.R
 // pruneOne uninstalls rel from h, keeping its history and named volumes.
 func (c *Controller) pruneOne(ctx context.Context, h *hosts.Host, rel *release.Release) bool {
 	name := rel.Name
-	op, err := c.startOperation(name, store.KindPrune, store.TriggerAuto, rel.Labels[LabelSourceRevision])
+	op, err := c.startOperation(name, store.KindPrune, store.TriggerAuto, rel.Labels[LabelSourceRevision], "")
 	if err != nil {
 		return false
 	}

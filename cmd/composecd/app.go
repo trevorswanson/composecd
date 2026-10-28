@@ -350,9 +350,9 @@ func newAppOperationsCmd(cf *clientFlags) *cobra.Command {
 
 func printOperations(w io.Writer, ops []*store.Operation, withApp bool) {
 	tw := tabwriter.NewWriter(w, 0, 8, 2, ' ', 0)
-	header := "ID\tKIND\tTRIGGER\tPHASE\tSOURCE\tRELEASE\tSTARTED\tMESSAGE"
+	header := "ID\tKIND\tBY\tPHASE\tSOURCE\tRELEASE\tSTARTED\tMESSAGE"
 	if withApp {
-		header = "ID\tAPP\tKIND\tTRIGGER\tPHASE\tSOURCE\tRELEASE\tSTARTED\tMESSAGE"
+		header = "ID\tAPP\tKIND\tBY\tPHASE\tSOURCE\tRELEASE\tSTARTED\tMESSAGE"
 	}
 	fmt.Fprintln(tw, header)
 	for _, op := range ops {
@@ -364,7 +364,11 @@ func printOperations(w io.Writer, ops []*store.Operation, withApp bool) {
 		if withApp {
 			app = op.App + "\t"
 		}
-		fmt.Fprintf(tw, "%d\t%s%s\t%s\t%s\t%s\t%s\t%s\t%s\n", op.ID, app, op.Kind, op.Trigger, op.Phase,
+		who := op.User
+		if who == "" {
+			who = op.Trigger
+		}
+		fmt.Fprintf(tw, "%d\t%s%s\t%s\t%s\t%s\t%s\t%s\t%s\n", op.ID, app, op.Kind, who, op.Phase,
 			orDash(short(op.SourceRevision)), rel, ago(op.StartedAt), firstLine(op.Message))
 	}
 	_ = tw.Flush()

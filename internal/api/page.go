@@ -1,44 +1,57 @@
 package api
 
 import (
-	"crypto/subtle"
 	"fmt"
 	"html/template"
 	"net/http"
 	"strings"
 	"time"
 
+	"github.com/trevorswanson/composecd/internal/auth"
 	"github.com/trevorswanson/composecd/internal/controller"
 	"github.com/trevorswanson/composecd/internal/windows"
 )
 
 type pageData struct {
-	Version  string
-	LoggedIn bool
-	Auth     bool
-	Failed   bool
-	Root     controller.RootStatus
-	Hosts    []controller.HostStatus
-	Apps     []controller.AppStatus
-	Windows  []windows.Status
-	Now      time.Time
+	Version string
+	// User is who is signed in (nil on the sign-in form).
+	User *auth.Principal
+	Auth bool
+	OIDC bool
+	// Error is why the last sign-in failed, for the form.
+	Error   string
+	Root    controller.RootStatus
+	Hosts   []controller.HostStatus
+	Apps    []controller.AppStatus
+	Windows []windows.Status
+	Now     time.Time
 }
 
-// page renders the status page, or the login form when not authorized.
+// signInErrors are the messages for /?error=... after a failed sign-in.
+var signInErrors = map[string]string{
+	"failed":    "That user name and password (or token) aren't valid.",
+	"locked":    "Too many failed sign-ins. Wait a minute and try again.",
+	"oidc":      "Signing in with your identity provider didn't work. Try again, or check composecd's log.",
+	"forbidden": "You signed in, but you aren't in a group allowed to use composecd.",
+}
+
+// page renders the status page, or the sign-in form when not signed in.
 func (s *server) page(render func(http.ResponseWriter, *pageData)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		d := &pageData{Version: s.Version, Auth: !s.AuthDisabled, Now: time.Now(), Failed: r.URL.Query().Has("failed")}
+		d := &pageData{Version: s.Version, Auth: !s.Auth.Disabled, OIDC: s.Auth.OIDC != nil, Now: time.Now(),
+			Error: signInErrors[r.URL.Query().Get("error")]}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("X-Frame-Options", "DENY")
-		if !s.authorized(r) {
+		p, err := s.Auth.Identify(r)
+		if err != nil {
 			w.WriteHeader(http.StatusUnauthorized)
 			if err := pageTemplate.Execute(w, d); err != nil {
-				s.Log.Error("rendering the login page", "error", err)
+				s.Log.Error("rendering the sign-in page", "error", err)
 			}
 			return
 		}
-		d.LoggedIn = true
+		d.User = p
 		render(w, d)
 	}
 }
@@ -48,25 +61,6 @@ func (s *server) statusPage(w http.ResponseWriter, d *pageData) {
 	if err := pageTemplate.Execute(w, d); err != nil {
 		s.Log.Error("rendering the status page", "error", err)
 	}
-}
-
-func (s *server) login(w http.ResponseWriter, r *http.Request) {
-	token := r.PostFormValue("token")
-	if s.AuthDisabled || s.Token == "" || subtle.ConstantTimeCompare([]byte(token), []byte(s.Token)) != 1 {
-		http.Redirect(w, r, "/?failed", http.StatusSeeOther)
-		return
-	}
-	// Secure only over HTTPS: on a plain-HTTP LAN the browser would never send it back.
-	http.SetCookie(w, &http.Cookie{ //nolint:gosec // see above; HttpOnly and SameSite=Strict are set
-		Name: cookieName, Value: token, Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode,
-		Secure: r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https", MaxAge: 7 * 24 * 3600,
-	})
-	http.Redirect(w, r, "/", http.StatusSeeOther)
-}
-
-func (s *server) logout(w http.ResponseWriter, r *http.Request) {
-	http.SetCookie(w, &http.Cookie{Name: cookieName, Value: "", Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteStrictMode}) //nolint:gosec // clears the cookie
-	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
 var pageTemplate = template.Must(template.New("page").Funcs(template.FuncMap{
@@ -91,7 +85,7 @@ const pageHTML = `<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-{{- if .LoggedIn }}<meta http-equiv="refresh" content="30">{{ end }}
+{{- with .User }}<meta http-equiv="refresh" content="30"><meta name="csrf-token" content="{{ .CSRF }}">{{ end }}
 <title>composecd</title>
 <style>
 :root { --bg: #f7f7f8; --fg: #1d1d1f; --muted: #6e6e73; --card: #fff; --line: #e3e3e6;
@@ -122,19 +116,28 @@ code { font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; }
 .unknown { color: var(--muted); }
 .error { color: var(--bad); font-size: 12px; margin-top: 4px; }
 form.login { max-width: 360px; margin: 80px auto; display: grid; gap: 10px; }
+a.button { display: block; text-align: center; text-decoration: none; padding: 8px 10px; border-radius: 6px;
+  border: 1px solid var(--line); background: var(--card); color: var(--fg); }
 input, button { font: inherit; padding: 8px 10px; border-radius: 6px; border: 1px solid var(--line);
   background: var(--card); color: var(--fg); }
 button { cursor: pointer; }
 </style>
 </head>
 <body><main>
-{{- if not .LoggedIn }}
+{{- if not .User }}
 <form class="login card" method="post" action="/login" style="padding:20px">
   <h1>composecd</h1>
   {{- if .Auth }}
-  <label for="token" class="muted">Admin token</label>
-  <input id="token" name="token" type="password" autocomplete="current-password" required autofocus>
-  {{- if .Failed }}<div class="error">That token is not valid.</div>{{ end }}
+  {{- with .Error }}<div class="error">{{ . }}</div>{{ end }}
+  {{- if .OIDC }}
+  <a href="/auth/oidc" class="button" role="button">Sign in with your identity provider</a>
+  <div class="muted" style="text-align:center">or</div>
+  {{- end }}
+  <label for="user" class="muted">User name</label>
+  <input id="user" name="user" autocomplete="username" autofocus>
+  <label for="password" class="muted">Password</label>
+  <input id="password" name="password" type="password" autocomplete="current-password" required>
+  <div class="muted" style="font-size:12px">To use an API token instead, leave the user name empty and paste the token as the password.</div>
   <button type="submit">Sign in</button>
   {{- end }}
 </form>
@@ -145,7 +148,8 @@ button { cursor: pointer; }
     Root <code>{{ .Root.RepoURL }}</code>{{ with .Root.Path }} <code>{{ . }}</code>{{ end }}
     @ <code>{{ .Root.TargetRevision }}</code> = <code>{{ short .Root.Revision }}</code>,
     refreshed {{ ago .Now .Root.RefreshedAt }}
-    {{- if .Auth }} <form method="post" action="/logout" style="display:inline"><button type="submit" style="padding:2px 8px">Sign out</button></form>{{ end }}
+    {{- with .User }} · {{ .Name }} <span class="badge">{{ .Role }}</span>
+    {{- if .Session }} <form method="post" action="/logout" style="display:inline"><input type="hidden" name="csrf" value="{{ .CSRF }}"><button type="submit" style="padding:2px 8px">Sign out</button></form>{{ end }}{{ end }}
   </div>
 </header>
 {{- with .Root.Error }}<div class="error">{{ . }}</div>{{ end }}

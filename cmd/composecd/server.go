@@ -21,6 +21,7 @@ import (
 	"github.com/trevorswanson/composetpl/pkg/registry"
 
 	"github.com/trevorswanson/composecd/internal/api"
+	"github.com/trevorswanson/composecd/internal/auth"
 	"github.com/trevorswanson/composecd/internal/config"
 	"github.com/trevorswanson/composecd/internal/controller"
 	"github.com/trevorswanson/composecd/internal/gitcache"
@@ -128,11 +129,18 @@ func runServer(parent context.Context, boot *config.Bootstrap, log *slog.Logger)
 		Log:      log,
 		Notify:   notifier,
 	})
+	authn := &auth.Authenticator{Store: st, AdminToken: token, Disabled: boot.Auth.Disabled}
+	if boot.Auth.OIDC != nil {
+		if authn.OIDC, err = auth.NewOIDC(*boot.Auth.OIDC); err != nil {
+			return err
+		}
+	}
+	if err := authn.Init(); err != nil {
+		return err
+	}
 	srv := &http.Server{
-		Addr: boot.Listen,
-		Handler: api.New(ctrl, api.Options{
-			Token: token, AuthDisabled: boot.Auth.Disabled, WebhookSecret: webhookSecret, Version: version, Log: log,
-		}),
+		Addr:              boot.Listen,
+		Handler:           api.New(ctrl, api.Options{Auth: authn, WebhookSecret: webhookSecret, Version: version, Log: log}),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	errc := make(chan error, 1)

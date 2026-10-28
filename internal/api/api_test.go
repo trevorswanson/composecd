@@ -9,11 +9,15 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/http/cookiejar"
 	"net/http/httptest"
 	"net/url"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
+	"github.com/trevorswanson/composecd/internal/auth"
 	"github.com/trevorswanson/composecd/internal/config"
 	"github.com/trevorswanson/composecd/internal/controller"
 	"github.com/trevorswanson/composecd/internal/health"
@@ -62,7 +66,7 @@ func (s *stub) Root() controller.RootStatus {
 	return controller.RootStatus{Root: config.Root{RepoURL: "https://git.lan/x.git"}, Revision: "abc"}
 }
 
-func (s *stub) Sync(name string) (*store.Operation, error) {
+func (s *stub) Sync(name, user string) (*store.Operation, error) {
 	s.calls = append(s.calls, "sync "+name)
 	if name == "busy" {
 		return nil, controller.ErrBusy
@@ -70,7 +74,7 @@ func (s *stub) Sync(name string) (*store.Operation, error) {
 	return &store.Operation{ID: 7, App: name, Phase: store.PhaseRunning}, nil
 }
 
-func (s *stub) Rollback(name string, revision int) (*store.Operation, error) {
+func (s *stub) Rollback(name string, revision int, user string) (*store.Operation, error) {
 	s.calls = append(s.calls, fmt.Sprintf("rollback %s %d", name, revision))
 	return &store.Operation{ID: 8, App: name}, nil
 }
@@ -118,9 +122,24 @@ func (s *stub) OperationMetrics() []controller.OperationMetric {
 	return []controller.OperationMetric{{Kind: "sync", Trigger: "auto", Phase: "Succeeded", Count: 3, Seconds: 4.5}}
 }
 
+// newAuthn returns an authenticator on a fresh store with admin token adminToken.
+func newAuthn(t *testing.T, adminToken string) *auth.Authenticator {
+	t.Helper()
+	db, err := store.Open(filepath.Join(t.TempDir(), "composecd.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	return &auth.Authenticator{Store: db, AdminToken: adminToken}
+}
+
+// newServer serves a stub controller; o.Auth defaults to admin token "secret".
 func newServer(t *testing.T, o Options) (*httptest.Server, *stub) {
 	t.Helper()
 	st := &stub{}
+	if o.Auth == nil {
+		o.Auth = newAuthn(t, "secret")
+	}
 	o.Log = slog.New(slog.NewTextHandler(io.Discard, nil))
 	srv := httptest.NewServer(New(st, o))
 	t.Cleanup(srv.Close)
@@ -149,7 +168,7 @@ func do(t *testing.T, srv *httptest.Server, method, path, token, body string) (i
 }
 
 func TestAPI(t *testing.T) {
-	srv, st := newServer(t, Options{Token: "secret", Version: "v1.2.3"})
+	srv, st := newServer(t, Options{Version: "v1.2.3"})
 	cases := []struct {
 		method, path, body string
 		status             int
@@ -185,14 +204,14 @@ func TestAPI(t *testing.T) {
 			t.Errorf("%s %s: %d %s, want %d containing %q", tc.method, tc.path, status, body, tc.status, tc.contains)
 		}
 	}
-	want := "operations media 5;sync media;sync busy;rollback media 2;pause media maintenance;resume media;refresh media;refresh all;operations  0"
+	want := "operations media 5;sync media;sync busy;rollback media 2;pause media maintenance (by admin);resume media;refresh media;refresh all;operations  0"
 	if got := strings.Join(st.calls, ";"); got != want {
 		t.Errorf("calls:\n got %s\nwant %s", got, want)
 	}
 }
 
 func TestAuth(t *testing.T) {
-	srv, st := newServer(t, Options{Token: "secret"})
+	srv, st := newServer(t, Options{})
 	for _, token := range []string{"", "wrong"} {
 		if status, _ := do(t, srv, "GET", "/api/v1/apps", token, ""); status != 401 {
 			t.Errorf("token %q: status %d", token, status)
@@ -206,92 +225,228 @@ func TestAuth(t *testing.T) {
 	}
 
 	// No token configured means nothing is authorized.
-	locked, _ := newServer(t, Options{})
+	locked, _ := newServer(t, Options{Auth: newAuthn(t, "")})
 	if status, _ := do(t, locked, "GET", "/api/v1/apps", "", ""); status != 401 {
 		t.Errorf("empty token: status %d", status)
 	}
-	open, _ := newServer(t, Options{AuthDisabled: true})
+	open, _ := newServer(t, Options{Auth: &auth.Authenticator{Disabled: true}})
 	if status, _ := do(t, open, "GET", "/api/v1/apps", "", ""); status != 200 {
 		t.Errorf("auth disabled: status %d", status)
 	}
 }
 
-func TestStatusPageLogin(t *testing.T) {
-	srv, st := newServer(t, Options{Token: "secret", Version: "v1"})
-	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+// browser is an HTTP client that keeps cookies and doesn't follow redirects.
+type browser struct {
+	t      *testing.T
+	srv    *httptest.Server
+	client *http.Client
+	csrf   string
+}
 
-	resp, err := client.Get(srv.URL + "/")
+func newBrowser(t *testing.T, srv *httptest.Server) *browser {
+	jar, _ := cookiejar.New(nil)
+	return &browser{t: t, srv: srv, client: &http.Client{Jar: jar,
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
+}
+
+func (b *browser) do(method, path, body string, headers map[string]string) (int, http.Header, string) {
+	b.t.Helper()
+	req, _ := http.NewRequest(method, b.srv.URL+path, strings.NewReader(body))
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	resp, err := b.client.Do(req)
 	if err != nil {
+		b.t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	out, _ := io.ReadAll(resp.Body)
+	if m := regexp.MustCompile(`name="csrf-token" content="([0-9a-f]+)"`).FindStringSubmatch(string(out)); m != nil {
+		b.csrf = m[1]
+	}
+	return resp.StatusCode, resp.Header, string(out)
+}
+
+func (b *browser) login(user, password string) string {
+	b.t.Helper()
+	form := url.Values{"user": {user}, "password": {password}}.Encode()
+	_, h, _ := b.do("POST", "/login", form, map[string]string{"Content-Type": "application/x-www-form-urlencoded", "Origin": b.srv.URL})
+	return h.Get("Location")
+}
+
+func TestSessions(t *testing.T) {
+	authn := newAuthn(t, "secret")
+	if err := authn.AddUser("trevor", auth.RoleAdmin, "correct horse battery"); err != nil {
 		t.Fatal(err)
 	}
-	body, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
-	if resp.StatusCode != 401 || !strings.Contains(string(body), `name="token"`) || strings.Contains(string(body), "<strong>media</strong>") {
-		t.Errorf("login page: %d\n%s", resp.StatusCode, body)
-	}
-
-	resp, err = client.PostForm(srv.URL+"/login", url.Values{"token": {"wrong"}})
-	if err != nil {
+	if err := authn.AddUser("guest", auth.RoleReadonly, "guest password!"); err != nil {
 		t.Fatal(err)
 	}
-	resp.Body.Close()
-	if loc := resp.Header.Get("Location"); loc != "/?failed" || len(resp.Cookies()) != 0 {
-		t.Errorf("bad login: %q %v", loc, resp.Cookies())
+	srv, st := newServer(t, Options{Auth: authn, Version: "v1"})
+
+	b := newBrowser(t, srv)
+	status, _, body := b.do("GET", "/", "", nil)
+	if status != 401 || !strings.Contains(body, `name="password"`) || strings.Contains(body, "<strong>media</strong>") || strings.Contains(body, "identity provider") {
+		t.Errorf("sign-in page: %d\n%s", status, body)
+	}
+	if loc := b.login("trevor", "wrong password"); loc != "/?error=failed" {
+		t.Errorf("bad password: %q", loc)
+	}
+	if _, _, body := b.do("GET", "/?error=failed", "", nil); !strings.Contains(body, "aren&#39;t valid") {
+		t.Errorf("error message missing:\n%s", body)
+	}
+	// A cross-site form can't sign the browser in.
+	status, _, _ = b.do("POST", "/login", "user=trevor&password=correct+horse+battery",
+		map[string]string{"Content-Type": "application/x-www-form-urlencoded", "Origin": "https://evil.example"})
+	if status != 403 {
+		t.Errorf("cross-site login: %d", status)
 	}
 
-	resp, err = client.PostForm(srv.URL+"/login", url.Values{"token": {"secret"}})
-	if err != nil {
-		t.Fatal(err)
+	if loc := b.login("trevor", "correct horse battery"); loc != "/" {
+		t.Fatalf("login: %q", loc)
 	}
-	resp.Body.Close()
-	cookies := resp.Cookies()
-	if len(cookies) != 1 || !cookies[0].HttpOnly || cookies[0].SameSite != http.SameSiteStrictMode {
-		t.Fatalf("cookies = %+v", cookies)
-	}
-
-	req, _ := http.NewRequest("GET", srv.URL+"/", nil)
-	req.AddCookie(cookies[0])
-	resp, err = client.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	body, _ = io.ReadAll(resp.Body)
-	resp.Body.Close()
-	for _, want := range []string{"<strong>media</strong>", `class="badge synced"`, `class="badge healthy"`, `class="badge up"`, "nas",
-		"<strong>nightly</strong>", `<span class="badge outofsync">open</span>`} {
-		if !strings.Contains(string(body), want) {
+	status, _, body = b.do("GET", "/", "", nil)
+	for _, want := range []string{"<strong>media</strong>", `class="badge synced"`, `class="badge healthy"`, `class="badge up"`,
+		"<strong>nightly</strong>", `<span class="badge outofsync">open</span>`, "trevor <span class=\"badge\">admin</span>", "Sign out"} {
+		if status != 200 || !strings.Contains(body, want) {
 			t.Errorf("status page lacks %q:\n%s", want, body)
 		}
 	}
+	if b.csrf == "" {
+		t.Fatal("no CSRF token on the page")
+	}
+	if status, _, body := b.do("GET", "/api/v1/me", "", nil); status != 200 || !strings.Contains(body, `"via": "password"`) {
+		t.Errorf("me: %d %s", status, body)
+	}
 
-	// The cookie is not enough to trigger an operation.
-	req, _ = http.NewRequest("POST", srv.URL+"/api/v1/apps/media/sync", nil)
-	req.AddCookie(cookies[0])
-	resp, err = client.Do(req)
+	// The session acts only with its CSRF token.
+	if status, _, _ := b.do("POST", "/api/v1/apps/media/sync", "", nil); status != 403 || len(st.calls) != 0 {
+		t.Errorf("session POST without CSRF: %d %v", status, st.calls)
+	}
+	if status, _, _ := b.do("POST", "/api/v1/apps/media/sync", "", map[string]string{auth.CSRFHeader: b.csrf}); status != 202 {
+		t.Errorf("session POST with CSRF: %d", status)
+	}
+
+	// Sign out needs the CSRF token too, then the session is gone.
+	if status, _, _ := b.do("POST", "/logout", "", nil); status != 403 {
+		t.Errorf("logout without CSRF: %d", status)
+	}
+	b.do("POST", "/logout", "csrf="+b.csrf, map[string]string{"Content-Type": "application/x-www-form-urlencoded"})
+	if status, _, _ := b.do("GET", "/api/v1/me", "", nil); status != 401 {
+		t.Errorf("after logout: %d", status)
+	}
+
+	// A read-only user can look but not act.
+	g := newBrowser(t, srv)
+	g.login("guest", "guest password!")
+	g.do("GET", "/", "", nil)
+	if status, _, _ := g.do("GET", "/api/v1/apps", "", nil); status != 200 {
+		t.Errorf("readonly read: %d", status)
+	}
+	if status, _, body := g.do("POST", "/api/v1/apps/media/sync", "", map[string]string{auth.CSRFHeader: g.csrf}); status != 403 || !strings.Contains(body, "admin role") {
+		t.Errorf("readonly sync: %d %s", status, body)
+	}
+	// ...but may change their own password, not someone else's.
+	if status, _, _ := g.do("PUT", "/api/v1/users/trevor/password", `{"password": "taken over!!"}`, map[string]string{auth.CSRFHeader: g.csrf}); status != 403 {
+		t.Errorf("changing another user's password: %d", status)
+	}
+	if status, _, _ := g.do("PUT", "/api/v1/users/guest/password", `{"password": "a new guest password"}`, map[string]string{auth.CSRFHeader: g.csrf}); status != 200 {
+		t.Errorf("changing own password: %d", status)
+	}
+	if status, _, _ := g.do("GET", "/api/v1/me", "", nil); status != 401 {
+		t.Errorf("a password change should sign the user out: %d", status)
+	}
+
+	// Signing in with an API token instead of a password.
+	tb := newBrowser(t, srv)
+	if loc := tb.login("", "secret"); loc != "/" {
+		t.Errorf("admin token login: %q", loc)
+	}
+	if status, _, body := tb.do("GET", "/api/v1/me", "", nil); status != 200 || !strings.Contains(body, `"via": "admin-token"`) {
+		t.Errorf("token session: %d %s", status, body)
+	}
+}
+
+func TestAccounts(t *testing.T) {
+	srv, _ := newServer(t, Options{})
+	status, body := do(t, srv, "POST", "/api/v1/tokens", "secret", `{"name": "grafana", "role": "readonly"}`)
+	var created struct{ Token string }
+	_ = json.Unmarshal([]byte(body), &created)
+	if status != 201 || !strings.HasPrefix(created.Token, "ccd_") {
+		t.Fatalf("create token: %d %s", status, body)
+	}
+	if status, _ := do(t, srv, "POST", "/api/v1/tokens", "secret", `{"name": "grafana", "role": "readonly"}`); status != 409 {
+		t.Errorf("duplicate token: %d", status)
+	}
+	if status, _ := do(t, srv, "POST", "/api/v1/tokens", "secret", `{"name": "x", "role": "owner"}`); status != 400 {
+		t.Errorf("bad role: %d", status)
+	}
+	if status, body := do(t, srv, "GET", "/api/v1/tokens", "secret", ""); status != 200 || !strings.Contains(body, `"createdBy": "admin"`) || strings.Contains(body, "Hash") {
+		t.Errorf("list tokens: %d %s", status, body)
+	}
+	// The new token reads but can't act or manage accounts.
+	if status, _ := do(t, srv, "GET", "/api/v1/apps", created.Token, ""); status != 200 {
+		t.Errorf("readonly token read: %d", status)
+	}
+	for _, c := range [][2]string{{"POST", "/api/v1/apps/media/sync"}, {"GET", "/api/v1/tokens"}, {"POST", "/api/v1/hosts/nas/maintenance"}} {
+		if status, _ := do(t, srv, c[0], c[1], created.Token, ""); status != 403 {
+			t.Errorf("readonly %s %s: %d", c[0], c[1], status)
+		}
+	}
+	if status, _ := do(t, srv, "DELETE", "/api/v1/tokens/grafana", "secret", ""); status != 200 {
+		t.Errorf("revoke: %d", status)
+	}
+	if status, _ := do(t, srv, "GET", "/api/v1/apps", created.Token, ""); status != 401 {
+		t.Errorf("revoked token: %d", status)
+	}
+	if status, _ := do(t, srv, "DELETE", "/api/v1/tokens/grafana", "secret", ""); status != 404 {
+		t.Errorf("revoking twice: %d", status)
+	}
+
+	if status, body := do(t, srv, "POST", "/api/v1/users", "secret", `{"name": "kid", "role": "readonly", "password": "short"}`); status != 400 || !strings.Contains(body, "at least 10") {
+		t.Errorf("short password: %d %s", status, body)
+	}
+	if status, _ := do(t, srv, "POST", "/api/v1/users", "secret", `{"name": "kid", "role": "readonly", "password": "a long password"}`); status != 201 {
+		t.Errorf("add user: %d", status)
+	}
+	if status, body := do(t, srv, "GET", "/api/v1/users", "secret", ""); status != 200 || !strings.Contains(body, `"name": "kid"`) || strings.Contains(body, "assword") {
+		t.Errorf("list users: %d %s", status, body)
+	}
+	if status, _ := do(t, srv, "PUT", "/api/v1/users/kid/password", "secret", `{"password": "another long one"}`); status != 200 {
+		t.Errorf("admin sets a password: %d", status)
+	}
+	if status, _ := do(t, srv, "DELETE", "/api/v1/users/kid", "secret", ""); status != 200 {
+		t.Errorf("delete user: %d", status)
+	}
+	if status, _ := do(t, srv, "DELETE", "/api/v1/users/kid", "secret", ""); status != 404 {
+		t.Errorf("delete twice: %d", status)
+	}
+}
+
+func TestOIDCRoutes(t *testing.T) {
+	authn := newAuthn(t, "secret")
+	o, err := auth.NewOIDC(config.OIDC{Issuer: "http://127.0.0.1:1", ClientID: "composecd", RedirectURL: "https://cd.lan/sso/done", AdminGroups: []string{"a"}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp.Body.Close()
-	if resp.StatusCode != 401 || len(st.calls) != 0 {
-		t.Errorf("cookie POST: %d %v", resp.StatusCode, st.calls)
+	authn.OIDC = o
+	srv, _ := newServer(t, Options{Auth: authn})
+	b := newBrowser(t, srv)
+	if _, _, body := b.do("GET", "/", "", nil); !strings.Contains(body, `href="/auth/oidc"`) {
+		t.Errorf("no OIDC button:\n%s", body)
 	}
-	// But it reads the API.
-	req, _ = http.NewRequest("GET", srv.URL+"/api/v1/apps", nil)
-	req.AddCookie(cookies[0])
-	resp, err = client.Do(req)
-	if err != nil {
-		t.Fatal(err)
+	// The provider is unreachable: the user is sent back with a message.
+	if _, h, _ := b.do("GET", "/auth/oidc", "", nil); h.Get("Location") != "/?error=oidc" {
+		t.Errorf("unreachable provider: %q", h.Get("Location"))
 	}
-	var apps []controller.AppStatus
-	_ = json.NewDecoder(resp.Body).Decode(&apps)
-	resp.Body.Close()
-	if resp.StatusCode != 200 || len(apps) != 1 {
-		t.Errorf("cookie GET: %d %v", resp.StatusCode, apps)
+	// The callback is served at the redirect URL's path.
+	if _, h, _ := b.do("GET", "/sso/done?state=x&code=y", "", nil); h.Get("Location") != "/?error=oidc" {
+		t.Errorf("callback without a sign-in: %q", h.Get("Location"))
 	}
 }
 
 func TestPhase2Endpoints(t *testing.T) {
-	srv, st := newServer(t, Options{Token: "secret"})
+	srv, st := newServer(t, Options{})
 	if status, body := do(t, srv, "GET", "/api/v1/windows", "secret", ""); status != 200 || !strings.Contains(body, `"open": true`) {
 		t.Errorf("windows: %d %s", status, body)
 	}
@@ -301,7 +456,7 @@ func TestPhase2Endpoints(t *testing.T) {
 	if status, _ := do(t, srv, "POST", "/api/v1/hosts/pi/maintenance", "secret", `{"enabled": true}`); status != 404 {
 		t.Errorf("unknown host: %d", status)
 	}
-	if strings.Join(st.calls, ";") != "maintenance nas true disks" {
+	if strings.Join(st.calls, ";") != "maintenance nas true disks (by admin)" {
 		t.Errorf("calls = %v", st.calls)
 	}
 
@@ -346,12 +501,12 @@ func TestWebhook(t *testing.T) {
 		return resp.StatusCode, string(b)
 	}
 
-	off, _ := newServer(t, Options{Token: "secret"})
+	off, _ := newServer(t, Options{})
 	if status, _ := post(off, push, map[string]string{"X-GitHub-Event": "push"}); status != 404 {
 		t.Errorf("webhook without a secret: %d", status)
 	}
 
-	srv, st := newServer(t, Options{Token: "secret", WebhookSecret: "hook-secret"})
+	srv, st := newServer(t, Options{WebhookSecret: "hook-secret"})
 	cases := []struct {
 		name    string
 		body    string

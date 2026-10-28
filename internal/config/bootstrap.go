@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -109,6 +110,29 @@ type Auth struct {
 	TokenFile string `yaml:"tokenFile,omitempty"`
 	// Disabled turns authentication off, e.g. behind a proxy that authenticates.
 	Disabled bool `yaml:"disabled,omitempty"`
+	// OIDC enables signing in with an OpenID Connect provider.
+	OIDC *OIDC `yaml:"oidc,omitempty"`
+}
+
+// OIDC configures sign-in with an OpenID Connect provider (Authentik,
+// Authelia, Keycloak, Pocket ID, ...), with the authorization code flow and PKCE.
+type OIDC struct {
+	Issuer   string `yaml:"issuer"`
+	ClientID string `yaml:"clientID"`
+	// ClientSecretFile holds the client secret; omit it for a public client.
+	ClientSecretFile string `yaml:"clientSecretFile,omitempty"`
+	// RedirectURL is composecd's callback, e.g. https://composecd.lan/auth/callback.
+	RedirectURL string   `yaml:"redirectURL"`
+	Scopes      []string `yaml:"scopes,omitempty"`
+	// UsernameClaim names the user (default preferred_username, then email, then sub).
+	UsernameClaim string `yaml:"usernameClaim,omitempty"`
+	// GroupsClaim lists the user's groups (default groups).
+	GroupsClaim string `yaml:"groupsClaim,omitempty"`
+	// AdminGroups get the admin role.
+	AdminGroups []string `yaml:"adminGroups,omitempty"`
+	// ReadonlyGroups get the readonly role. When empty, every other user who
+	// signs in is readonly; list groups to restrict who may sign in at all.
+	ReadonlyGroups []string `yaml:"readonlyGroups,omitempty"`
 }
 
 // Defaults for Bootstrap.
@@ -177,6 +201,23 @@ func ParseBootstrap(data []byte) (*Bootstrap, error) {
 		}
 		if r.PasswordFile != "" && r.SSHKeyFile != "" {
 			errs = append(errs, fmt.Errorf("repositories[%d]: set passwordFile or sshKeyFile, not both", i))
+		}
+	}
+	if o := b.Auth.OIDC; o != nil {
+		if b.Auth.Disabled {
+			errs = append(errs, errors.New("auth.oidc and auth.disabled can't both be set"))
+		}
+		if !strings.HasPrefix(o.Issuer, "https://") && !strings.HasPrefix(o.Issuer, "http://localhost") && !strings.HasPrefix(o.Issuer, "http://127.0.0.1") {
+			errs = append(errs, errors.New("auth.oidc.issuer must be an https:// URL"))
+		}
+		if o.ClientID == "" {
+			errs = append(errs, errors.New("auth.oidc.clientID is required"))
+		}
+		if u, err := url.Parse(o.RedirectURL); err != nil || u.Scheme == "" || u.Host == "" || u.Path == "" || u.Path == "/" {
+			errs = append(errs, errors.New("auth.oidc.redirectURL must be an absolute URL with a path, e.g. https://composecd.lan/auth/callback"))
+		}
+		if len(o.AdminGroups) == 0 {
+			errs = append(errs, errors.New("auth.oidc.adminGroups needs at least one group"))
 		}
 	}
 	names := map[string]bool{}
