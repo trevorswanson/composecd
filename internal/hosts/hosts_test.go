@@ -88,6 +88,8 @@ func (b *pingBackend) Runner(*Host, []string, io.Writer) compose.Runner {
 	return pingRunner{fail: b.fail}
 }
 
+func (b *pingBackend) Watch(context.Context, *Host, func(string)) error { return nil }
+
 func (b *pingBackend) Store(h *Host) storage.Driver {
 	b.built++
 	return storage.NewLocal(filepath.Join(b.dir, h.Name()))

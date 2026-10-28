@@ -100,3 +100,26 @@ func TestAppState(t *testing.T) {
 		t.Errorf("resumed = %+v", st)
 	}
 }
+
+func TestHostState(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "composecd.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if st, err := s.HostState("nas"); err != nil || st.Maintenance {
+		t.Errorf("default = %+v, %v", st, err)
+	}
+	if err := s.SetMaintenance("nas", true, "replacing disks"); err != nil {
+		t.Fatal(err)
+	}
+	if st, _ := s.HostState("nas"); !st.Maintenance || st.MaintenanceReason != "replacing disks" {
+		t.Errorf("on = %+v", st)
+	}
+	if err := s.SetMaintenance("nas", false, "x"); err != nil {
+		t.Fatal(err)
+	}
+	if st, _ := s.HostState("nas"); st.Maintenance || st.MaintenanceReason != "" {
+		t.Errorf("off = %+v", st)
+	}
+}

@@ -1,7 +1,9 @@
 // Package api serves composecd's REST API, its status page and /healthz.
 //
 // Every /api/v1 endpoint needs the admin token as "Authorization: Bearer
-// <token>", unless authentication is disabled. The status page also accepts
+// <token>", unless authentication is disabled. The exceptions verify
+// themselves: /api/v1/webhook checks the Git server's signature. /metrics and
+// /healthz are open. The status page also accepts
 // the token as a cookie set by its login form; the cookie is only honored for
 // GET requests, so it can't be used to trigger operations.
 package api
@@ -19,6 +21,7 @@ import (
 
 	"github.com/trevorswanson/composecd/internal/controller"
 	"github.com/trevorswanson/composecd/internal/store"
+	"github.com/trevorswanson/composecd/internal/windows"
 )
 
 // Controller is what the API needs from the controller.
@@ -36,6 +39,10 @@ type Controller interface {
 	Resume(name string) error
 	RefreshApp(name string) error
 	Refresh()
+	RefreshRepos(urls []string) bool
+	Windows() []windows.Status
+	SetMaintenance(host string, on bool, reason string) error
+	OperationMetrics() []controller.OperationMetric
 }
 
 // Options configure the server.
@@ -43,8 +50,10 @@ type Options struct {
 	// Token is the admin token; ignored when AuthDisabled.
 	Token        string
 	AuthDisabled bool
-	Version      string
-	Log          *slog.Logger
+	// WebhookSecret enables POST /api/v1/webhook.
+	WebhookSecret string
+	Version       string
+	Log           *slog.Logger
 }
 
 // cookieName holds the token for the status page.
@@ -66,6 +75,8 @@ func New(c Controller, o Options) http.Handler {
 	mux.HandleFunc("GET /{$}", s.page(s.statusPage))
 	mux.HandleFunc("POST /login", s.login)
 	mux.HandleFunc("POST /logout", s.logout)
+	mux.HandleFunc("POST /api/v1/webhook", s.webhook)
+	mux.HandleFunc("GET /metrics", s.metrics)
 
 	api := func(pattern string, h func(*http.Request) (int, interface{}, error)) {
 		mux.HandleFunc(pattern, s.json(h))
@@ -79,6 +90,18 @@ func New(c Controller, o Options) http.Handler {
 		return http.StatusAccepted, map[string]string{"status": "refresh requested"}, nil
 	})
 	api("GET /api/v1/hosts", func(*http.Request) (int, interface{}, error) { return http.StatusOK, nonNil(c.HostStatuses()), nil })
+	api("POST /api/v1/hosts/{name}/maintenance", func(r *http.Request) (int, interface{}, error) {
+		var body struct {
+			Enabled bool   `json:"enabled"`
+			Reason  string `json:"reason"`
+		}
+		if err := decode(r, &body); err != nil {
+			return 0, nil, err
+		}
+		err := c.SetMaintenance(r.PathValue("name"), body.Enabled, body.Reason)
+		return http.StatusOK, map[string]bool{"maintenance": body.Enabled}, err
+	})
+	api("GET /api/v1/windows", func(*http.Request) (int, interface{}, error) { return http.StatusOK, nonNil(c.Windows()), nil })
 	api("GET /api/v1/apps", func(*http.Request) (int, interface{}, error) { return http.StatusOK, nonNil(c.Apps()), nil })
 	api("GET /api/v1/apps/{name}", func(r *http.Request) (int, interface{}, error) {
 		st, err := c.App(r.PathValue("name"))
@@ -193,7 +216,7 @@ func (s *server) json(h func(*http.Request) (int, interface{}, error)) http.Hand
 				status = ae.status
 			case errors.Is(err, controller.ErrNotFound):
 				status = http.StatusNotFound
-			case errors.Is(err, controller.ErrBusy):
+			case errors.Is(err, controller.ErrBusy), errors.Is(err, controller.ErrBlocked):
 				status = http.StatusConflict
 			default:
 				status = http.StatusInternalServerError

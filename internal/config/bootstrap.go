@@ -28,7 +28,58 @@ type Bootstrap struct {
 	// Repositories hold credentials for Git repositories, matched by URL prefix.
 	Repositories []Repository `yaml:"repositories,omitempty"`
 	Auth         Auth         `yaml:"auth,omitempty"`
+	// Webhook lets Git servers trigger a refresh on push.
+	Webhook Webhook `yaml:"webhook,omitempty"`
+	// Notifications send events (failed syncs, degraded apps, ...) elsewhere.
+	Notifications []Notifier `yaml:"notifications,omitempty"`
 }
+
+// Webhook configures POST /api/v1/webhook.
+type Webhook struct {
+	// SecretFile holds the shared secret Git servers sign payloads with
+	// (GitHub, Gitea and Forgejo) or send as a token (GitLab). Without it the
+	// endpoint is off.
+	SecretFile string `yaml:"secretFile,omitempty"`
+}
+
+// Notifier sends events to one service.
+type Notifier struct {
+	Name string `yaml:"name"`
+	// Type is webhook (JSON POST), ntfy, gotify, discord or slack.
+	Type string `yaml:"type"`
+	// URL is the endpoint: an ntfy topic URL, a Gotify server, a Discord or
+	// Slack webhook URL, or any URL for webhook. URLFile reads it from a file
+	// instead, for URLs that are secrets.
+	URL     string `yaml:"url,omitempty"`
+	URLFile string `yaml:"urlFile,omitempty"`
+	// TokenFile holds an ntfy access token or a Gotify application token.
+	TokenFile string `yaml:"tokenFile,omitempty"`
+	// Events to send (default: sync-failed, health-degraded, host-down, prune).
+	Events []string `yaml:"events,omitempty"`
+	// Applications are name globs; events about other apps aren't sent
+	// (default: every app). Host events are always sent.
+	Applications []string `yaml:"applications,omitempty"`
+}
+
+// Notification events.
+const (
+	EventSyncSucceeded  = "sync-succeeded"
+	EventSyncFailed     = "sync-failed"
+	EventHealed         = "self-healed"
+	EventPruned         = "prune"
+	EventHealthDegraded = "health-degraded"
+	EventOutOfSync      = "out-of-sync"
+	EventHostDown       = "host-down"
+)
+
+// AllEvents lists every notification event.
+var AllEvents = []string{EventSyncSucceeded, EventSyncFailed, EventHealed, EventPruned, EventHealthDegraded, EventOutOfSync, EventHostDown}
+
+// DefaultEvents are sent when a notifier lists none.
+var DefaultEvents = []string{EventSyncFailed, EventHealthDegraded, EventHostDown, EventPruned}
+
+// Notifier types.
+var notifierTypes = map[string]bool{"webhook": true, "ntfy": true, "gotify": true, "discord": true, "slack": true}
 
 // Root locates the objects in Git.
 type Root struct {
@@ -128,7 +179,37 @@ func ParseBootstrap(data []byte) (*Bootstrap, error) {
 			errs = append(errs, fmt.Errorf("repositories[%d]: set passwordFile or sshKeyFile, not both", i))
 		}
 	}
+	names := map[string]bool{}
+	for i, n := range b.Notifications {
+		where := fmt.Sprintf("notifications[%d]", i)
+		if n.Name == "" {
+			errs = append(errs, fmt.Errorf("%s.name is required", where))
+		} else if names[n.Name] {
+			errs = append(errs, fmt.Errorf("%s: name %q is used twice", where, n.Name))
+		}
+		names[n.Name] = true
+		if !notifierTypes[n.Type] {
+			errs = append(errs, fmt.Errorf("%s: type %q must be webhook, ntfy, gotify, discord or slack", where, n.Type))
+		}
+		if (n.URL == "") == (n.URLFile == "") {
+			errs = append(errs, fmt.Errorf("%s: set url or urlFile", where))
+		}
+		for _, e := range n.Events {
+			if !contains(AllEvents, e) {
+				errs = append(errs, fmt.Errorf("%s: unknown event %q (want one of %s)", where, e, strings.Join(AllEvents, ", ")))
+			}
+		}
+	}
 	return b, errors.Join(errs...)
+}
+
+func contains(list []string, s string) bool {
+	for _, v := range list {
+		if v == s {
+			return true
+		}
+	}
+	return false
 }
 
 // Credentials returns the repository entry with the longest URL prefix of url,
@@ -142,6 +223,37 @@ func (b *Bootstrap) Credentials(url string) *Repository {
 		}
 	}
 	return best
+}
+
+// Waves orders the Applications so each comes after everything it dependsOn:
+// wave 0 depends on nothing, wave 1 only on wave 0, and so on. Objects must be
+// valid (no cycles).
+func (o *Objects) Waves() [][]*Application {
+	level := map[string]int{}
+	var depth func(a *Application) int
+	depth = func(a *Application) int {
+		if l, ok := level[a.Metadata.Name]; ok {
+			return l
+		}
+		level[a.Metadata.Name] = 0 // a cycle (invalid objects) ends here
+		l := 0
+		for _, d := range a.Spec.DependsOn {
+			if dep := o.Application(d); dep != nil {
+				l = max(l, depth(dep)+1)
+			}
+		}
+		level[a.Metadata.Name] = l
+		return l
+	}
+	var waves [][]*Application
+	for _, a := range o.Applications {
+		l := depth(a)
+		for len(waves) <= l {
+			waves = append(waves, nil)
+		}
+		waves[l] = append(waves[l], a)
+	}
+	return waves
 }
 
 // Resolve fills in each Application's defaults that depend on the root: an

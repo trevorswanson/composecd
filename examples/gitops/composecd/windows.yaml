@@ -1,0 +1,28 @@
+# Sync windows hold back automatic syncs, self-heal and prune.
+#
+# No automatic changes to media apps on movie nights; a manual
+# "composecd app sync" still goes through.
+apiVersion: composecd/v1alpha1
+kind: SyncWindow
+metadata:
+  name: movie-night
+spec:
+  kind: deny
+  schedule: "0 19 * * 5,6"      # Friday and Saturday 19:00...
+  duration: 5h                  # ...until midnight
+  timeZone: America/Chicago
+  labels: {tier: media}
+  manualSync: true
+
+# An allow window restricts the apps it matches to syncing only while it is
+# open, e.g. nightly updates for the NAS:
+#
+# ---
+# apiVersion: composecd/v1alpha1
+# kind: SyncWindow
+# metadata: {name: nightly}
+# spec:
+#   kind: allow
+#   schedule: "0 3 * * *"
+#   duration: 2h
+#   hosts: [nas]

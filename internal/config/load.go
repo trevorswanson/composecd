@@ -19,6 +19,7 @@ import (
 type Objects struct {
 	Hosts        []*Host
 	Applications []*Application
+	SyncWindows  []*SyncWindow
 }
 
 // Host returns the host named name, or nil.
@@ -152,8 +153,18 @@ func (o *Objects) decode(name string, data []byte) error {
 				return fmt.Errorf("%s: %w", origin, err)
 			}
 			o.Applications = append(o.Applications, &Application{Metadata: obj.Metadata, Spec: obj.Spec, Origin: origin})
+		case KindSyncWindow:
+			var obj struct {
+				header   `yaml:",inline"`
+				Metadata Metadata       `yaml:"metadata"`
+				Spec     SyncWindowSpec `yaml:"spec"`
+			}
+			if err := strictDecode(&doc, &obj); err != nil {
+				return fmt.Errorf("%s: %w", origin, err)
+			}
+			o.SyncWindows = append(o.SyncWindows, &SyncWindow{Metadata: obj.Metadata, Spec: obj.Spec, Origin: origin})
 		default:
-			return fmt.Errorf("%s: unknown kind %q (want %s or %s)", origin, h.Kind, KindHost, KindApplication)
+			return fmt.Errorf("%s: unknown kind %q (want %s, %s or %s)", origin, h.Kind, KindHost, KindApplication, KindSyncWindow)
 		}
 	}
 }

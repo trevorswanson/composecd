@@ -14,10 +14,15 @@ spec:
   destination:
     host: nas
   syncPolicy:
-    automated: {}
+    automated:
+      prune: true       # uninstall it if it's removed from Git (volumes are kept)
+      selfHeal: true    # recreate containers someone removed or changed by hand
     options:
       wait: true
       timeout: 2m
+    retry:              # retry a failed sync: after 30s, 1m, 2m
+      limit: 3
+      backoff: {duration: 30s, factor: 2, maxDuration: 5m}
 ---
 # dashboard is synced by hand ("composecd app sync dashboard"); composecd still
 # shows when Git and the host differ.
@@ -26,6 +31,9 @@ kind: Application
 metadata:
   name: dashboard
 spec:
+  # Only synced automatically once whoami is Synced and Healthy (this one is
+  # manual, so it only documents the order).
+  dependsOn: [whoami]
   source:
     path: charts/dashboard
     valueFiles:

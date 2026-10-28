@@ -8,8 +8,13 @@ charts on Kubernetes.
   them, renders each Application's chart and compares it with what is deployed.
 - **Sync status and health.** Each Application is `Synced` or `OutOfSync`, with per-service diffs and live
   drift, and `Healthy`, `Progressing`, `Degraded`, `Suspended` or `Missing` from its containers.
-- **Automated or manual sync.** Automated Applications are deployed whenever Git changes. Any Application can
+- **Automated or manual sync.** Automated Applications are deployed whenever Git changes, can repair
+  containers changed by hand (self-heal), and are uninstalled when removed from Git (prune). Any Application can
   be synced, rolled back or paused from the CLI or API.
+- **Homelab controls.** Sync windows ("no restarts on movie night"), dependencies between apps (Traefik
+  before the apps behind it), retries with backoff, and per-host maintenance mode.
+- **Fast feedback.** Push webhooks from Gitea, Forgejo, GitHub or GitLab, Docker events from every host,
+  notifications to ntfy, Gotify, Discord, Slack or any webhook, and Prometheus metrics.
 - **Many hosts.** Deploy to the local engine, or to others over `ssh://` or `tcp://` with TLS.
 - **Plain composetpl releases.** Every sync is a composetpl revision stored on its host, with hooks, history and
   rollback, so `composetpl list --host ssh://pi.lan` shows the same releases composecd manages.
@@ -23,17 +28,25 @@ composecd app rollback media 3
 
 ## How it works
 
-Every refresh interval (3 minutes by default), composecd:
-1. Fetches the root of your GitOps repository and reads the `Host` and `Application` objects in it.
+Every refresh interval (3 minutes by default), or right away when a push webhook arrives, composecd:
+1. Fetches the root of your GitOps repository and reads the `Host`, `Application` and `SyncWindow` objects
+   in it.
 2. Pings every host.
-3. For each Application:
+3. For each Application, in `dependsOn` order:
    1. Renders its chart at the current commit, with live `.Capabilities` and `lookup` from its host.
    2. Compares the result with the deployed composetpl release.
    3. Checks the live containers for drift and health.
-   4. If the Application is automated and Git differs from what's deployed, runs
-      `composetpl upgrade --install` on it.
+   4. If the Application is automated, and nothing holds it back (a sync window, a dependency that isn't
+      Synced and Healthy yet, host maintenance):
+      - if Git differs from what's deployed, runs `composetpl upgrade --install` on it;
+      - if only the containers drifted and `selfHeal` is on, runs `composetpl repair` on it.
+4. Uninstalls releases whose Application left Git (or moved to another host), if they had `prune` on.
 
-A failed automatic sync is not retried until something changes in Git. Fix the chart, or run `app sync` by hand.
+Between refreshes, each host's Docker events (a container stopped, died, was removed or turned unhealthy)
+get the affected app reconciled within a couple of seconds.
+
+A failed automatic sync is retried only if the Application has a `retry` policy. Otherwise, and once the
+retries are used up, composecd waits for something to change in Git. Fix the chart, or run `app sync` by hand.
 
 composecd stores only its own operation history and settings (SQLite, under `dataDir`). Desired state is in
 Git, live state is on the hosts, and release history is in composetpl's storage on each host.
@@ -142,8 +155,14 @@ spec:
     env: {PUID: "1000"}           # over the host's env
   destination:
     host: nas
+  dependsOn: [traefik]            # auto-sync only once these are Synced and Healthy
   syncPolicy:
-    automated: {}                 # omit for manual sync
+    automated:                    # omit for manual sync
+      prune: true                 # uninstall when removed from Git (keeps volumes and history)
+      selfHeal: true              # repair containers removed or changed by hand
+    retry:                        # retry a failed automatic sync
+      limit: 3
+      backoff: {duration: 10s, factor: 2, maxDuration: 5m}
     options:
       wait: true                  # docker compose up --wait (default true)
       timeout: 5m                 # for --wait and each hook (default 5m)
@@ -159,6 +178,39 @@ Each sync replaces the release's values with these (`composetpl upgrade --reset-
 
 The `env` and `expandenv` template functions see only the host's and Application's `env`, not composecd's own
 environment, so a render doesn't depend on where composecd runs.
+
+**Self-heal** repairs a container that is missing, was created from different settings, or belongs to a
+service the release no longer has (orphaned). It reapplies the deployed revision without a new revision or
+hooks. A container that is merely stopped is a health problem, not drift. If an app keeps drifting, self-heal
+backs off from 5 seconds up to 5 minutes between repairs.
+
+**Prune** is recorded on the release when it's synced, so composecd still knows after the Application is
+gone. Pruning uninstalls the release with `composetpl uninstall --keep-history`, so named volumes and history
+stay. It never happens when the root can't be read, or when the root suddenly defines no applications at all.
+Releases that are left behind and not pruned show as orphaned releases on their host.
+
+### SyncWindow
+
+```yaml
+kind: SyncWindow
+metadata: {name: movie-night}
+spec:
+  kind: deny                      # or allow
+  schedule: "0 19 * * 5,6"        # cron: when the window opens
+  duration: 5h                    # how long it stays open
+  timeZone: America/Chicago       # default UTC
+  applications: ["plex", "media-*"]   # globs; an app must match every selector that is set
+  hosts: [nas]
+  labels: {tier: media}
+  manualSync: true                # let manual syncs through while it blocks
+```
+
+Windows work as in Argo CD:
+- An open `deny` window blocks the apps it matches.
+- If any `allow` windows match an app, the app may only sync while one of them is open.
+- `manualSync` lets `app sync` and `app rollback` through while the window blocks.
+
+Windows apply to automatic syncs, self-heal and prune.
 
 ## Status
 
@@ -176,8 +228,8 @@ environment, so a render doesn't depend on where composecd runs.
 | `Suspended` | A container is paused. |
 | `Missing` | Not deployed, or no containers. |
 
-Drift alone (someone ran `docker stop` or edited a container) shows as `OutOfSync`, but doesn't trigger an
-automatic sync yet. `app sync` fixes it, and so does `composetpl repair NAME`.
+When automation holds off, `app get` and `app list` say why under **Waiting**: a sync window, a dependency,
+host maintenance, a retry or self-heal backoff, or a failed sync waiting for a change in Git.
 
 ## Operations
 
@@ -191,7 +243,9 @@ automatic sync yet. `app sync` fixes it, and so does `composetpl repair NAME`.
 | `app history NAME` | composetpl revisions, with the Git commit each came from. |
 | `app operations NAME`, `operation list`, `operation get ID` | Sync and rollback history, with each operation's output. |
 | `app refresh NAME`, `refresh` | Fetch and reconcile now instead of waiting for the interval. |
-| `host list` | Reachability and engine versions. |
+| `host list` | Reachability, engine versions, maintenance and orphaned releases. |
+| `host maintenance NAME on\|off` | While on, nothing on the host is synced, healed or pruned automatically. Manual operations still work. |
+| `window list` | Sync windows, whether they're open, and the apps they match. |
 | `validate DIR` | Check objects offline. |
 
 Hooks are composetpl's: `x-composetpl` hook services run at `pre-install`/`pre-upgrade` (Argo's PreSync),
@@ -208,10 +262,45 @@ Every `/api/v1` endpoint needs `Authorization: Bearer <token>`:
 | `POST /api/v1/apps/{name}/sync`, `.../rollback` (`{"revision": N}`) | Start an operation (202, returns it) |
 | `POST /api/v1/apps/{name}/pause` (`{"reason": "..."}`), `.../resume`, `.../refresh` | |
 | `GET /api/v1/operations`, `GET /api/v1/operations/{id}` | Operations, with output |
-| `GET /api/v1/hosts`, `GET /api/v1/root`, `POST /api/v1/refresh`, `GET /api/v1/version` | |
+| `GET /api/v1/hosts`, `POST /api/v1/hosts/{name}/maintenance` (`{"enabled": true, "reason": "..."}`) | |
+| `GET /api/v1/windows`, `GET /api/v1/root`, `POST /api/v1/refresh`, `GET /api/v1/version` | |
 
-`/healthz` needs no token. The status page at `/` asks for the token once and keeps it in a cookie. That cookie
+`/healthz` and `/metrics` need no token. `POST /api/v1/webhook` checks the Git server's signature instead. The status page at `/` asks for the token once and keeps it in a cookie. That cookie
 only works for reads, so a cross-site request can't trigger a sync.
+
+## Webhooks, notifications and metrics
+
+**Webhooks.** Set `webhook.secretFile` in `composecd.yaml`, then add a push webhook in your Git server that
+points at `https://<composecd>/api/v1/webhook`, using the same secret and the JSON content type. Gitea,
+Forgejo and GitHub sign the payload with it; GitLab sends it as its token. A push to the root, or to any
+Application's repository, triggers a refresh right away.
+
+**Notifications** are configured in `composecd.yaml`, where their URLs and tokens can be read from files:
+
+```yaml
+notifications:
+  - name: phone
+    type: ntfy                    # ntfy, gotify, discord, slack or webhook (JSON POST of the event)
+    url: https://ntfy.example.lan/homelab
+    tokenFile: /run/secrets/ntfy-token
+    events: [sync-failed, health-degraded, host-down, prune]   # the default
+  - name: chat
+    type: discord
+    urlFile: /run/secrets/discord-webhook
+    events: [sync-succeeded, sync-failed, self-healed]
+    applications: ["media-*"]     # only these apps (host events are always sent)
+```
+
+The events are `sync-succeeded`, `sync-failed` (which also covers failed rollbacks, heals and prunes),
+`self-healed`, `prune`, `health-degraded` and `out-of-sync`, each sent when an app enters that state, and
+`host-down`.
+
+**Metrics.** `GET /metrics` serves Prometheus metrics:
+- `composecd_app_sync_status` and `composecd_app_health_status`, one series per app with its current status;
+- `composecd_app_paused` and `composecd_app_blocked`;
+- `composecd_host_up`, `composecd_host_maintenance` and `composecd_host_orphaned_releases`;
+- `composecd_operations_total` and `composecd_operation_duration_seconds_total`, by kind, trigger and phase;
+- `composecd_root_error`, `composecd_root_last_refresh_timestamp_seconds` and `composecd_sync_window_open`.
 
 ## Remote hosts and paths
 
@@ -245,7 +334,13 @@ only works for reads, so a cross-site request can't trigger a sync.
 | Automated sync, manual sync, rollback (disables auto-sync) | Same |
 | PreSync / PostSync hooks | composetpl `x-composetpl` hooks |
 | Declarative setup (app of apps) | Everything is read from the root directory in Git |
-| Self-heal, prune, sync windows, retries, notifications, webhooks, ApplicationSets, SSO, image updater | Planned; see [docs/PLAN.md](docs/PLAN.md) |
+| Self-heal, prune | Same; prune keeps named volumes and release history |
+| Sync windows | `SyncWindow`, with the same allow/deny/manualSync rules, matched by app, host or labels |
+| Sync waves across apps | `dependsOn` |
+| Retry with backoff | `syncPolicy.retry` |
+| Git webhooks, notifications, metrics | Same; native ntfy, Gotify, Discord, Slack and webhook notifiers |
+| — | Host maintenance mode; reconciles on Docker events |
+| ApplicationSets, multi-source apps, SOPS, web UI, SSO, image updater | Planned; see [docs/PLAN.md](docs/PLAN.md) |
 
 ## Development
 

@@ -18,6 +18,10 @@ import (
 const (
 	KindSync     = "sync"
 	KindRollback = "rollback"
+	// KindHeal re-applies the deployed revision to drifted containers.
+	KindHeal = "heal"
+	// KindPrune uninstalls a release whose Application left Git.
+	KindPrune = "prune"
 
 	TriggerAuto   = "auto"
 	TriggerManual = "manual"
@@ -70,6 +74,11 @@ CREATE TABLE IF NOT EXISTS operations (
 	finished_at      TEXT
 );
 CREATE INDEX IF NOT EXISTS operations_app ON operations (app, id);
+CREATE TABLE IF NOT EXISTS host_state (
+	host               TEXT PRIMARY KEY,
+	maintenance        INTEGER NOT NULL DEFAULT 0,
+	maintenance_reason TEXT NOT NULL DEFAULT ''
+);
 CREATE TABLE IF NOT EXISTS app_state (
 	app           TEXT PRIMARY KEY,
 	paused        INTEGER NOT NULL DEFAULT 0,
@@ -224,6 +233,36 @@ func (s *Store) SetPaused(app string, paused bool, reason string) error {
 	_, err := s.db.Exec(`INSERT INTO app_state (app, paused, paused_reason) VALUES (?, ?, ?)
 		ON CONFLICT (app) DO UPDATE SET paused = excluded.paused, paused_reason = excluded.paused_reason`,
 		app, boolInt(paused), reason)
+	return err
+}
+
+// HostState is what composecd remembers about a host.
+type HostState struct {
+	// Maintenance stops automatic syncs, self-heal and prune on the host.
+	Maintenance       bool   `json:"maintenance"`
+	MaintenanceReason string `json:"maintenanceReason,omitempty"`
+}
+
+// HostState returns what is stored for host (the zero value if nothing is).
+func (s *Store) HostState(host string) (HostState, error) {
+	var st HostState
+	var on int
+	err := s.db.QueryRow(`SELECT maintenance, maintenance_reason FROM host_state WHERE host = ?`, host).Scan(&on, &st.MaintenanceReason)
+	if errors.Is(err, sql.ErrNoRows) {
+		return HostState{}, nil
+	}
+	st.Maintenance = on != 0
+	return st, err
+}
+
+// SetMaintenance turns maintenance mode on or off for host.
+func (s *Store) SetMaintenance(host string, on bool, reason string) error {
+	if !on {
+		reason = ""
+	}
+	_, err := s.db.Exec(`INSERT INTO host_state (host, maintenance, maintenance_reason) VALUES (?, ?, ?)
+		ON CONFLICT (host) DO UPDATE SET maintenance = excluded.maintenance, maintenance_reason = excluded.maintenance_reason`,
+		host, boolInt(on), reason)
 	return err
 }
 

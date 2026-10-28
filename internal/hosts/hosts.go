@@ -19,6 +19,7 @@ import (
 	"github.com/trevorswanson/composetpl/pkg/storage"
 
 	"github.com/trevorswanson/composecd/internal/config"
+	"github.com/trevorswanson/composecd/internal/events"
 )
 
 // State is whether a host answered its last ping.
@@ -51,6 +52,9 @@ type Backend interface {
 	Runner(h *Host, env []string, progress io.Writer) compose.Runner
 	// Store returns a fresh release storage driver for h.
 	Store(h *Host) storage.Driver
+	// Watch calls on with the compose project of every container event on h
+	// until ctx is done or the event stream ends.
+	Watch(ctx context.Context, h *Host, on func(project string)) error
 }
 
 // Host is one engine.
@@ -208,8 +212,9 @@ func (r *Registry) Sync(specs []*config.Host) {
 	next := map[string]*Host{}
 	for _, s := range specs {
 		name := s.Metadata.Name
+		// An unchanged host keeps its object (and storage cache) untouched: other
+		// goroutines read its Spec.
 		if old, ok := r.hosts[name]; ok && reflect.DeepEqual(old.Spec.Spec, s.Spec) && reflect.DeepEqual(old.Spec.Metadata, s.Metadata) {
-			old.Spec = s
 			next[name] = old
 			continue
 		}
@@ -259,6 +264,10 @@ func (c *CLI) Store(h *Host) storage.Driver {
 	v := storage.NewVolume(h.Global(), c.HelperImage)
 	v.Env = h.Env()
 	return v
+}
+
+func (c *CLI) Watch(ctx context.Context, h *Host, on func(project string)) error {
+	return events.Watch(ctx, h.Global(), h.Env(), on)
 }
 
 // locked serializes a storage driver.

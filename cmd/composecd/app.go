@@ -77,6 +77,8 @@ func message(a controller.AppStatus) string {
 	switch {
 	case a.Error != "":
 		return a.Error
+	case a.Blocked != "":
+		return "waiting: " + a.Blocked
 	case len(a.Sync.Reasons) > 0:
 		return strings.Join(a.Sync.Reasons, "; ")
 	}
@@ -128,6 +130,19 @@ func printApp(w io.Writer, a *controller.AppStatus) {
 		fmt.Fprintf(w, " (%s)", a.Health.Message)
 	}
 	fmt.Fprintln(w)
+	if len(a.DependsOn) > 0 {
+		fmt.Fprintf(w, "Depends on: %s\n", strings.Join(a.DependsOn, ", "))
+	}
+	if a.Blocked != "" {
+		fmt.Fprintf(w, "Waiting:    %s\n", a.Blocked)
+	}
+	if r := a.Retry; r != nil {
+		next := "no retries left"
+		if !r.NextAt.IsZero() {
+			next = "next " + time.Until(r.NextAt).Round(time.Second).String() + " from now"
+		}
+		fmt.Fprintf(w, "Retries:    %d failures, limit %d, %s\n", r.Failures, r.Limit, next)
+	}
 	if r := a.Release; r != nil {
 		fmt.Fprintf(w, "Release:    revision %d, %s, %s, %s\n", r.Revision, r.Status, r.Chart, ago(r.LastDeployed))
 	}
