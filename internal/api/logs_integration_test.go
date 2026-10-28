@@ -184,7 +184,7 @@ func integrationContainerLogStream(t *testing.T, encrypted, oci bool) {
 	srv := httptest.NewServer(New(c, Options{Auth: a}))
 	defer srv.Close()
 	_, body := do(t, srv, "GET", "/api/v1/apps/"+name, "secret", "")
-	if strings.Contains(body, message) || strings.Contains(body, "example-only-password") {
+	if encrypted && (strings.Contains(body, message) || strings.Contains(body, "example-only-password")) {
 		t.Fatal("API leaked secret values")
 	}
 	req, _ := http.NewRequestWithContext(ctx, "GET", srv.URL+"/api/v1/apps/"+name+"/containers/"+st.Health.Containers[0].Name+"/logs?follow=1&tail=200", nil)
@@ -199,16 +199,21 @@ func integrationContainerLogStream(t *testing.T, encrypted, oci bool) {
 		t.Fatalf("logs: %d %s", resp.StatusCode, body)
 	}
 	scan := bufio.NewScanner(resp.Body)
+	// Only SOPS-decrypted values are masked; plain values are in Git already.
+	want := message
+	if encrypted {
+		want = "••••••"
+	}
 	var output strings.Builder
 	for scan.Scan() {
 		output.WriteString(scan.Text())
-		if strings.Contains(output.String(), "stream-ready") && strings.Contains(output.String(), "••••••") {
+		if strings.Contains(output.String(), "stream-ready") && strings.Contains(output.String(), want) {
 			break
 		}
 	}
 	cancel()
-	if strings.Contains(output.String(), message) || !strings.Contains(output.String(), "event: log") || !strings.Contains(output.String(), "••••••") {
-		t.Fatalf("unmasked or missing logs: %s", &output)
+	if (encrypted && strings.Contains(output.String(), message)) || !strings.Contains(output.String(), "event: log") || !strings.Contains(output.String(), want) {
+		t.Fatalf("wrongly masked or missing logs: %s", &output)
 	}
 	// No other project or fabricated container name is accepted.
 	code, _ := do(t, srv, "GET", "/api/v1/apps/"+name+"/containers/foreign/logs", "secret", "")
