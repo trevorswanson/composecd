@@ -122,3 +122,36 @@ repositories:
 		}
 	}
 }
+
+func TestUndecodableObjectsAreReported(t *testing.T) {
+	host := "apiVersion: composecd/v1alpha1\nkind: Host\nmetadata: {name: nas}\n---\n"
+	app := func(name string) string {
+		return "apiVersion: composecd/v1alpha1\nkind: Application\nmetadata: {name: " + name + "}\nspec: {source: {path: x}, destination: {host: nas}}\n"
+	}
+	cases := map[string]string{
+		// A missing --- merges two Applications into one document with duplicate keys.
+		"missing separator": host + app("a") + app("b"),
+		"duplicate field":   host + "apiVersion: composecd/v1alpha1\nkind: Application\nkind: Application\nmetadata: {name: a}\nspec: {source: {path: x}, destination: {host: nas}}\n",
+		"wrong type":        host + "apiVersion: composecd/v1alpha1\nkind: Application\nmetadata: {name: a}\nspec: [not, a, mapping]\n",
+	}
+	for name, doc := range cases {
+		_, err := Parse("apps.yaml", []byte(doc))
+		if err == nil {
+			t.Errorf("%s: the bad object was skipped without an error", name)
+			continue
+		}
+		if !strings.Contains(err.Error(), "apps.yaml:5") {
+			t.Errorf("%s: error should point at the object: %v", name, err)
+		}
+	}
+	_, err := Parse("apps.yaml", []byte(cases["missing separator"]))
+	if err == nil || !strings.Contains(err.Error(), "already defined") {
+		t.Errorf("missing separator: %v", err)
+	}
+
+	// Documents that aren't composecd objects are still ignored, broken or not.
+	objs, err := Parse("mixed.yaml", []byte(host+"- a list\n- document\n---\njust a string\n---\nkind: ConfigMap\nkind: ConfigMap\n---\n"+app("a")))
+	if err != nil || len(objs.Applications) != 1 {
+		t.Errorf("foreign documents: %v, %+v", err, objs)
+	}
+}
