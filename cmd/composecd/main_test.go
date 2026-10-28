@@ -76,6 +76,10 @@ func startServer(t *testing.T) (*httptest.Server, *controller.Controller, *compo
 	})
 	c.RefreshAll(context.Background())
 	srv := httptest.NewServer(api.New(c, api.Options{Token: "test-token-0123456789", Version: "test", Log: log}))
+	// Cleanups run last-registered first: stop serving, then let background
+	// operations (app refresh, resume) finish before the temp dirs are removed.
+	// On Windows, files a running git still holds can't be deleted.
+	t.Cleanup(c.Wait)
 	t.Cleanup(srv.Close)
 	return srv, c, fake
 }

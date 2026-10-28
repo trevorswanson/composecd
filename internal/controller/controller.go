@@ -103,6 +103,10 @@ func (c *Controller) Run(ctx context.Context) {
 	}
 }
 
+// Wait blocks until every operation started in the background (syncs,
+// rollbacks, app refreshes) has finished.
+func (c *Controller) Wait() { c.ops.Wait() }
+
 // Refresh asks Run to refresh everything now.
 func (c *Controller) Refresh() {
 	select {
