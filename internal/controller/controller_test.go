@@ -23,10 +23,26 @@ import (
 )
 
 type fakeBackend struct {
-	dir   string
-	fakes map[string]*composetest.Fake
-	mu    sync.Mutex
-	envs  map[string][]string
+	dir    string
+	fakes  map[string]*composetest.Fake
+	mu     sync.Mutex
+	envs   map[string][]string
+	events chan string // container events for host "nas"
+}
+
+func (b *fakeBackend) Watch(ctx context.Context, h *hosts.Host, on func(string)) error {
+	if h.Name() != "nas" {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case p := <-b.events:
+			on(p)
+		}
+	}
 }
 
 func (b *fakeBackend) Runner(h *hosts.Host, env []string, _ io.Writer) compose.Runner {
@@ -76,7 +92,8 @@ func newEnv(t *testing.T) *env {
 		"charts/web/templates/a.yaml": webTemplate,
 	})
 	dir := t.TempDir()
-	e.backend = &fakeBackend{dir: filepath.Join(dir, "releases"), fakes: map[string]*composetest.Fake{"nas": composetest.New()}, envs: map[string][]string{}}
+	e.backend = &fakeBackend{dir: filepath.Join(dir, "releases"), fakes: map[string]*composetest.Fake{"nas": composetest.New()},
+		envs: map[string][]string{}, events: make(chan string)}
 	st, err := store.Open(filepath.Join(dir, "composecd.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -90,8 +107,12 @@ func newEnv(t *testing.T) *env {
 		Boot: boot, Git: gitcache.New(filepath.Join(dir, "git"), nil), Hosts: hosts.NewRegistry(e.backend),
 		Store: st, Log: slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
-	// Let background operations finish before the temp dirs are removed.
-	t.Cleanup(e.c.Wait)
+	// Stop watchers and timers, and let background operations finish, before
+	// the temp dirs are removed.
+	t.Cleanup(func() {
+		e.c.Close()
+		e.c.Wait()
+	})
 	return e
 }
 

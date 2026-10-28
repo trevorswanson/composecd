@@ -1,6 +1,9 @@
 package api
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -16,6 +19,7 @@ import (
 	"github.com/trevorswanson/composecd/internal/health"
 	"github.com/trevorswanson/composecd/internal/hosts"
 	"github.com/trevorswanson/composecd/internal/store"
+	"github.com/trevorswanson/composecd/internal/windows"
 )
 
 type stub struct {
@@ -87,6 +91,32 @@ func (s *stub) RefreshApp(name string) error {
 }
 
 func (s *stub) Refresh() { s.calls = append(s.calls, "refresh all") }
+
+func (s *stub) RefreshRepos(urls []string) bool {
+	for _, u := range urls {
+		if u == "https://git.lan/me/homelab.git" {
+			s.calls = append(s.calls, "webhook refresh")
+			return true
+		}
+	}
+	return false
+}
+
+func (s *stub) Windows() []windows.Status {
+	return []windows.Status{{Name: "nightly", Kind: "allow", Open: true, Applications: []string{"media"}}}
+}
+
+func (s *stub) SetMaintenance(host string, on bool, reason string) error {
+	if host != "nas" {
+		return fmt.Errorf("host %q: %w", host, controller.ErrNotFound)
+	}
+	s.calls = append(s.calls, fmt.Sprintf("maintenance %s %v %s", host, on, reason))
+	return nil
+}
+
+func (s *stub) OperationMetrics() []controller.OperationMetric {
+	return []controller.OperationMetric{{Kind: "sync", Trigger: "auto", Phase: "Succeeded", Count: 3, Seconds: 4.5}}
+}
 
 func newServer(t *testing.T, o Options) (*httptest.Server, *stub) {
 	t.Helper()
@@ -227,7 +257,8 @@ func TestStatusPageLogin(t *testing.T) {
 	}
 	body, _ = io.ReadAll(resp.Body)
 	resp.Body.Close()
-	for _, want := range []string{"<strong>media</strong>", `class="badge synced"`, `class="badge healthy"`, `class="badge up"`, "nas"} {
+	for _, want := range []string{"<strong>media</strong>", `class="badge synced"`, `class="badge healthy"`, `class="badge up"`, "nas",
+		"<strong>nightly</strong>", `<span class="badge outofsync">open</span>`} {
 		if !strings.Contains(string(body), want) {
 			t.Errorf("status page lacks %q:\n%s", want, body)
 		}
@@ -256,5 +287,96 @@ func TestStatusPageLogin(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != 200 || len(apps) != 1 {
 		t.Errorf("cookie GET: %d %v", resp.StatusCode, apps)
+	}
+}
+
+func TestPhase2Endpoints(t *testing.T) {
+	srv, st := newServer(t, Options{Token: "secret"})
+	if status, body := do(t, srv, "GET", "/api/v1/windows", "secret", ""); status != 200 || !strings.Contains(body, `"open": true`) {
+		t.Errorf("windows: %d %s", status, body)
+	}
+	if status, body := do(t, srv, "POST", "/api/v1/hosts/nas/maintenance", "secret", `{"enabled": true, "reason": "disks"}`); status != 200 || !strings.Contains(body, `"maintenance": true`) {
+		t.Errorf("maintenance: %d %s", status, body)
+	}
+	if status, _ := do(t, srv, "POST", "/api/v1/hosts/pi/maintenance", "secret", `{"enabled": true}`); status != 404 {
+		t.Errorf("unknown host: %d", status)
+	}
+	if strings.Join(st.calls, ";") != "maintenance nas true disks" {
+		t.Errorf("calls = %v", st.calls)
+	}
+
+	status, body := do(t, srv, "GET", "/metrics", "", "")
+	for _, want := range []string{
+		`# TYPE composecd_app_sync_status gauge`,
+		`composecd_app_sync_status{app="media",host="nas",status="Synced"} 1`,
+		`composecd_app_health_status{app="media",host="nas",status="Healthy"} 1`,
+		`composecd_host_up{host="nas"} 1`,
+		`composecd_operations_total{kind="sync",trigger="auto",phase="Succeeded"} 3`,
+		`composecd_operation_duration_seconds_total{kind="sync",trigger="auto",phase="Succeeded"} 4.5`,
+		`composecd_sync_window_open{window="nightly",kind="allow"} 1`,
+		`composecd_root_error 0`,
+	} {
+		if status != 200 || !strings.Contains(body, want) {
+			t.Errorf("metrics lack %q:\n%s", want, body)
+		}
+	}
+}
+
+func TestWebhook(t *testing.T) {
+	push := `{"repository": {"clone_url": "https://git.lan/me/homelab.git", "ssh_url": "git@git.lan:me/homelab.git"}}`
+	other := `{"repository": {"clone_url": "https://git.lan/me/other.git"}}`
+	gitlab := `{"project": {"git_http_url": "https://git.lan/me/homelab.git"}}`
+	sign := func(body, secret string) string {
+		mac := hmac.New(sha256.New, []byte(secret))
+		mac.Write([]byte(body))
+		return hex.EncodeToString(mac.Sum(nil))
+	}
+	post := func(srv *httptest.Server, body string, headers map[string]string) (int, string) {
+		t.Helper()
+		req, _ := http.NewRequest("POST", srv.URL+"/api/v1/webhook", strings.NewReader(body))
+		for k, v := range headers {
+			req.Header.Set(k, v)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		b, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, string(b)
+	}
+
+	off, _ := newServer(t, Options{Token: "secret"})
+	if status, _ := post(off, push, map[string]string{"X-GitHub-Event": "push"}); status != 404 {
+		t.Errorf("webhook without a secret: %d", status)
+	}
+
+	srv, st := newServer(t, Options{Token: "secret", WebhookSecret: "hook-secret"})
+	cases := []struct {
+		name    string
+		body    string
+		headers map[string]string
+		status  int
+		says    string
+	}{
+		{"github push", push, map[string]string{"X-GitHub-Event": "push", "X-Hub-Signature-256": "sha256=" + sign(push, "hook-secret")}, 202, "refresh requested"},
+		{"github ping", push, map[string]string{"X-GitHub-Event": "ping", "X-Hub-Signature-256": "sha256=" + sign(push, "hook-secret")}, 200, "pong"},
+		{"gitea push", push, map[string]string{"X-Gitea-Event": "push", "X-Gitea-Signature": sign(push, "hook-secret")}, 202, "refresh requested"},
+		{"forgejo other repo", other, map[string]string{"X-Forgejo-Event": "push", "X-Forgejo-Signature": sign(other, "hook-secret")}, 200, "no application uses"},
+		{"gitlab push", gitlab, map[string]string{"X-Gitlab-Event": "Push Hook", "X-Gitlab-Token": "hook-secret"}, 202, "refresh requested"},
+		{"issue event", push, map[string]string{"X-GitHub-Event": "issues", "X-Hub-Signature-256": "sha256=" + sign(push, "hook-secret")}, 200, "ignored event"},
+		{"wrong secret", push, map[string]string{"X-GitHub-Event": "push", "X-Hub-Signature-256": "sha256=" + sign(push, "nope")}, 401, "invalid"},
+		{"no signature", push, map[string]string{"X-GitHub-Event": "push"}, 401, "invalid"},
+		{"wrong gitlab token", gitlab, map[string]string{"X-Gitlab-Event": "Push Hook", "X-Gitlab-Token": "nope"}, 401, "invalid"},
+		{"tampered body", push + " ", map[string]string{"X-GitHub-Event": "push", "X-Hub-Signature-256": "sha256=" + sign(push, "hook-secret")}, 401, "invalid"},
+	}
+	for _, tc := range cases {
+		status, body := post(srv, tc.body, tc.headers)
+		if status != tc.status || !strings.Contains(body, tc.says) {
+			t.Errorf("%s: %d %s, want %d %q", tc.name, status, body, tc.status, tc.says)
+		}
+	}
+	if n := strings.Count(strings.Join(st.calls, ";"), "webhook refresh"); n != 3 {
+		t.Errorf("refreshes = %d (%v)", n, st.calls)
 	}
 }

@@ -69,6 +69,7 @@ $COMPOSECD_TOKEN).`,
 		newValidateCmd(),
 		newAppCmd(cf),
 		newHostCmd(cf),
+		newWindowCmd(cf),
 		newOperationCmd(cf),
 		&cobra.Command{
 			Use:   "refresh",

@@ -32,6 +32,11 @@ type fakeBackend struct {
 
 func (b *fakeBackend) Runner(*hosts.Host, []string, io.Writer) compose.Runner { return b.fake }
 
+func (b *fakeBackend) Watch(ctx context.Context, _ *hosts.Host, _ func(string)) error {
+	<-ctx.Done()
+	return ctx.Err()
+}
+
 func (b *fakeBackend) Store(h *hosts.Host) storage.Driver {
 	return storage.NewLocal(filepath.Join(b.dir, h.Name()))
 }
@@ -79,7 +84,10 @@ func startServer(t *testing.T) (*httptest.Server, *controller.Controller, *compo
 	// Cleanups run last-registered first: stop serving, then let background
 	// operations (app refresh, resume) finish before the temp dirs are removed.
 	// On Windows, files a running git still holds can't be deleted.
-	t.Cleanup(c.Wait)
+	t.Cleanup(func() {
+		c.Close()
+		c.Wait()
+	})
 	t.Cleanup(srv.Close)
 	return srv, c, fake
 }
@@ -147,6 +155,14 @@ func TestCLIAgainstServer(t *testing.T) {
 	expect(t, mustCLI(t, srv, "app", "list"), "paused")
 	expect(t, mustCLI(t, srv, "app", "resume", "whoami"), "resumed")
 	expect(t, mustCLI(t, srv, "app", "list", "-o", "yaml"), "name: whoami", "status: Synced")
+	expect(t, mustCLI(t, srv, "window", "list"), "movie-night", "deny", "0 19 * * 5,6 America/Chicago", "allowed")
+	expect(t, mustCLI(t, srv, "host", "maintenance", "nas", "on", "--reason", "disks"), "Maintenance mode of nas is on")
+	expect(t, mustCLI(t, srv, "host", "list"), "maintenance: disks")
+	expect(t, mustCLI(t, srv, "host", "maintenance", "nas", "off"), "is off")
+	if _, err := cli(t, srv, "host", "maintenance", "nas", "maybe"); err == nil {
+		t.Error("maintenance accepted a bad state")
+	}
+	expect(t, mustCLI(t, srv, "app", "get", "dashboard"), "Depends on: whoami")
 	expect(t, mustCLI(t, srv, "refresh"), "Refresh requested")
 	expect(t, mustCLI(t, srv, "app", "refresh", "whoami"), "Refresh of whoami requested")
 
@@ -169,7 +185,7 @@ func TestValidateExample(t *testing.T) {
 	if err := cmd.Execute(); err != nil {
 		t.Fatal(err)
 	}
-	expect(t, out.String(), "1 host and 2 applications are valid")
+	expect(t, out.String(), "1 host, 2 applications and 1 sync window are valid")
 
 	bad := t.TempDir()
 	if err := os.WriteFile(filepath.Join(bad, "x.yaml"), []byte("apiVersion: composecd/v1alpha1\nkind: Application\nmetadata: {name: a}\nspec: {}\n"), 0o644); err != nil {

@@ -36,6 +36,9 @@ type plan struct {
 	// gitChanged is true when Git differs from the deployed release (not just
 	// live drift).
 	gitChanged bool
+	// drifted is true when containers are missing, changed or orphaned compared
+	// with the deployed release, which self-heal repairs.
+	drifted bool
 	// release is the end of the checkout's use; call it when done with prep.
 	release func()
 }
@@ -46,36 +49,17 @@ func (p *plan) done() {
 	}
 }
 
-// reconcile assesses app and, if auto and the app is automated, not paused and
-// out of sync with Git, syncs it.
+// reconcile assesses app and, if auto, lets automation act on it (sync,
+// self-heal), then records its status.
 func (c *Controller) reconcile(ctx context.Context, app *config.Application, fetchErr error, auto bool) {
-	name := app.Metadata.Name
-	defer c.lockApp(name)()
+	defer c.lockApp(app.Metadata.Name)()
 	st, p := c.assess(ctx, app, fetchErr)
-	defer p.done()
-	c.setStatus(st)
-	if !auto || p == nil || !st.Automated || st.Paused || !p.gitChanged {
-		return
+	if auto && c.automate(ctx, app, st, p, true) {
+		p.done()
+		st, p = c.assess(ctx, app, nil)
+		c.automate(ctx, app, st, p, false)
 	}
-	c.mu.Lock()
-	s := c.apps[name]
-	if s.attempted == p.key || c.running[name] != 0 {
-		c.mu.Unlock()
-		return
-	}
-	s.attempted = p.key
-	c.mu.Unlock()
-
-	c.Log.Info("auto-syncing", "app", name, "revision", short(p.prep.Revision), "reasons", strings.Join(st.Sync.Reasons, "; "))
-	op, err := c.startOperation(name, "sync", "auto", p.prep.Revision)
-	if err != nil {
-		c.Log.Error("recording an operation", "app", name, "error", err)
-		return
-	}
-	c.runSync(ctx, p, op)
-	c.finishOperation(name, op)
-	st, p2 := c.assess(ctx, app, nil)
-	p2.done()
+	p.done()
 	c.setStatus(st)
 }
 
@@ -87,6 +71,7 @@ func baseStatus(app *config.Application) *AppStatus {
 		Source:    app.Spec.Source,
 		Origin:    app.Origin,
 		Automated: app.Spec.SyncPolicy.Automated != nil,
+		DependsOn: app.Spec.DependsOn,
 		Sync:      SyncStatus{Status: Unknown},
 		Health:    HealthStatus{Status: health.Unknown},
 	}
@@ -209,6 +194,7 @@ func (c *Controller) assess(ctx context.Context, app *config.Application, fetchE
 			}
 			if len(parts) > 0 {
 				reasons = append(reasons, "live containers drifted: "+strings.Join(parts, ", "))
+				p.drifted = true
 			}
 		}
 	}

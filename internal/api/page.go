@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/trevorswanson/composecd/internal/controller"
+	"github.com/trevorswanson/composecd/internal/windows"
 )
 
 type pageData struct {
@@ -19,6 +20,7 @@ type pageData struct {
 	Root     controller.RootStatus
 	Hosts    []controller.HostStatus
 	Apps     []controller.AppStatus
+	Windows  []windows.Status
 	Now      time.Time
 }
 
@@ -42,7 +44,7 @@ func (s *server) page(render func(http.ResponseWriter, *pageData)) http.HandlerF
 }
 
 func (s *server) statusPage(w http.ResponseWriter, d *pageData) {
-	d.Root, d.Hosts, d.Apps = s.c.Root(), s.c.HostStatuses(), s.c.Apps()
+	d.Root, d.Hosts, d.Apps, d.Windows = s.c.Root(), s.c.HostStatuses(), s.c.Apps(), s.c.Windows()
 	if err := pageTemplate.Execute(w, d); err != nil {
 		s.Log.Error("rendering the status page", "error", err)
 	}
@@ -157,7 +159,8 @@ button { cursor: pointer; }
     {{- with .Error }}<div class="error">{{ . }}</div>{{ end }}</td>
   <td>{{ .Host }}</td>
   <td><span class="badge {{ lower .Sync.Status }}">{{ .Sync.Status }}</span>
-    {{- range .Sync.Reasons }}<div class="muted" style="font-size:12px">{{ . }}</div>{{ end }}</td>
+    {{- range .Sync.Reasons }}<div class="muted" style="font-size:12px">{{ . }}</div>{{ end }}
+    {{- with .Blocked }}<div class="muted" style="font-size:12px">waiting: {{ . }}</div>{{ end }}</td>
   <td><span class="badge {{ lower .Health.Status }}">{{ .Health.Status }}</span>
     {{- with .Health.Message }}<div class="muted" style="font-size:12px">{{ . }}</div>{{ end }}</td>
   <td>{{ if .Source.Chart }}<code>{{ .Source.Chart }}</code>{{ else }}<code>{{ short .Sync.Revision }}</code>{{ end }}
@@ -177,7 +180,10 @@ button { cursor: pointer; }
 <tr>
   <td><strong>{{ .Name }}</strong></td>
   <td><code>{{ if .URL }}{{ .URL }}{{ else if .Context }}context {{ .Context }}{{ else }}default{{ end }}</code></td>
-  <td><span class="badge {{ lower .State }}">{{ .State }}</span>{{ with .Error }}<div class="error">{{ . }}</div>{{ end }}</td>
+  <td><span class="badge {{ lower .State }}">{{ .State }}</span>
+    {{- if .Maintenance }} <span class="badge suspended" title="{{ .MaintenanceReason }}">maintenance</span>{{ end }}
+    {{- with .Error }}<div class="error">{{ . }}</div>{{ end }}
+    {{- with .Orphans }}<div class="muted" style="font-size:12px">orphaned releases: {{ range $i, $o := . }}{{ if $i }}, {{ end }}{{ $o }}{{ end }}</div>{{ end }}</td>
   <td class="muted">{{ with .DockerVersion }}Docker {{ . }}{{ end }}{{ with .ComposeVersion }} · Compose {{ . }}{{ end }}</td>
   <td>{{ .Apps }}</td>
 </tr>
@@ -185,6 +191,22 @@ button { cursor: pointer; }
 <tr><td colspan="5" class="muted">No hosts defined yet.</td></tr>
 {{- end }}
 </table></div>
+{{- if .Windows }}
+
+<h2>Sync windows <span class="muted">({{ len .Windows }})</span></h2>
+<div class="card"><table>
+<tr><th>Name</th><th>Kind</th><th>Schedule</th><th>State</th><th>Applications</th></tr>
+{{- range .Windows }}
+<tr>
+  <td><strong>{{ .Name }}</strong>{{ if .ManualSync }} <span class="muted">manual sync allowed</span>{{ end }}</td>
+  <td>{{ .Kind }}</td>
+  <td><code>{{ .Schedule }}</code> for {{ .Duration }}{{ with .TimeZone }} <span class="muted">{{ . }}</span>{{ end }}</td>
+  <td>{{ if .Open }}<span class="badge outofsync">open</span>{{ else }}<span class="muted">closed</span>{{ end }}</td>
+  <td>{{ range $i, $a := .Applications }}{{ if $i }}, {{ end }}{{ $a }}{{ else }}<span class="muted">none</span>{{ end }}</td>
+</tr>
+{{- end }}
+</table></div>
+{{- end }}
 {{- end }}
 </main></body>
 </html>

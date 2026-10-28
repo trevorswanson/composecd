@@ -25,6 +25,7 @@ import (
 	"github.com/trevorswanson/composecd/internal/controller"
 	"github.com/trevorswanson/composecd/internal/gitcache"
 	"github.com/trevorswanson/composecd/internal/hosts"
+	"github.com/trevorswanson/composecd/internal/notify"
 	"github.com/trevorswanson/composecd/internal/store"
 )
 
@@ -102,6 +103,21 @@ func runServer(parent context.Context, boot *config.Bootstrap, log *slog.Logger)
 		return err
 	}
 	defer st.Close()
+	webhookSecret := ""
+	if f := boot.Webhook.SecretFile; f != "" {
+		data, err := os.ReadFile(f)
+		if err != nil {
+			return fmt.Errorf("reading webhook.secretFile: %w", err)
+		}
+		if webhookSecret = strings.TrimSpace(string(data)); webhookSecret == "" {
+			return fmt.Errorf("webhook.secretFile %s is empty", f)
+		}
+	}
+	notifier, err := notify.New(boot.Notifications, log)
+	if err != nil {
+		return err
+	}
+	go notifier.Run(ctx)
 
 	ctrl := controller.New(controller.Options{
 		Boot:     boot,
@@ -110,10 +126,13 @@ func runServer(parent context.Context, boot *config.Bootstrap, log *slog.Logger)
 		Store:    st,
 		Registry: registry.New(os.Stderr),
 		Log:      log,
+		Notify:   notifier,
 	})
 	srv := &http.Server{
-		Addr:              boot.Listen,
-		Handler:           api.New(ctrl, api.Options{Token: token, AuthDisabled: boot.Auth.Disabled, Version: version, Log: log}),
+		Addr: boot.Listen,
+		Handler: api.New(ctrl, api.Options{
+			Token: token, AuthDisabled: boot.Auth.Disabled, WebhookSecret: webhookSecret, Version: version, Log: log,
+		}),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	errc := make(chan error, 1)

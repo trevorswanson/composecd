@@ -15,6 +15,7 @@ import (
 
 	"github.com/trevorswanson/composecd/internal/controller"
 	"github.com/trevorswanson/composecd/internal/store"
+	"github.com/trevorswanson/composecd/internal/windows"
 )
 
 // Client calls one server.
@@ -156,6 +157,16 @@ func (c *Client) RefreshApp(ctx context.Context, name string) error {
 
 func (c *Client) Refresh(ctx context.Context) error {
 	return c.do(ctx, "POST", "/api/v1/refresh", nil, nil)
+}
+
+func (c *Client) Windows(ctx context.Context) ([]windows.Status, error) {
+	var out []windows.Status
+	return out, c.do(ctx, "GET", "/api/v1/windows", nil, &out)
+}
+
+func (c *Client) SetMaintenance(ctx context.Context, host string, on bool, reason string) error {
+	body := map[string]interface{}{"enabled": on, "reason": reason}
+	return c.do(ctx, "POST", "/api/v1/hosts/"+url.PathEscape(host)+"/maintenance", body, nil)
 }
 
 // Wait polls operation id until it finishes or ctx is done.

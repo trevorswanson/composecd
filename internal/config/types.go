@@ -18,6 +18,7 @@ const APIVersion = "composecd/v1alpha1"
 const (
 	KindHost        = "Host"
 	KindApplication = "Application"
+	KindSyncWindow  = "SyncWindow"
 )
 
 // Metadata names an object.
@@ -78,6 +79,9 @@ type AppSpec struct {
 	Source      AppSource   `yaml:"source" json:"source"`
 	Destination Destination `yaml:"destination" json:"destination"`
 	SyncPolicy  SyncPolicy  `yaml:"syncPolicy,omitempty" json:"syncPolicy"`
+	// DependsOn names Applications that must be Synced and Healthy before this
+	// one is synced automatically, like Argo CD's sync waves across apps.
+	DependsOn []string `yaml:"dependsOn,omitempty" json:"dependsOn,omitempty"`
 }
 
 // AppSource is where an Application's chart and values come from: a chart
@@ -119,10 +123,97 @@ type SyncPolicy struct {
 	// Automated, when set, syncs the Application whenever it is out of sync.
 	Automated *Automated  `yaml:"automated,omitempty" json:"automated,omitempty"`
 	Options   SyncOptions `yaml:"options,omitempty" json:"options"`
+	// Retry retries a failed automatic sync.
+	Retry *Retry `yaml:"retry,omitempty" json:"retry,omitempty"`
 }
 
 // Automated configures automatic sync.
-type Automated struct{}
+type Automated struct {
+	// Prune uninstalls the release when the Application is removed from Git or
+	// moved to another host. Named volumes are kept.
+	Prune bool `yaml:"prune,omitempty" json:"prune,omitempty"`
+	// SelfHeal brings containers that were removed or changed outside composecd
+	// back to the deployed revision, without a new revision or hooks.
+	SelfHeal bool `yaml:"selfHeal,omitempty" json:"selfHeal,omitempty"`
+}
+
+// Retry retries a failed automatic sync of the same desired state, waiting
+// Backoff.Duration, then multiplying the wait by Backoff.Factor up to
+// Backoff.MaxDuration.
+type Retry struct {
+	// Limit is how many times to retry (0: don't).
+	Limit   int     `yaml:"limit" json:"limit"`
+	Backoff Backoff `yaml:"backoff,omitempty" json:"backoff"`
+}
+
+// Backoff is a retry schedule.
+type Backoff struct {
+	Duration    Duration `yaml:"duration,omitempty" json:"duration,omitempty"`
+	Factor      float64  `yaml:"factor,omitempty" json:"factor,omitempty"`
+	MaxDuration Duration `yaml:"maxDuration,omitempty" json:"maxDuration,omitempty"`
+}
+
+// Defaults for Backoff.
+const (
+	DefaultBackoff     = 10 * time.Second
+	DefaultFactor      = 2
+	DefaultMaxDuration = 5 * time.Minute
+)
+
+// Delay is how long to wait before retry n (1 = the first).
+func (b Backoff) Delay(n int) time.Duration {
+	d, factor, maxD := time.Duration(b.Duration), b.Factor, time.Duration(b.MaxDuration)
+	if d <= 0 {
+		d = DefaultBackoff
+	}
+	if factor <= 0 {
+		factor = DefaultFactor
+	}
+	if maxD <= 0 {
+		maxD = DefaultMaxDuration
+	}
+	for i := 1; i < n && d < maxD; i++ {
+		d = time.Duration(float64(d) * factor)
+	}
+	return min(d, maxD)
+}
+
+// SyncWindow allows or denies automatic syncs of matching Applications during
+// scheduled windows, as in Argo CD.
+type SyncWindow struct {
+	Metadata Metadata       `yaml:"metadata" json:"metadata"`
+	Spec     SyncWindowSpec `yaml:"spec" json:"spec"`
+	// Origin is where the object was defined (file:line).
+	Origin string `yaml:"-" json:"origin,omitempty"`
+}
+
+// SyncWindowSpec is a schedule and what it applies to. An Application matches
+// when it matches every selector that is set.
+type SyncWindowSpec struct {
+	// Kind is "allow" or "deny".
+	Kind string `yaml:"kind" json:"kind"`
+	// Schedule is a cron expression (minute hour day month weekday) for when
+	// the window opens.
+	Schedule string `yaml:"schedule" json:"schedule"`
+	// Duration is how long the window stays open.
+	Duration Duration `yaml:"duration" json:"duration"`
+	// TimeZone is an IANA zone for Schedule (default UTC).
+	TimeZone string `yaml:"timeZone,omitempty" json:"timeZone,omitempty"`
+	// Applications are name globs ("*", "media-*").
+	Applications []string `yaml:"applications,omitempty" json:"applications,omitempty"`
+	// Hosts are host name globs.
+	Hosts []string `yaml:"hosts,omitempty" json:"hosts,omitempty"`
+	// Labels must all equal the Application's labels.
+	Labels map[string]string `yaml:"labels,omitempty" json:"labels,omitempty"`
+	// ManualSync lets manual syncs through while the window blocks.
+	ManualSync bool `yaml:"manualSync,omitempty" json:"manualSync,omitempty"`
+}
+
+// Window kinds.
+const (
+	WindowAllow = "allow"
+	WindowDeny  = "deny"
+)
 
 // SyncOptions map to composetpl upgrade flags.
 type SyncOptions struct {

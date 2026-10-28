@@ -19,6 +19,20 @@ repositories:
   #   sshKeyFile: /run/secrets/github-deploy-key
   #   knownHostsFile: /etc/composecd/known_hosts
 
+# Push webhooks from Gitea, Forgejo, GitHub or GitLab trigger a refresh.
+# webhook:
+#   secretFile: /run/secrets/webhook-secret
+
+# Where events go. See the README for the event names.
+# notifications:
+#   - name: phone
+#     type: ntfy
+#     url: https://ntfy.sh/my-homelab
+#   - name: chat
+#     type: discord
+#     urlFile: /run/secrets/discord-webhook
+#     events: [sync-failed, self-healed, prune]
+
 auth:
   # With no tokenFile, composecd generates <dataDir>/admin-token on first start.
   # tokenFile: /run/secrets/composecd-token
