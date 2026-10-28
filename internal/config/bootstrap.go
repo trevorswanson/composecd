@@ -303,20 +303,25 @@ func (o *Objects) Waves() [][]*Application {
 // empty repoURL means the root repository, and an empty targetRevision means
 // the root's revision for it (HEAD for any other repository).
 func (o *Objects) Resolve(root Root) {
+	resolve := func(url, revision *string) {
+		if *url == "" {
+			*url = root.RepoURL
+		}
+		if *revision == "" {
+			if *url == root.RepoURL {
+				*revision = root.TargetRevision
+			} else {
+				*revision = "HEAD"
+			}
+		}
+	}
 	for _, a := range o.Applications {
 		s := &a.Spec.Source
-		if s.IsOCI() {
-			continue
+		if !s.IsOCI() {
+			resolve(&s.RepoURL, &s.TargetRevision)
 		}
-		if s.RepoURL == "" {
-			s.RepoURL = root.RepoURL
-		}
-		if s.TargetRevision == "" {
-			if s.RepoURL == root.RepoURL {
-				s.TargetRevision = root.TargetRevision
-			} else {
-				s.TargetRevision = "HEAD"
-			}
+		if s.ValuesFrom != nil {
+			resolve(&s.ValuesFrom.RepoURL, &s.ValuesFrom.TargetRevision)
 		}
 	}
 }

@@ -1,0 +1,12 @@
+# Copy into the GitOps root only after publishing your chart to this registry.
+apiVersion: composecd/v1alpha1
+kind: Application
+metadata: {name: whoami-oci}
+spec:
+  source:
+    chart: oci://ghcr.io/me/charts/whoami
+    version: ^0.1
+    valuesFrom: {}
+    valueFiles: [values/whoami.yaml]
+  destination: {host: nas}
+  # Omit syncPolicy to inspect and sync manually first.

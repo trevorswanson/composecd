@@ -37,6 +37,8 @@ type Prepared struct {
 	Env []string
 	// Revision is the commit the chart was read from ("" for an oci:// chart).
 	Revision string
+	// ValuesRevision is the Git commit supplying an OCI chart's user values.
+	ValuesRevision string
 	// Secrets are decrypted leaf values used for output masking, never persisted.
 	Secrets []string `json:"-"`
 }
@@ -57,59 +59,75 @@ func (p *Prepared) Lookup(key string) (string, bool) {
 var depLocks sync.Map
 
 // Prepare resolves app's source. checkout is the root of the app's repository at
-// revision, and is ignored for an oci:// chart. If the chart has a Chart.lock,
+// revision. For OCI charts it is the valuesFrom repository root; without
+// valuesFrom, checkout and revision are ignored. If the chart has a Chart.lock,
 // its dependencies are vendored into the checkout first.
 func Prepare(ctx context.Context, app *config.Application, host *config.Host, checkout, revision string, reg *registry.Client, ageKeyFile string) (*Prepared, error) {
 	s := app.Spec.Source
 	p := &Prepared{Env: mergeEnv(host.Spec.Env, s.Env)}
 	vals := map[string]interface{}{}
+	var root, dir string
 	if s.IsOCI() {
 		p.ChartRef, p.Version = s.Chart, s.Version
+		if len(s.ValueFiles) > 0 && s.ValuesFrom == nil {
+			return nil, errors.New("OCI valueFiles require valuesFrom")
+		}
+		if s.ValuesFrom != nil {
+			var err error
+			root, err = filepath.EvalSymlinks(checkout)
+			if err != nil {
+				return nil, err
+			}
+			dir = root
+			p.ValuesRevision = revision
+		}
 	} else {
-		root, err := filepath.EvalSymlinks(checkout)
+		var err error
+		root, err = filepath.EvalSymlinks(checkout)
 		if err != nil {
 			return nil, err
 		}
-		dir, err := inside(root, filepath.Join(root, filepath.FromSlash(s.Path)))
+		dir, err = inside(root, filepath.Join(root, filepath.FromSlash(s.Path)))
 		if err != nil {
 			return nil, fmt.Errorf("path %q: %w", s.Path, err)
 		}
 		if _, err := os.Stat(filepath.Join(dir, "Chart.yaml")); err != nil {
 			return nil, fmt.Errorf("path %q at %s is not a chart: no Chart.yaml", s.Path, short(revision))
 		}
-		for _, vf := range s.ValueFiles {
-			f, err := inside(root, filepath.Join(dir, filepath.FromSlash(vf)))
+		p.ChartRef, p.Revision = dir, revision
+	}
+	for _, vf := range s.ValueFiles {
+		f, err := inside(root, filepath.Join(dir, filepath.FromSlash(vf)))
+		if err != nil {
+			return nil, fmt.Errorf("valueFiles %q: %w", vf, err)
+		}
+		data, err := os.ReadFile(f)
+		if err != nil {
+			return nil, relativeErr(err, root)
+		}
+		encrypted, err := sops.Encrypted(vf, data)
+		if err != nil {
+			return nil, err
+		}
+		if encrypted {
+			data, err = sops.Decrypt(ctx, f, ageKeyFile)
 			if err != nil {
 				return nil, fmt.Errorf("valueFiles %q: %w", vf, err)
 			}
-
-			data, err := os.ReadFile(f)
-			if err != nil {
-				return nil, relativeErr(err, root)
-			}
-			encrypted, err := sops.Encrypted(vf, data)
-			if err != nil {
-				return nil, err
-			}
-			if encrypted {
-				data, err = sops.Decrypt(ctx, f, ageKeyFile)
-				if err != nil {
-					return nil, fmt.Errorf("valueFiles %q: %w", vf, err)
-				}
-			}
-			cur := map[string]interface{}{}
-			if err := yaml.Unmarshal(data, &cur); err != nil {
-				return nil, fmt.Errorf("valueFiles %q: invalid values YAML", vf)
-			}
-			if encrypted {
-				p.Secrets = append(p.Secrets, masking.Leaves(cur)...)
-			}
-			vals = values.Merge(vals, cur)
 		}
+		cur := map[string]interface{}{}
+		if err := yaml.Unmarshal(data, &cur); err != nil {
+			return nil, fmt.Errorf("valueFiles %q: invalid values YAML", vf)
+		}
+		if encrypted {
+			p.Secrets = append(p.Secrets, masking.Leaves(cur)...)
+		}
+		vals = values.Merge(vals, cur)
+	}
+	if !s.IsOCI() {
 		if err := vendor(ctx, dir, reg); err != nil {
 			return nil, err
 		}
-		p.ChartRef, p.Revision = dir, revision
 	}
 	inline, err := normalize(s.Values)
 	if err != nil {

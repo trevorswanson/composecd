@@ -320,10 +320,10 @@ func (c *Controller) RefreshAll(ctx context.Context) {
 	wg.Wait()
 
 	// The root was fetched by loadRoot; fetch every other source repository once.
-	fetchErrs := map[string]error{}
+	fetchErrs := map[string]error{c.Boot.Root.RepoURL: err}
 	for _, a := range objs.Applications {
-		url := a.Spec.Source.RepoURL
-		if a.Spec.Source.IsOCI() || url == c.Boot.Root.RepoURL {
+		url := sourceRepo(a)
+		if url == "" || url == c.Boot.Root.RepoURL {
 			continue
 		}
 		if _, done := fetchErrs[url]; !done {
@@ -355,7 +355,7 @@ func (c *Controller) RefreshAll(ctx context.Context) {
 				defer wg.Done()
 				c.sem <- struct{}{}
 				defer func() { <-c.sem }()
-				c.reconcile(ctx, a, fetchErrs[a.Spec.Source.RepoURL], true)
+				c.reconcile(ctx, a, fetchErrs[sourceRepo(a)], true)
 			}()
 		}
 		wg.Wait()
@@ -396,8 +396,13 @@ func (c *Controller) pruneCheckouts(rootSHA string) {
 		keep[gitcache.CheckoutKey(c.Boot.Root.RepoURL, rootSHA)] = true
 	}
 	for _, st := range c.apps {
-		if r := st.status.Sync.Revision; r != "" {
-			keep[gitcache.CheckoutKey(st.status.Source.RepoURL, r)] = true
+		r := st.status.Sync.Revision
+		if st.status.Source.IsOCI() {
+			r = st.status.Sync.ValuesRevision
+		}
+		url, _ := st.status.Source.GitRepository()
+		if r != "" && url != "" {
+			keep[gitcache.CheckoutKey(url, r)] = true
 		}
 	}
 	for k, n := range c.checkouts {
@@ -606,8 +611,8 @@ func (c *Controller) RefreshRepos(urls []string) bool {
 	c.mu.RLock()
 	if c.objects != nil {
 		for _, a := range c.objects.Applications {
-			if !a.Spec.Source.IsOCI() {
-				want[NormalizeRepoURL(a.Spec.Source.RepoURL)] = true
+			if url := sourceRepo(a); url != "" {
+				want[NormalizeRepoURL(url)] = true
 			}
 		}
 	}
@@ -644,4 +649,17 @@ func NormalizeRepoURL(u string) string {
 	}
 	u = strings.TrimSuffix(strings.TrimRight(u, "/"), ".git")
 	return u
+}
+
+// sourceRepo is the source Git repository, including OCI valuesFrom.
+func sourceRepo(app *config.Application) string {
+	url, _ := app.Spec.Source.GitRepository()
+	return url
+}
+
+func (c *Controller) fetchSource(ctx context.Context, app *config.Application) error {
+	if url := sourceRepo(app); url != "" {
+		return c.Git.Fetch(ctx, url)
+	}
+	return nil
 }

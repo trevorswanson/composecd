@@ -81,6 +81,9 @@ func (c *Controller) maskStatus(st AppStatus) AppStatus {
 	out.Name, out.Host = st.Name, st.Host
 	out.Source.Values = c.masker(st.Name).Values(st.Source.Values)
 	out.Sync.Status, out.Health.Status = st.Sync.Status, st.Health.Status
+	out.Sync.Revision, out.Sync.DeployedRevision = st.Sync.Revision, st.Sync.DeployedRevision
+	out.Sync.ValuesRevision, out.Sync.DeployedValuesRevision = st.Sync.ValuesRevision, st.Sync.DeployedValuesRevision
+	out.Sync.ChartRef = st.Sync.ChartRef
 	for i, ct := range st.Health.Containers {
 		if i >= len(out.Health.Containers) {
 			break
@@ -97,6 +100,7 @@ func (c *Controller) maskStatus(st AppStatus) AppStatus {
 	}
 	if st.Release != nil && out.Release != nil {
 		out.Release.Status = st.Release.Status
+		out.Release.ChartRef = st.Release.ChartRef
 	}
 	return out
 }

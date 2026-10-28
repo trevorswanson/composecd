@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"path"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -76,10 +77,13 @@ func (o *Objects) Validate() error {
 			if s.RepoURL != "" || s.Path != "" || s.TargetRevision != "" {
 				fail(a.Origin, "application %q: set chart, or repoURL/targetRevision/path, not both", name)
 			}
-			if len(s.ValueFiles) > 0 {
-				fail(a.Origin, "application %q: valueFiles need a chart in Git (path); use values with an oci:// chart", name)
+			if len(s.ValueFiles) > 0 && s.ValuesFrom == nil {
+				fail(a.Origin, "application %q: valueFiles with an OCI chart require valuesFrom", name)
 			}
 		default:
+			if s.ValuesFrom != nil {
+				fail(a.Origin, "application %q: valuesFrom only applies to an OCI chart", name)
+			}
 			if s.Version != "" {
 				fail(a.Origin, "application %q: version only applies to an oci:// chart", name)
 			}
@@ -88,14 +92,18 @@ func (o *Objects) Validate() error {
 			} else {
 				a.Spec.Source.Path = p
 			}
-			for i, vf := range s.ValueFiles {
-				// Relative to the chart path, but may reach elsewhere in the repository.
-				joined := path.Clean(path.Join(a.Spec.Source.Path, vf))
-				if vf == "" || path.IsAbs(vf) || strings.Contains(vf, `\`) || joined == "." || joined == ".." || strings.HasPrefix(joined, "../") {
-					fail(a.Origin, "application %q: valueFiles[%d] %q must be a file inside the chart's repository", name, i, vf)
-				}
+		}
+		base := a.Spec.Source.Path
+		if s.IsOCI() {
+			base = ""
+		}
+		for i, vf := range s.ValueFiles {
+			joined := path.Clean(path.Join(base, vf))
+			if vf == "" || path.IsAbs(vf) || filepath.IsAbs(vf) || filepath.VolumeName(vf) != "" || isWindowsAbs(vf) || strings.Contains(vf, `\`) || joined == "." || joined == ".." || strings.HasPrefix(joined, "../") {
+				fail(a.Origin, "application %q: valueFiles[%d] %q must be a file inside the source repository", name, i, vf)
 			}
 		}
+
 		if a.Spec.Destination.Host == "" {
 			fail(a.Origin, "application %q: destination.host is required", name)
 		} else if _, ok := hosts[a.Spec.Destination.Host]; !ok {

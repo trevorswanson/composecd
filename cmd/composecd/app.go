@@ -64,10 +64,14 @@ func newAppListCmd(cf *clientFlags) *cobra.Command {
 
 func revision(a controller.AppStatus) string {
 	if a.Source.Chart != "" {
+		chart := a.Source.Chart
 		if a.Release != nil {
-			return a.Release.Chart
+			chart = a.Release.Chart
 		}
-		return a.Source.Chart
+		if a.Sync.ValuesRevision != "" {
+			chart += " / values " + short(a.Sync.ValuesRevision)
+		}
+		return chart
 	}
 	return short(a.Sync.Revision)
 }
@@ -119,6 +123,15 @@ func printApp(w io.Writer, a *controller.AppStatus) {
 		auto += " (paused: " + a.PausedReason + ")"
 	}
 	fmt.Fprintf(w, "Sync:       %s, %s\n", a.Sync.Status, auto)
+	if a.Sync.ChartRef != "" {
+		fmt.Fprintf(w, "Chart ref:  %s\n", a.Sync.ChartRef)
+	}
+	if vf := a.Source.ValuesFrom; vf != nil {
+		fmt.Fprintf(w, "Values:     %s @ %s\n", vf.RepoURL, vf.TargetRevision)
+	}
+	if a.Sync.ValuesRevision != "" {
+		fmt.Fprintf(w, "Values rev: %s (deployed: %s)\n", short(a.Sync.ValuesRevision), orNone(short(a.Sync.DeployedValuesRevision)))
+	}
 	if a.Sync.Revision != "" {
 		fmt.Fprintf(w, "Revision:   %s (deployed: %s)\n", short(a.Sync.Revision), orNone(short(a.Sync.DeployedRevision)))
 	}

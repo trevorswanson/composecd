@@ -17,6 +17,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/trevorswanson/composetpl/pkg/chart"
+	"github.com/trevorswanson/composetpl/pkg/registry/registrytest"
+
 	"github.com/trevorswanson/composecd/internal/config"
 	"github.com/trevorswanson/composecd/internal/controller"
 	"github.com/trevorswanson/composecd/internal/gitcache"
@@ -24,16 +27,17 @@ import (
 )
 
 func TestIntegrationContainerLogStream(t *testing.T) {
-	for _, encrypted := range []bool{false, true} {
-		name := "inline"
-		if encrypted {
-			name = "sops"
-		}
-		t.Run(name, func(t *testing.T) { integrationContainerLogStream(t, encrypted) })
+	for _, tc := range []struct {
+		name           string
+		encrypted, oci bool
+	}{
+		{"inline", false, false}, {"sops", true, false}, {"oci-values", false, true}, {"oci-sops-values", true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) { integrationContainerLogStream(t, tc.encrypted, tc.oci) })
 	}
 }
 
-func integrationContainerLogStream(t *testing.T, encrypted bool) {
+func integrationContainerLogStream(t *testing.T, encrypted, oci bool) {
 	for _, args := range [][]string{{"compose", "version"}, {"info"}} {
 		if err := exec.Command("docker", args...).Run(); err != nil {
 			if os.Getenv("CI") != "" {
@@ -85,6 +89,25 @@ func integrationContainerLogStream(t *testing.T, encrypted bool) {
 		files["charts/logs/values.sops.yaml"] = string(cipher)
 		files["composecd/apps.yaml"] = strings.Replace(files["composecd/apps.yaml"], "values: {message: integration-secret}", "valueFiles: [values.sops.yaml]", 1)
 	}
+	reg := registrytest.New().Client()
+	if oci {
+		archive, err := chart.WriteArchive("logs", map[string][]byte{
+			"Chart.yaml":          []byte(files["charts/logs/Chart.yaml"]),
+			"templates/logs.yaml": []byte(files["charts/logs/templates/logs.yaml"]),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := reg.Push(context.Background(), archive, "oci://registry.lan/charts/"); err != nil {
+			t.Fatal(err)
+		}
+		file := "values/logs.yaml"
+		files[file] = "message: integration-secret\n"
+		if encrypted {
+			file = "charts/logs/values.sops.yaml"
+		}
+		files["composecd/apps.yaml"] = "apiVersion: composecd/v1alpha1\nkind: Application\nmetadata: {name: " + name + "}\nspec:\n  source: {chart: 'oci://registry.lan/charts/logs', version: '^0.1', valuesFrom: {}, valueFiles: [" + file + "]}\n  destination: {host: local}\n  syncPolicy: {automated: {}, options: {wait: false}}\n"
+	}
 	for p, body := range files {
 		path := filepath.Join(repo, filepath.FromSlash(p))
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -97,7 +120,7 @@ func integrationContainerLogStream(t *testing.T, encrypted bool) {
 	run("git", "add", ".")
 	run("git", "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "--quiet", "-m", "fixture")
 	a := newAuthn(t, "secret")
-	c := controller.New(controller.Options{Boot: &config.Bootstrap{Concurrency: 1, SOPSAgeKeyFile: keyFile, Root: config.Root{RepoURL: repo, TargetRevision: "main", Path: "composecd"}}, Git: gitcache.New(filepath.Join(dir, "git"), nil), Hosts: hosts.NewRegistry(&hosts.CLI{DataDir: dir}), Store: a.Store, Log: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	c := controller.New(controller.Options{Registry: reg, Boot: &config.Bootstrap{Concurrency: 1, SOPSAgeKeyFile: keyFile, Root: config.Root{RepoURL: repo, TargetRevision: "main", Path: "composecd"}}, Git: gitcache.New(filepath.Join(dir, "git"), nil), Hosts: hosts.NewRegistry(&hosts.CLI{DataDir: dir}), Store: a.Store, Log: slog.New(slog.NewTextHandler(io.Discard, nil))})
 	defer func() {
 		c.Close()
 		c.Wait()
@@ -118,6 +141,25 @@ func integrationContainerLogStream(t *testing.T, encrypted bool) {
 			}
 		}
 		t.Fatalf("app: %+v %v", st, err)
+	}
+	if oci {
+		if st.Sync.Status != controller.Synced || !strings.Contains(st.Sync.ChartRef, "@sha256:") || st.Sync.ValuesRevision == "" || st.Sync.ValuesRevision != st.Sync.DeployedValuesRevision {
+			t.Fatalf("OCI revisions: %+v", st.Sync)
+		}
+		if !encrypted {
+			message = "integration-secret-v2"
+			if err := os.WriteFile(filepath.Join(repo, "values", "logs.yaml"), []byte("message: "+message+"\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			run("git", "add", ".")
+			run("git", "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "--quiet", "-m", "values-only update")
+			commit := strings.TrimSpace(run("git", "rev-parse", "HEAD"))
+			c.RefreshAll(ctx)
+			st, err = c.App(name)
+			if err != nil || st.Sync.Status != controller.Synced || st.Release == nil || st.Release.Revision != 2 || st.Sync.ValuesRevision != commit || st.Sync.DeployedValuesRevision != commit {
+				t.Fatalf("values-only auto-sync: %+v %v", st, err)
+			}
+		}
 	}
 	rawLogs := ""
 	for until := time.Now().Add(10 * time.Second); time.Now().Before(until); {

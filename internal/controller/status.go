@@ -57,6 +57,10 @@ type SyncStatus struct {
 	Revision string `json:"revision,omitempty"`
 	// DeployedRevision is the commit the deployed release was synced from.
 	DeployedRevision string `json:"deployedRevision,omitempty"`
+	// ChartRef pins the desired OCI chart to its resolved digest.
+	ChartRef               string `json:"chartRef,omitempty"`
+	ValuesRevision         string `json:"valuesRevision,omitempty"`
+	DeployedValuesRevision string `json:"deployedValuesRevision,omitempty"`
 	// Reasons say why the app is out of sync.
 	Reasons []string `json:"reasons,omitempty"`
 	// Changes are the compose resources that differ between the deployed
@@ -88,6 +92,7 @@ type Release struct {
 	Status       string            `json:"status"`
 	Description  string            `json:"description,omitempty"`
 	Chart        string            `json:"chart"`
+	ChartRef     string            `json:"chartRef,omitempty"`
 	AppVersion   string            `json:"appVersion,omitempty"`
 	LastDeployed time.Time         `json:"lastDeployed"`
 	Labels       map[string]string `json:"labels,omitempty"`
@@ -145,6 +150,7 @@ const (
 	ManagedBy           = "composecd"
 	LabelApp            = "composecd/app"
 	LabelSourceRevision = "composecd/source-revision"
+	LabelValuesRevision = "composecd/values-revision"
 	LabelOperationID    = "composecd/operation-id"
 	// LabelPrune records that the app allowed prune when it was synced, so a
 	// release can be pruned after its Application is gone from Git.

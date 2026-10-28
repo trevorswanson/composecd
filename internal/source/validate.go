@@ -74,15 +74,21 @@ func ValidateSecrets(dir string, objs *config.Objects) error {
 	}
 	for _, a := range objs.Applications {
 		s := a.Spec.Source
-		if s.IsOCI() || s.RepoURL != "" {
+		base := s.Path
+		if s.IsOCI() {
+			if s.ValuesFrom == nil || s.ValuesFrom.RepoURL != "" {
+				continue
+			}
+			base = ""
+		} else if s.RepoURL != "" {
 			continue
 		}
 		// A validate-only object fixture need not contain its source chart.
-		if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(s.Path), "Chart.yaml")); err != nil {
+		if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(s.Path), "Chart.yaml")); !s.IsOCI() && err != nil {
 			continue
 		}
 		for _, vf := range s.ValueFiles {
-			file, err := inside(root, filepath.Join(root, filepath.FromSlash(s.Path), filepath.FromSlash(vf)))
+			file, err := inside(root, filepath.Join(root, filepath.FromSlash(base), filepath.FromSlash(vf)))
 			if err != nil {
 				errs = append(errs, fmt.Errorf("%s: valueFiles %q: %w", a.Origin, vf, err))
 				continue

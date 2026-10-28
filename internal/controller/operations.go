@@ -105,6 +105,7 @@ func (c *Controller) runSync(ctx context.Context, p *plan, op *store.Operation) 
 	o := p.app.Spec.SyncPolicy.Options
 	log := &logBuffer{max: maxLog}
 	cfg := p.host.Configuration(p.prep.Env, log)
+	cfg.Registry = c.Registry
 
 	u := action.NewUpgrade(cfg)
 	u.Install, u.ResetValues = true, true
@@ -120,6 +121,7 @@ func (c *Controller) runSync(ctx context.Context, p *plan, op *store.Operation) 
 		LabelManagedBy: ManagedBy, LabelApp: name,
 		// "" removes the label, for an oci:// chart that has no commit.
 		LabelSourceRevision: p.prep.Revision,
+		LabelValuesRevision: p.prep.ValuesRevision,
 		LabelOperationID:    fmt.Sprint(op.ID),
 		// "" removes it when prune is off.
 		LabelPrune: "",
@@ -163,10 +165,7 @@ func (c *Controller) Sync(name, user string) (*store.Operation, error) {
 	go func() {
 		defer c.ops.Done()
 		ctx := c.baseContext()
-		var fetchErr error
-		if !app.Spec.Source.IsOCI() {
-			fetchErr = c.Git.Fetch(ctx, app.Spec.Source.RepoURL)
-		}
+		fetchErr := c.fetchSource(ctx, app)
 		defer c.lockApp(name)()
 		st, p := c.assess(ctx, app, fetchErr)
 		if p == nil {
@@ -319,8 +318,8 @@ func (c *Controller) reconcileAsync(app *config.Application, fetch bool) {
 		defer c.ops.Done()
 		ctx := c.baseContext()
 		var fetchErr error
-		if fetch && !app.Spec.Source.IsOCI() {
-			fetchErr = c.Git.Fetch(ctx, app.Spec.Source.RepoURL)
+		if fetch {
+			fetchErr = c.fetchSource(ctx, app)
 		}
 		c.sem <- struct{}{}
 		defer func() { <-c.sem }()

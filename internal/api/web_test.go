@@ -13,6 +13,7 @@ import (
 	"github.com/trevorswanson/composetpl/pkg/compose"
 
 	"github.com/trevorswanson/composecd/internal/auth"
+	"github.com/trevorswanson/composecd/internal/config"
 	"github.com/trevorswanson/composecd/internal/controller"
 	"github.com/trevorswanson/composecd/internal/store"
 )
@@ -243,5 +244,27 @@ func TestReadonlyLogFollowCancellation(t *testing.T) {
 	case <-st.stopped:
 	case <-time.After(time.Second):
 		t.Fatal("disconnect did not cancel log backend")
+	}
+}
+
+type ociValuesStub struct{ stub }
+
+func (s *ociValuesStub) App(name string) (controller.AppStatus, error) {
+	a, err := s.stub.App(name)
+	a.Source = config.AppSource{Chart: "oci://registry.lan/charts/app", ValuesFrom: &config.GitSource{RepoURL: "https://git.lan/values.git", TargetRevision: "prod"}}
+	a.Sync.ChartRef = "oci://registry.lan/charts/app:1.0.0@sha256:abc"
+	a.Sync.ValuesRevision = "desired-values-commit"
+	a.Sync.DeployedValuesRevision = "deployed-values-commit"
+	return a, err
+}
+func TestWebShowsOCIAndValuesRevisions(t *testing.T) {
+	a := newAuthn(t, "secret")
+	srv := httptest.NewServer(New(&ociValuesStub{}, Options{Auth: a}))
+	defer srv.Close()
+	status, body := do(t, srv, "GET", "/apps/media", "secret", "")
+	for _, want := range []string{"oci://registry.lan/charts/app:1.0.0@sha256:abc", "https://git.lan/values.git", "desired-values-commit", "deployed-values-commit"} {
+		if status != 200 || !strings.Contains(body, want) {
+			t.Errorf("%d missing %s: %s", status, want, body)
+		}
 	}
 }

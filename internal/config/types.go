@@ -99,15 +99,35 @@ type AppSource struct {
 	Chart string `yaml:"chart,omitempty" json:"chart,omitempty"`
 	// Version is a semver constraint for Chart.
 	Version string `yaml:"version,omitempty" json:"version,omitempty"`
-	// ValueFiles are values files relative to Path (they may use .. to reach
-	// other directories of the same repository), applied in order over the
-	// chart's values.yaml.
+	// ValuesFrom supplies Git values for an OCI chart. Empty fields resolve to
+	// the root repository/revision (or HEAD for another repository).
+	ValuesFrom *GitSource `yaml:"valuesFrom,omitempty" json:"valuesFrom,omitempty"`
+	// ValueFiles are relative to Path for Git charts, or the values repository
+	// root for OCI charts, applied in order over the chart's values.yaml.
 	ValueFiles []string `yaml:"valueFiles,omitempty" json:"valueFiles,omitempty"`
 	// Values are applied last, over ValueFiles.
 	Values map[string]interface{} `yaml:"values,omitempty" json:"values,omitempty"`
 	// Env is visible to compose ${VAR} interpolation and the env template
 	// function, over the host's Env.
 	Env map[string]string `yaml:"env,omitempty" json:"env,omitempty"`
+}
+
+// GitSource locates a Git repository and revision without a chart path.
+type GitSource struct {
+	RepoURL        string `yaml:"repoURL,omitempty" json:"repoURL,omitempty"`
+	TargetRevision string `yaml:"targetRevision,omitempty" json:"targetRevision,omitempty"`
+}
+
+// GitRepository is the repository this source needs fetched and checked out.
+// An OCI chart without valuesFrom has no Git dependency.
+func (s AppSource) GitRepository() (url, revision string) {
+	if !s.IsOCI() {
+		return s.RepoURL, s.TargetRevision
+	}
+	if s.ValuesFrom != nil {
+		return s.ValuesFrom.RepoURL, s.ValuesFrom.TargetRevision
+	}
+	return "", ""
 }
 
 // IsOCI reports whether the source is an oci:// chart rather than a Git path.
