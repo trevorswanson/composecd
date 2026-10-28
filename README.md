@@ -468,9 +468,10 @@ reference checks. Generator repositories participate in push webhooks.
 
 A removed directory or Host selection removes its app; its recorded prune policy controls release
 removal. Changing set ownership or the template's prune flag updates release metadata through sync,
-even without a manifest change. Generation errors retain the last accepted snapshot and disable prune
-for that refresh. A set dropping from N apps to zero reports `generated: 0, was: N` and protects existing
-releases. Release ownership labels restore that protection after restart; protected releases may appear
+even without a manifest change. A set that fails to generate (a template error, an unreachable
+repository) keeps the apps it generated before and reports the error on the set and the root; the rest of
+Git still applies. A set dropping from N apps to zero reports `generated: 0, was: N`, keeps its apps and
+protects existing releases. Release ownership labels restore that protection after restart; protected releases may appear
 as host orphans until generation recovers. To intentionally retire the entire set, remove the set object
 while retaining a valid nonempty root, as with the existing whole-root prune guard.
 

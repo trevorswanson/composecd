@@ -271,3 +271,45 @@ func TestGeneratedOwnershipAndPrunePolicyUpdatesSync(t *testing.T) {
 		t.Fatal("app was pruned after template disabled prune")
 	}
 }
+
+// A broken set keeps its last good apps and doesn't hold back the rest of Git.
+func TestApplicationSetErrorIsIsolated(t *testing.T) {
+	e := newEnv(t)
+	generatedFixture(e)
+	broken := strings.Replace(directorySet("stacks", "charts/app-*"), "gen-{{ .path.basename }}", "{{ .missing }}", 1)
+	e.commit(map[string]string{
+		"composecd/sets.yaml": broken,
+		"composecd/apps.yaml": appYAML("manual", false, "") + "---\n" + appYAML("added", false, ""),
+	})
+	e.refresh()
+	if _, err := e.c.App("added"); err != nil {
+		t.Fatal("a broken set held back an explicit app:", err)
+	}
+	for _, name := range []string{"gen-app-a", "gen-app-b"} {
+		if _, err := e.c.App(name); err != nil {
+			t.Fatal("lost last good application", name, err)
+		}
+		if _, ok := e.fake().Running[name]; !ok {
+			t.Fatal("a broken set pruned", name)
+		}
+	}
+	sets := e.c.ApplicationSets()
+	if len(sets) != 1 || sets[0].Ready || !strings.Contains(sets[0].Error, "missing") || strings.Join(sets[0].Applications, ",") != "gen-app-a,gen-app-b" {
+		t.Fatalf("%+v", sets)
+	}
+	if !strings.Contains(e.c.Root().Error, "applicationset stacks") {
+		t.Fatal("set error not reported on the root:", e.c.Root().Error)
+	}
+	// After a restart there is nothing to keep, and the guard protects the releases.
+	e.c.mu.Lock()
+	e.c.objects = nil
+	e.c.appsets = nil
+	e.c.mu.Unlock()
+	e.refresh()
+	if _, ok := e.fake().Running["gen-app-a"]; !ok {
+		t.Fatal("restart pruned a broken set's releases")
+	}
+	if _, err := e.c.App("added"); err != nil {
+		t.Fatal(err)
+	}
+}

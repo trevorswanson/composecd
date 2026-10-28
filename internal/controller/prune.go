@@ -41,8 +41,8 @@ func (c *Controller) prune(ctx context.Context, objs *config.Objects, fresh bool
 			ws := c.windows
 			c.mu.RUnlock()
 			switch {
-			case c.emptySetReason(rel.Labels[LabelApplicationSet]) != "":
-				reason = c.emptySetReason(rel.Labels[LabelApplicationSet])
+			case c.setPruneGuard(rel.Labels[LabelApplicationSet]) != "":
+				reason = c.setPruneGuard(rel.Labels[LabelApplicationSet])
 			case rel.Labels[LabelPrune] != "true":
 				reason = "prune is off"
 			case !fresh:

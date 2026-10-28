@@ -288,23 +288,26 @@ func (c *Controller) RefreshAll(ctx context.Context) {
 	objs, sha, err := c.loadRoot(ctx)
 	rootErr := err
 	var generatorFetches map[string]error
+	var setErr error
 	if objs != nil {
 		var statuses []ApplicationSetStatus
 		var expansionErr error
 		objs, statuses, generatorFetches, expansionErr = c.expand(ctx, objs)
 		err = errors.Join(err, expansionErr)
+		setErr = setErrors(statuses)
 		c.mu.Lock()
 		c.appsets = statuses
 		c.mu.Unlock()
 	}
 	c.mu.Lock()
 	c.root.Revision, c.root.RefreshedAt, c.root.Error = sha, time.Now(), ""
-	if err != nil {
-		c.root.Error = err.Error()
-		c.Log.Error("refreshing the root", "repo", c.Boot.Root.RepoURL, "error", err)
+	if reported := errors.Join(err, setErr); reported != nil {
+		c.root.Error = reported.Error()
+		c.Log.Error("refreshing the root", "repo", c.Boot.Root.RepoURL, "error", reported)
 	}
 	// A failed fetch still yields the objects at the cached revision. Prune only
-	// runs on objects read fresh from Git.
+	// runs on objects read fresh from Git. A failed ApplicationSet alone doesn't
+	// stop prune: setPruneGuard protects its own releases.
 	fresh := err == nil
 	if objs != nil {
 		c.objects = objs
