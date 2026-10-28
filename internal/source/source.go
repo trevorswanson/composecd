@@ -1,0 +1,179 @@
+// Package source turns an Application and a checkout of its repository into
+// what composetpl renders: a chart reference, user values and an environment.
+package source
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+	"sync"
+
+	"github.com/trevorswanson/composetpl/pkg/action"
+	"github.com/trevorswanson/composetpl/pkg/chart"
+	"github.com/trevorswanson/composetpl/pkg/registry"
+	"github.com/trevorswanson/composetpl/pkg/values"
+
+	"github.com/trevorswanson/composecd/internal/config"
+)
+
+// Prepared is an Application ready to render.
+type Prepared struct {
+	// ChartRef is a chart directory or an oci:// reference.
+	ChartRef string
+	// Version is a semver constraint for an oci:// ChartRef.
+	Version string
+	// Values are the user values: ValueFiles, then the inline values.
+	Values map[string]interface{}
+	// Env is the host's env overlaid by the app's, as sorted KEY=VALUE entries.
+	Env []string
+	// Revision is the commit the chart was read from ("" for an oci:// chart).
+	Revision string
+}
+
+// Lookup backs the env and expandenv template functions with Env only, so a
+// render doesn't depend on the controller's own environment.
+func (p *Prepared) Lookup(key string) (string, bool) {
+	prefix := key + "="
+	for _, e := range p.Env {
+		if strings.HasPrefix(e, prefix) {
+			return e[len(prefix):], true
+		}
+	}
+	return "", false
+}
+
+// depLocks serializes vendoring per chart directory: checkouts are shared.
+var depLocks sync.Map
+
+// Prepare resolves app's source. checkout is the root of the app's repository at
+// revision, and is ignored for an oci:// chart. If the chart has a Chart.lock,
+// its dependencies are vendored into the checkout first.
+func Prepare(ctx context.Context, app *config.Application, host *config.Host, checkout, revision string, reg *registry.Client) (*Prepared, error) {
+	s := app.Spec.Source
+	p := &Prepared{Env: mergeEnv(host.Spec.Env, s.Env)}
+	vals := map[string]interface{}{}
+	if s.IsOCI() {
+		p.ChartRef, p.Version = s.Chart, s.Version
+	} else {
+		root, err := filepath.EvalSymlinks(checkout)
+		if err != nil {
+			return nil, err
+		}
+		dir, err := inside(root, filepath.Join(root, filepath.FromSlash(s.Path)))
+		if err != nil {
+			return nil, fmt.Errorf("path %q: %w", s.Path, err)
+		}
+		if _, err := os.Stat(filepath.Join(dir, "Chart.yaml")); err != nil {
+			return nil, fmt.Errorf("path %q at %s is not a chart: no Chart.yaml", s.Path, short(revision))
+		}
+		var files []string
+		for _, vf := range s.ValueFiles {
+			f, err := inside(root, filepath.Join(dir, filepath.FromSlash(vf)))
+			if err != nil {
+				return nil, fmt.Errorf("valueFiles %q: %w", vf, err)
+			}
+			files = append(files, f)
+		}
+		if vals, err = (values.Options{ValueFiles: files}).MergeValues(); err != nil {
+			return nil, relativeErr(err, root)
+		}
+		if err := vendor(ctx, dir, reg); err != nil {
+			return nil, err
+		}
+		p.ChartRef, p.Revision = dir, revision
+	}
+	inline, err := normalize(s.Values)
+	if err != nil {
+		return nil, err
+	}
+	p.Values = values.Merge(vals, inline)
+	return p, nil
+}
+
+// inside resolves symlinks in p and checks that it stays under root, so a
+// repository can't point composecd at files elsewhere on the controller.
+func inside(root, p string) (string, error) {
+	real, err := filepath.EvalSymlinks(p)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", errors.New("not found in the repository")
+		}
+		return "", err
+	}
+	rel, err := filepath.Rel(root, real)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", errors.New("resolves outside the repository")
+	}
+	return real, nil
+}
+
+// vendor runs `composetpl dependency build` when the chart has a Chart.lock.
+func vendor(ctx context.Context, dir string, reg *registry.Client) error {
+	if _, err := os.Stat(filepath.Join(dir, chart.LockFile)); err != nil {
+		return nil
+	}
+	l, _ := depLocks.LoadOrStore(dir, &sync.Mutex{})
+	mu := l.(*sync.Mutex)
+	mu.Lock()
+	defer mu.Unlock()
+	d := &action.Dependencies{Registry: reg, Log: io.Discard}
+	if _, err := d.Build(ctx, dir); err != nil {
+		return fmt.Errorf("building chart dependencies: %w", err)
+	}
+	return nil
+}
+
+// normalize round-trips inline values through JSON so they have the same types
+// (float64 numbers, map[string]interface{}) as values read from files.
+func normalize(v map[string]interface{}) (map[string]interface{}, error) {
+	if len(v) == 0 {
+		return map[string]interface{}{}, nil
+	}
+	data, err := json.Marshal(v)
+	if err != nil {
+		return nil, fmt.Errorf("values: %w", err)
+	}
+	out := map[string]interface{}{}
+	return out, json.Unmarshal(data, &out)
+}
+
+// Env is the environment of app's docker calls on host: the host's env
+// overlaid by the app's, as sorted KEY=VALUE entries.
+func Env(host *config.Host, app *config.Application) []string {
+	return mergeEnv(host.Spec.Env, app.Spec.Source.Env)
+}
+
+// mergeEnv overlays app onto host as sorted KEY=VALUE entries.
+func mergeEnv(host, app map[string]string) []string {
+	m := map[string]string{}
+	for k, v := range host {
+		m[k] = v
+	}
+	for k, v := range app {
+		m[k] = v
+	}
+	out := make([]string, 0, len(m))
+	for k, v := range m {
+		out = append(out, k+"="+v)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// relativeErr shortens checkout paths in err to repository-relative ones.
+func relativeErr(err error, root string) error {
+	return errors.New(strings.ReplaceAll(err.Error(), root+string(filepath.Separator), ""))
+}
+
+func short(sha string) string {
+	if len(sha) > 7 {
+		return sha[:7]
+	}
+	return sha
+}

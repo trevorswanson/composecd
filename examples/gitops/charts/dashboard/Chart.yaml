@@ -1,0 +1,5 @@
+apiVersion: v2
+name: dashboard
+description: Dozzle, a log viewer for the host's containers
+version: 0.1.0
+appVersion: "8"

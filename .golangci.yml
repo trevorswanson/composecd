@@ -1,0 +1,53 @@
+version: "2"
+
+run:
+  build-tags:
+    - integration
+
+linters:
+  default: none
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - misspell
+    - revive
+    - staticcheck
+    - unused
+    - gosec
+  settings:
+    revive:
+      rules:
+        # Exported identifiers are documented where it helps; don't require it everywhere.
+        - name: exported
+          disabled: true
+        - name: package-comments
+          disabled: true
+    gosec:
+      excludes:
+        # Unchecked errors are errcheck's job, which knows the standard exceptions.
+        - G104
+        # composecd's job is to run git and docker with arguments built from its configuration.
+        - G204
+        # Git checkouts and project directories are meant to be readable like git leaves them.
+        # Secrets (the admin token, the database) are written 0600.
+        - G301
+        - G306
+        # Reading files named in the configuration (charts, values, credentials) is the point.
+        - G304
+  exclusions:
+    presets:
+      - std-error-handling
+    rules:
+      # Tests write fixtures with ordinary permissions and use fixed temp paths.
+      - path: _test\.go
+        linters: [gosec]
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/trevorswanson/composecd

@@ -1,0 +1,8 @@
+services:
+  dozzle:
+    image: {{ .Values.image }}:{{ .Values.tag }}
+    restart: unless-stopped
+    ports:
+      - "{{ .Values.port }}:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro

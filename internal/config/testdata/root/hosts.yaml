@@ -1,0 +1,16 @@
+apiVersion: composecd/v1alpha1
+kind: Host
+metadata:
+  name: nas
+  labels: {role: storage}
+spec:
+  url: unix:///var/run/docker.sock
+---
+apiVersion: composecd/v1alpha1
+kind: Host
+metadata: {name: pi}
+spec:
+  url: ssh://deploy@pi.lan
+  projectRoot: /srv/stacks
+  storage: local
+  env: {TZ: America/Chicago}

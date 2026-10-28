@@ -1,0 +1,45 @@
+name: Bug report
+description: Something doesn't work the way it should
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report this! For security vulnerabilities, please use
+        [private vulnerability reporting](https://github.com/trevorswanson/composecd/security/advisories/new) instead.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: Include the command you ran and its full output.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect to happen?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How can we reproduce it?
+      description: The smallest Application, chart and values (or composecd.yaml) and the commands that show the problem.
+      render: yaml
+  - type: input
+    id: version
+    attributes:
+      label: composecd version
+      placeholder: output of `composecd version`
+    validations:
+      required: true
+  - type: input
+    id: compose-version
+    attributes:
+      label: Docker and Compose versions
+      placeholder: output of `docker version --format '{{.Server.Version}}'` and `docker compose version`
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: e.g. Debian 13 on amd64, macOS 26 on arm64

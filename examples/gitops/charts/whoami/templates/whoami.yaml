@@ -1,0 +1,20 @@
+services:
+  web:
+    image: {{ .Values.image }}:{{ .Values.tag }}
+    restart: unless-stopped
+    ports:
+      - "{{ .Values.port }}:80"
+    environment:
+      TZ: {{ env "TZ" | default "Etc/UTC" | quote }}
+    {{- if gt (int .Values.replicas) 1 }}
+    deploy:
+      replicas: {{ .Values.replicas }}
+    {{- end }}
+
+  # A test hook: `composetpl test whoami` runs it against the deployed release.
+  smoke-test:
+    image: busybox:1.37
+    command: ["wget", "-qO-", "http://web"]
+    depends_on: [web]
+    x-composetpl:
+      hook: test

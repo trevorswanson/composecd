@@ -1,0 +1,27 @@
+# Docker engines composecd deploys to. With no url, a host is the engine the
+# controller itself talks to (DOCKER_HOST, or the mounted /var/run/docker.sock).
+apiVersion: composecd/v1alpha1
+kind: Host
+metadata:
+  name: nas
+  labels:
+    role: storage
+spec:
+  # Relative paths in compose files (./data) resolve under <projectRoot>/<app>
+  # on this machine.
+  projectRoot: /opt/composecd
+  env:
+    TZ: Etc/UTC
+
+# A second machine, reached over SSH. The controller needs an SSH key for it
+# (mount ~/.ssh), and the remote user must be able to run docker.
+#
+# ---
+# apiVersion: composecd/v1alpha1
+# kind: Host
+# metadata:
+#   name: pi
+#   labels: {arch: arm64}
+# spec:
+#   url: ssh://deploy@pi.lan
+#   projectRoot: /srv/composecd

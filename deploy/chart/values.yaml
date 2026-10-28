@@ -1,0 +1,21 @@
+image: ghcr.io/trevorswanson/composecd
+# Defaults to the chart's appVersion.
+tag: ""
+port: 8080
+logLevel: info
+
+# Host paths mounted read-only into the container, e.g. credentials referenced
+# by config.repositories or Host tlsCertPath, and ~/.ssh for ssh:// hosts.
+extraVolumes: []
+#  - /opt/composecd/secrets:/run/secrets:ro
+#  - /root/.ssh:/root/.ssh:ro
+
+# composecd.yaml. dataDir and listen are set by the chart.
+config:
+  refreshInterval: 3m
+  root:
+    repoURL: https://git.example.lan/me/homelab.git
+    targetRevision: main
+    path: composecd
+  repositories: []
+  auth: {}

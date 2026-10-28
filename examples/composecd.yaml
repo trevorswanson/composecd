@@ -1,0 +1,25 @@
+# composecd's own configuration. Everything else (hosts, applications) lives in
+# Git, under root.path of root.repoURL.
+listen: ":8080"
+dataDir: /var/lib/composecd
+refreshInterval: 3m
+concurrency: 4
+
+root:
+  repoURL: https://git.example.lan/me/homelab.git
+  targetRevision: main
+  path: composecd
+
+# Credentials, matched by the longest URL prefix. Secrets are read from files.
+repositories:
+  - url: https://git.example.lan/
+    username: composecd
+    passwordFile: /run/secrets/git-token
+  # - url: git@github.com:me/
+  #   sshKeyFile: /run/secrets/github-deploy-key
+  #   knownHostsFile: /etc/composecd/known_hosts
+
+auth:
+  # With no tokenFile, composecd generates <dataDir>/admin-token on first start.
+  # tokenFile: /run/secrets/composecd-token
+  disabled: false

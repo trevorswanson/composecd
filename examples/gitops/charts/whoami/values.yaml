@@ -1,0 +1,4 @@
+image: traefik/whoami
+tag: v1.10
+port: 8081
+replicas: 1

@@ -1,0 +1,29 @@
+apiVersion: composecd/v1alpha1
+kind: Application
+metadata:
+  name: media
+  labels: {tier: apps}
+spec:
+  source:
+    path: ./stacks/media/
+    valueFiles: [values-nas.yaml, ../shared/values.yaml]
+    values:
+      apps: {jellyfin: {enabled: true}}
+    env: {PUID: "1000"}
+  destination: {host: nas}
+  syncPolicy:
+    automated: {}
+    options: {wait: false, timeout: 90s, pull: missing, atomic: true, historyMax: 3}
+---
+# Not ours: ignored.
+apiVersion: v1
+kind: ConfigMap
+---
+apiVersion: composecd/v1alpha1
+kind: Application
+metadata: {name: monitoring}
+spec:
+  source:
+    chart: oci://ghcr.io/me/charts/monitoring
+    version: ^1.2
+  destination: {host: pi}

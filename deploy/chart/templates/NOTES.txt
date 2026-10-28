@@ -1,0 +1,6 @@
+composecd is starting on port {{ .Values.port }}.
+
+{{- if not .Values.config.auth.tokenFile }}
+Its admin token is generated on first start:
+  docker exec {{ .Release.Name }}-composecd-1 cat /var/lib/composecd/admin-token
+{{- end }}

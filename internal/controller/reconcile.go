@@ -1,0 +1,353 @@
+package controller
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/trevorswanson/composetpl/pkg/action"
+	"github.com/trevorswanson/composetpl/pkg/diff"
+	"github.com/trevorswanson/composetpl/pkg/hooks"
+	"github.com/trevorswanson/composetpl/pkg/output"
+	"github.com/trevorswanson/composetpl/pkg/release"
+	"github.com/trevorswanson/composetpl/pkg/storage"
+
+	"github.com/trevorswanson/composecd/internal/config"
+	"github.com/trevorswanson/composecd/internal/health"
+	"github.com/trevorswanson/composecd/internal/hosts"
+	"github.com/trevorswanson/composecd/internal/source"
+)
+
+// plan is what a reconcile learned that a sync needs.
+type plan struct {
+	app  *config.Application
+	host *hosts.Host
+	prep *source.Prepared
+	// key identifies the desired state, for auto-sync's retry suppression.
+	key string
+	// gitChanged is true when Git differs from the deployed release (not just
+	// live drift).
+	gitChanged bool
+	// release is the end of the checkout's use; call it when done with prep.
+	release func()
+}
+
+func (p *plan) done() {
+	if p != nil && p.release != nil {
+		p.release()
+	}
+}
+
+// reconcile assesses app and, if auto and the app is automated, not paused and
+// out of sync with Git, syncs it.
+func (c *Controller) reconcile(ctx context.Context, app *config.Application, fetchErr error, auto bool) {
+	name := app.Metadata.Name
+	defer c.lockApp(name)()
+	st, p := c.assess(ctx, app, fetchErr)
+	defer p.done()
+	c.setStatus(st)
+	if !auto || p == nil || !st.Automated || st.Paused || !p.gitChanged {
+		return
+	}
+	c.mu.Lock()
+	s := c.apps[name]
+	if s.attempted == p.key || c.running[name] != 0 {
+		c.mu.Unlock()
+		return
+	}
+	s.attempted = p.key
+	c.mu.Unlock()
+
+	c.Log.Info("auto-syncing", "app", name, "revision", short(p.prep.Revision), "reasons", strings.Join(st.Sync.Reasons, "; "))
+	op, err := c.startOperation(name, "sync", "auto", p.prep.Revision)
+	if err != nil {
+		c.Log.Error("recording an operation", "app", name, "error", err)
+		return
+	}
+	c.runSync(ctx, p, op)
+	c.finishOperation(name, op)
+	st, p2 := c.assess(ctx, app, nil)
+	p2.done()
+	c.setStatus(st)
+}
+
+func baseStatus(app *config.Application) *AppStatus {
+	return &AppStatus{
+		Name:      app.Metadata.Name,
+		Labels:    app.Metadata.Labels,
+		Host:      app.Spec.Destination.Host,
+		Source:    app.Spec.Source,
+		Origin:    app.Origin,
+		Automated: app.Spec.SyncPolicy.Automated != nil,
+		Sync:      SyncStatus{Status: Unknown},
+		Health:    HealthStatus{Status: health.Unknown},
+	}
+}
+
+// assess compares app's desired state in Git with its deployed release and live
+// containers. The plan is nil when the app could not be rendered.
+func (c *Controller) assess(ctx context.Context, app *config.Application, fetchErr error) (*AppStatus, *plan) {
+	name := app.Metadata.Name
+	st := baseStatus(app)
+	st.ReconciledAt = time.Now()
+	if state, err := c.Store.AppState(name); err == nil {
+		st.Paused, st.PausedReason = state.Paused, state.PausedReason
+	}
+	if op, err := c.Store.LastOperation(name); err == nil {
+		st.Operation = op
+	}
+	var warnings []string
+	if fetchErr != nil {
+		warnings = append(warnings, "fetching "+app.Spec.Source.RepoURL+": "+fetchErr.Error())
+	}
+	fail := func(err error) (*AppStatus, *plan) {
+		st.Error = strings.Join(append(warnings, err.Error()), "; ")
+		return st, nil
+	}
+
+	h := c.Hosts.Get(app.Spec.Destination.Host)
+	if h == nil {
+		return fail(fmt.Errorf("host %q is not defined", app.Spec.Destination.Host))
+	}
+	if hs := h.Status(); hs.State == hosts.StateDown {
+		return fail(fmt.Errorf("host %q is down: %s", h.Name(), hs.Error))
+	}
+	defer h.Use()()
+
+	p, err := c.prepare(ctx, app, h)
+	if err != nil {
+		return fail(err)
+	}
+	st.Sync.Revision = p.prep.Revision
+	cfg := h.Configuration(p.prep.Env, io.Discard)
+
+	hist, err := cfg.Store.History(name)
+	if err != nil && !errors.Is(err, storage.ErrNotFound) {
+		p.done()
+		return fail(fmt.Errorf("reading release history: %w", err))
+	}
+	var deployed, latest *release.Release
+	if len(hist) > 0 {
+		latest = hist[len(hist)-1]
+		st.Release = releaseInfo(latest)
+		if d, err := storage.LastDeployed(cfg.Store, name); err == nil {
+			deployed = d
+		}
+	}
+
+	// Render Git as it would be deployed at the deployed revision's number, so
+	// charts using .Release.Revision don't look out of sync after every sync.
+	revision := 1
+	if deployed != nil {
+		revision = deployed.Revision
+	}
+	manifest, hks, err := c.render(ctx, cfg, h, app, p.prep, revision)
+	if err != nil {
+		p.done()
+		return fail(err)
+	}
+	projectDir := h.ProjectDir(name)
+	p.key = desiredKey(manifest, hks, projectDir)
+
+	var reasons []string
+	if deployed == nil {
+		reasons = append(reasons, "not deployed")
+	} else {
+		st.Sync.DeployedRevision = deployed.Labels[LabelSourceRevision]
+		changes, err := diff.Manifests(deployed.Manifest, manifest)
+		if err != nil {
+			p.done()
+			return fail(err)
+		}
+		for _, ch := range changes {
+			st.Sync.Changes = append(st.Sync.Changes, toChange(name, ch))
+		}
+		if len(changes) > 0 {
+			reasons = append(reasons, fmt.Sprintf("%d %s differ from Git", len(changes), plural(len(changes), "resource", "resources")))
+		}
+		if !sameHooks(deployed.Hooks, hks) {
+			reasons = append(reasons, "hooks differ from Git")
+		}
+		if deployed.ProjectDir != projectDir {
+			reasons = append(reasons, fmt.Sprintf("project directory changes from %s to %s", deployed.ProjectDir, projectDir))
+		}
+	}
+	if latest != nil && latest.Status == release.StatusFailed && (deployed == nil || latest.Revision > deployed.Revision) {
+		warnings = append(warnings, fmt.Sprintf("revision %d failed: %s", latest.Revision, latest.Description))
+	}
+	p.gitChanged = len(reasons) > 0
+
+	containers, err := cfg.Compose.PS(ctx, name)
+	if err != nil {
+		warnings = append(warnings, "reading containers: "+err.Error())
+	}
+	st.Health.Containers = containers
+	if err == nil {
+		st.Health.Status, st.Health.Message = health.Assess(deployed != nil, containers)
+	}
+	if deployed != nil {
+		drift, err := action.NewRepair(cfg).Drift(ctx, name)
+		switch {
+		case err != nil:
+			warnings = append(warnings, "checking drift: "+err.Error())
+		case len(drift) > 0:
+			st.Sync.Drift = drift
+			var parts []string
+			for _, d := range drift {
+				// A stopped container is health's business, not a difference from Git.
+				if d.Reason != action.DriftStopped {
+					parts = append(parts, d.Service+" "+d.Reason)
+				}
+			}
+			if len(parts) > 0 {
+				reasons = append(reasons, "live containers drifted: "+strings.Join(parts, ", "))
+			}
+		}
+	}
+
+	st.Sync.Reasons = reasons
+	if len(reasons) > 0 {
+		st.Sync.Status = OutOfSync
+	} else {
+		st.Sync.Status = Synced
+	}
+	st.Error = strings.Join(warnings, "; ")
+	return st, p
+}
+
+// prepare resolves app's source revision and checkout.
+func (c *Controller) prepare(ctx context.Context, app *config.Application, h *hosts.Host) (*plan, error) {
+	s := app.Spec.Source
+	p := &plan{app: app, host: h}
+	var checkout, sha string
+	if !s.IsOCI() {
+		var err error
+		if sha, err = c.Git.Resolve(ctx, s.RepoURL, s.TargetRevision); err != nil {
+			return nil, err
+		}
+		p.release = c.useCheckout(s.RepoURL, sha)
+		if checkout, err = c.Git.Checkout(ctx, s.RepoURL, sha); err != nil {
+			p.done()
+			return nil, err
+		}
+	}
+	prep, err := source.Prepare(ctx, app, h.Spec, checkout, sha, c.Registry)
+	if err != nil {
+		p.done()
+		return nil, err
+	}
+	p.prep = prep
+	return p, nil
+}
+
+// render renders app's chart the way composetpl's upgrade does, as revision
+// revision, and returns the merged manifest (hooks removed) and the hooks.
+// lookup reads the live engine, as it does during a real sync.
+func (c *Controller) render(ctx context.Context, cfg *action.Configuration, h *hosts.Host, app *config.Application, prep *source.Prepared, revision int) (string, []*release.Hook, error) {
+	caps, err := capabilities(ctx, cfg, h)
+	if err != nil {
+		return "", nil, err
+	}
+	r, err := action.Render(action.RenderOptions{
+		ChartPath: prep.ChartRef, Version: prep.Version, Registry: c.Registry, Context: ctx,
+		ReleaseName: app.Metadata.Name, Revision: revision, IsUpgrade: revision > 1,
+		UserValues: prep.Values, Env: prep.Lookup, Capabilities: caps,
+		Lookup: func(kind, name string) (map[string]interface{}, error) {
+			return cfg.Compose.Inspect(ctx, kind, name)
+		},
+	})
+	if err != nil {
+		return "", nil, fmt.Errorf("rendering: %w", err)
+	}
+	root, err := r.Merge()
+	if err != nil {
+		return "", nil, fmt.Errorf("rendering: %w", err)
+	}
+	hks, err := hooks.Extract(root)
+	if err != nil {
+		return "", nil, fmt.Errorf("rendering: %w", err)
+	}
+	output.SetName(root, app.Metadata.Name)
+	manifest, err := output.Encode(root)
+	if err != nil {
+		return "", nil, err
+	}
+	return string(manifest), hks, nil
+}
+
+// capabilities is .Capabilities for h, from its last ping when it has one.
+func capabilities(ctx context.Context, cfg *action.Configuration, h *hosts.Host) (map[string]interface{}, error) {
+	s := h.Status()
+	cv, dv := s.ComposeVersion, s.DockerVersion
+	if cv == "" || dv == "" {
+		var err error
+		if cv, err = cfg.Compose.Version(ctx); err != nil {
+			return nil, err
+		}
+		if dv, err = cfg.Compose.ServerVersion(ctx); err != nil {
+			return nil, err
+		}
+	}
+	return map[string]interface{}{"ComposeVersion": cv, "DockerVersion": dv}, nil
+}
+
+func desiredKey(manifest string, hks []*release.Hook, projectDir string) string {
+	h := sha256.New()
+	hj, _ := json.Marshal(hks)
+	for _, part := range [][]byte{[]byte(manifest), hj, []byte(projectDir)} {
+		h.Write(part)
+		h.Write([]byte{0})
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+func sameHooks(a, b []*release.Hook) bool {
+	if len(a) == 0 && len(b) == 0 {
+		return true
+	}
+	aj, _ := json.Marshal(a)
+	bj, _ := json.Marshal(b)
+	return bytes.Equal(aj, bj)
+}
+
+func toChange(name string, ch diff.Change) Change {
+	var buf bytes.Buffer
+	_ = diff.Print(&buf, []diff.Change{ch}, diff.PrintOptions{Release: name, Context: 3})
+	// Drop Print's header line; Resource and Op carry it.
+	text := buf.String()
+	if i := strings.IndexByte(text, '\n'); i >= 0 {
+		text = text[i+1:]
+	}
+	return Change{Resource: ch.Resource, Op: string(ch.Op), Diff: strings.TrimRight(text, "\n") + "\n"}
+}
+
+func releaseInfo(r *release.Release) *Release {
+	labels := map[string]string{}
+	keys := make([]string, 0, len(r.Labels))
+	for k := range r.Labels {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		labels[k] = r.Labels[k]
+	}
+	return &Release{
+		Revision: r.Revision, Status: string(r.Status), Description: r.Description,
+		Chart: r.Chart.String(), AppVersion: r.Chart.AppVersion, LastDeployed: r.LastDeployed, Labels: labels,
+	}
+}
+
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return one
+	}
+	return many
+}

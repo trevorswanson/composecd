@@ -1,0 +1,30 @@
+composecd
+Copyright 2026 Trevor Swanson
+
+composecd is built on composetpl (https://github.com/trevorswanson/composetpl),
+licensed under the Apache License, Version 2.0, which includes software
+adapted from Helm (https://helm.sh), Copyright The Helm Authors, also licensed
+under the Apache License, Version 2.0.
+
+This product includes the YAML libraries go.yaml.in/yaml/v2,
+go.yaml.in/yaml/v3 and gopkg.in/yaml.v3, whose NOTICE reads:
+
+  Copyright 2011-2016 Canonical Ltd.
+
+  Licensed under the Apache License, Version 2.0 (the "License");
+  you may not use this file except in compliance with the License.
+  You may obtain a copy of the License at
+
+      http://www.apache.org/licenses/LICENSE-2.0
+
+  Unless required by applicable law or agreed to in writing, software
+  distributed under the License is distributed on an "AS IS" BASIS,
+  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+  See the License for the specific language governing permissions and
+  limitations under the License.
+
+Other third-party Go modules compiled into the binary are distributed under
+their own licenses: BSD-3-Clause (e.g. modernc.org/sqlite, pflag,
+golang.org/x/*), MIT (e.g. Sprig, semver, sigs.k8s.io/yaml) and Apache-2.0
+(e.g. cobra, oras-go, opencontainers). See each module's LICENSE file, e.g.
+with `go mod download` under $(go env GOMODCACHE).

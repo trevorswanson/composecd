@@ -1,0 +1,27 @@
+services:
+  composecd:
+    image: {{ .Values.image }}:{{ .Values.tag | default .Chart.AppVersion }}
+    restart: unless-stopped
+    ports:
+      - "{{ .Values.port }}:8080"
+    environment:
+      COMPOSECD_LOG_LEVEL: {{ .Values.logLevel | quote }}
+      COMPOSECD_LOG_FORMAT: json
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - data:/var/lib/composecd
+      {{- range .Values.extraVolumes }}
+      - {{ . | quote }}
+      {{- end }}
+    configs:
+      - source: config
+        target: /etc/composecd/composecd.yaml
+
+configs:
+  config:
+    content: |
+      {{- $config := merge (dict "listen" ":8080" "dataDir" "/var/lib/composecd") .Values.config }}
+      {{- toYaml $config | nindent 6 }}
+
+volumes:
+  data:

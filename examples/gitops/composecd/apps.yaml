@@ -1,0 +1,34 @@
+# whoami follows Git automatically: every commit that changes what it renders
+# is deployed within a refresh interval.
+apiVersion: composecd/v1alpha1
+kind: Application
+metadata:
+  name: whoami
+  labels:
+    tier: apps
+spec:
+  source:
+    path: charts/whoami
+    values:
+      replicas: 1
+  destination:
+    host: nas
+  syncPolicy:
+    automated: {}
+    options:
+      wait: true
+      timeout: 2m
+---
+# dashboard is synced by hand ("composecd app sync dashboard"); composecd still
+# shows when Git and the host differ.
+apiVersion: composecd/v1alpha1
+kind: Application
+metadata:
+  name: dashboard
+spec:
+  source:
+    path: charts/dashboard
+    valueFiles:
+      - values-nas.yaml
+  destination:
+    host: nas
