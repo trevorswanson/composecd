@@ -121,11 +121,11 @@ func (o *Objects) decode(name string, data []byte) error {
 			continue
 		}
 		origin := fmt.Sprintf("%s:%d", name, doc.Content[0].Line)
-		var h header
-		if err := doc.Decode(&h); err != nil {
-			// Not a mapping: not one of ours.
-			continue
-		}
+		// Read apiVersion and kind straight from the node: decoding the whole
+		// document could fail (on duplicate keys, say), and a composecd object
+		// that fails to decode must be reported, not skipped, or its app would
+		// silently disappear (and be pruned).
+		h := readHeader(doc.Content[0])
 		if !strings.HasPrefix(h.APIVersion, "composecd/") {
 			continue
 		}
@@ -167,6 +167,28 @@ func (o *Objects) decode(name string, data []byte) error {
 			return fmt.Errorf("%s: unknown kind %q (want %s, %s or %s)", origin, h.Kind, KindHost, KindApplication, KindSyncWindow)
 		}
 	}
+}
+
+// readHeader returns the first apiVersion and kind keys of a mapping node, or
+// an empty header for anything else.
+func readHeader(n *yaml.Node) header {
+	var h header
+	if n.Kind != yaml.MappingNode {
+		return h
+	}
+	for i := 0; i+1 < len(n.Content); i += 2 {
+		k, v := n.Content[i], n.Content[i+1]
+		if k.Kind != yaml.ScalarNode || v.Kind != yaml.ScalarNode {
+			continue
+		}
+		switch {
+		case k.Value == "apiVersion" && h.APIVersion == "":
+			h.APIVersion = v.Value
+		case k.Value == "kind" && h.Kind == "":
+			h.Kind = v.Value
+		}
+	}
+	return h
 }
 
 // strictDecode decodes n into v, rejecting fields v doesn't have.

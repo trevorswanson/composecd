@@ -174,6 +174,30 @@ func TestPrune(t *testing.T) {
 	}
 }
 
+func TestBrokenDocumentDoesNotPrune(t *testing.T) {
+	e := newEnv(t)
+	policy := "  syncPolicy: {automated: {prune: true}, options: {wait: false}}\n"
+	e.apps(app("web", "nas", policy), app("other", "nas", policy), app("keep", "nas", policy))
+	e.refresh()
+	if len(e.fake().Running) != 3 {
+		t.Fatalf("running = %v", e.fake().Running)
+	}
+	// Dropping the --- between web and other merges them into one document with
+	// duplicate keys. That must be an error, not two apps vanishing (and pruned).
+	merged := strings.Replace(app("web", "nas", policy), "---\n", "", 1) + app("other", "nas", policy) + app("keep", "nas", policy)
+	e.apps(merged)
+	e.refresh()
+	if err := e.c.Root().Error; !strings.Contains(err, "already defined") {
+		t.Errorf("root error = %q", err)
+	}
+	if len(e.fake().Running) != 3 {
+		t.Errorf("apps were pruned after a broken commit: %v", e.fake().Running)
+	}
+	if len(e.c.Apps()) != 3 {
+		t.Errorf("apps = %d, want the last good 3", len(e.c.Apps()))
+	}
+}
+
 func TestMoveToAnotherHost(t *testing.T) {
 	e := newEnv(t)
 	e.backend.fakes["pi"] = composetest.New()
