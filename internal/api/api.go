@@ -98,6 +98,9 @@ func New(c Controller, o Options) http.Handler {
 	read("GET /api/v1/windows", func(*http.Request, *auth.Principal) (int, interface{}, error) {
 		return http.StatusOK, nonNil(c.Windows()), nil
 	})
+	read("GET /api/v1/applicationsets", func(*http.Request, *auth.Principal) (int, interface{}, error) {
+		return http.StatusOK, nonNil(c.ApplicationSets()), nil
+	})
 	read("GET /api/v1/apps", func(*http.Request, *auth.Principal) (int, interface{}, error) {
 		return http.StatusOK, nonNil(c.Apps()), nil
 	})

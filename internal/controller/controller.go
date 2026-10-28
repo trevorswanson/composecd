@@ -58,12 +58,14 @@ type Controller struct {
 	sem       chan struct{}
 	ops       tracker
 
-	mu       sync.RWMutex
-	objects  *config.Objects
-	root     RootStatus
-	apps     map[string]*appState
-	running  map[string]int64
-	appLocks map[string]*sync.Mutex
+	mu           sync.RWMutex
+	objects      *config.Objects
+	appsets      []ApplicationSetStatus
+	retiredHosts map[string]*hosts.Host
+	root         RootStatus
+	apps         map[string]*appState
+	running      map[string]int64
+	appLocks     map[string]*sync.Mutex
 	// checkouts counts operations using each checkout, so Prune keeps them.
 	checkouts map[string]int
 	windows   []*windows.Window
@@ -279,7 +281,19 @@ func (c *Controller) baseContext() context.Context {
 // RefreshAll fetches Git, reloads the objects, pings every host and reconciles
 // every Application, auto-syncing those that want it.
 func (c *Controller) RefreshAll(ctx context.Context) {
+	defer c.publish("app", "")
 	objs, sha, err := c.loadRoot(ctx)
+	rootErr := err
+	var generatorFetches map[string]error
+	if objs != nil {
+		var statuses []ApplicationSetStatus
+		var expansionErr error
+		objs, statuses, generatorFetches, expansionErr = c.expand(ctx, objs)
+		err = errors.Join(err, expansionErr)
+		c.mu.Lock()
+		c.appsets = statuses
+		c.mu.Unlock()
+	}
 	c.mu.Lock()
 	c.root.Revision, c.root.RefreshedAt, c.root.Error = sha, time.Now(), ""
 	if err != nil {
@@ -299,7 +313,21 @@ func (c *Controller) RefreshAll(ctx context.Context) {
 		return
 	}
 
+	previousHosts := c.Hosts.All()
 	c.Hosts.Sync(objs.Hosts)
+	c.mu.Lock()
+	if c.retiredHosts == nil {
+		c.retiredHosts = map[string]*hosts.Host{}
+	}
+	for _, h := range previousHosts {
+		if c.Hosts.Get(h.Name()) == nil {
+			c.retiredHosts[h.Name()] = h
+		}
+	}
+	for _, h := range objs.Hosts {
+		delete(c.retiredHosts, h.Metadata.Name)
+	}
+	c.mu.Unlock()
 	c.watchHosts()
 	var wg sync.WaitGroup
 	for _, h := range c.Hosts.All() {
@@ -318,9 +346,14 @@ func (c *Controller) RefreshAll(ctx context.Context) {
 		}()
 	}
 	wg.Wait()
+	c.restoreEmptyGuards()
 
 	// The root was fetched by loadRoot; fetch every other source repository once.
-	fetchErrs := map[string]error{c.Boot.Root.RepoURL: err}
+	fetchErrs := generatorFetches
+	if fetchErrs == nil {
+		fetchErrs = map[string]error{}
+	}
+	fetchErrs[c.Boot.Root.RepoURL] = rootErr
 	for _, a := range objs.Applications {
 		url := sourceRepo(a)
 		if url == "" || url == c.Boot.Root.RepoURL {
@@ -362,7 +395,6 @@ func (c *Controller) RefreshAll(ctx context.Context) {
 	}
 	c.prune(ctx, objs, fresh)
 	c.pruneCheckouts(sha)
-	c.publish("app", "")
 }
 
 // loadRoot fetches the root repository and reads the objects at its revision.
@@ -537,8 +569,8 @@ func (c *Controller) HostStatuses() []HostStatus {
 	orphans := c.orphans
 	c.mu.RUnlock()
 	var out []HostStatus
-	for _, h := range c.Hosts.All() {
-		hs := HostStatus{Status: h.Status(), Apps: counts[h.Name()], Orphans: orphans[h.Name()]}
+	for _, h := range c.pruneHosts() {
+		hs := HostStatus{Status: h.Status(), Apps: counts[h.Name()], Orphans: orphans[h.Name()], Retired: c.Hosts.Get(h.Name()) == nil}
 		if st, err := c.Store.HostState(h.Name()); err == nil {
 			hs.Maintenance, hs.MaintenanceReason = st.Maintenance, st.MaintenanceReason
 		}
@@ -613,6 +645,13 @@ func (c *Controller) RefreshRepos(urls []string) bool {
 		for _, a := range c.objects.Applications {
 			if url := sourceRepo(a); url != "" {
 				want[NormalizeRepoURL(url)] = true
+			}
+		}
+		for _, set := range c.objects.ApplicationSets {
+			for _, g := range set.Spec.Generators {
+				if d := g.GitDirectories; d != nil {
+					want[NormalizeRepoURL(d.RepoURL)] = true
+				}
 			}
 		}
 	}

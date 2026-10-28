@@ -50,7 +50,7 @@ func (s *Server) Events(w http.ResponseWriter, r *http.Request) {
 	if page == "" {
 		page = "/apps"
 	}
-	if page != "/" && page != "/apps" && page != "/hosts" && page != "/windows" && page != "/operations" && !strings.HasPrefix(page, "/apps/") {
+	if page != "/" && page != "/apps" && page != "/hosts" && page != "/windows" && page != "/operations" && page != "/applicationsets" && !strings.HasPrefix(page, "/apps/") {
 		http.Error(w, "Invalid event page", 400)
 		return
 	}

@@ -549,3 +549,7 @@ func (s *stub) Logs(_ context.Context, name, container string, _ int, _ bool, w 
 func (s *stub) Mask(_ string, text string) string {
 	return strings.ReplaceAll(text, "secret-value", "••••••")
 }
+
+func (s *stub) ApplicationSets() []controller.ApplicationSetStatus {
+	return []controller.ApplicationSetStatus{{Name: "stacks", Generated: 1, Ready: true, Applications: []string{"media"}}}
+}

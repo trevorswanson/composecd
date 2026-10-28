@@ -349,3 +349,37 @@ func TestOCIValuesRevisionsPrinted(t *testing.T) {
 		t.Fatal(revision(a))
 	}
 }
+
+func TestApplicationSetCLI(t *testing.T) {
+	srv, c, _ := startServer(t)
+	if got := mustCLI(t, srv, "appset", "list", "-o", "json"); strings.TrimSpace(got) != "[]" {
+		t.Fatal(got)
+	}
+	root := c.Boot.Root.RepoURL
+	set := `apiVersion: composecd/v1alpha1
+kind: ApplicationSet
+metadata: {name: examples}
+spec:
+  generators:
+    - gitDirectories: {directories: ['charts/whoami']}
+  template:
+    metadata: {name: 'generated-{{ .path.basename }}'}
+    spec:
+      source: {path: '{{ .path.path }}'}
+      destination: {host: nas}
+`
+	if err := os.WriteFile(filepath.Join(root, "composecd", "sets.yaml"), []byte(set), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git(t, root, "add", ".")
+	git(t, root, "commit", "--quiet", "-m", "add set")
+	c.RefreshAll(context.Background())
+	c.Wait()
+	expect(t, mustCLI(t, srv, "appset", "list"), "examples", "generated-whoami", "true")
+	expect(t, mustCLI(t, srv, "appset", "list", "-o", "json"), `"generated": 1`, `"ready": true`)
+	out, err := cliIn(t, "", "validate", filepath.Join(root, "composecd"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	expect(t, out, "1 ApplicationSets will be expanded and fully validated by the server")
+}

@@ -119,6 +119,8 @@ type RetryStatus struct {
 type HostStatus struct {
 	hosts.Status
 	Apps int `json:"apps"`
+	// Retired hosts were removed from Git and retained for pending prune.
+	Retired bool `json:"retired,omitempty"`
 	// Maintenance stops automatic syncs, self-heal and prune on the host.
 	Maintenance       bool   `json:"maintenance,omitempty"`
 	MaintenanceReason string `json:"maintenanceReason,omitempty"`
@@ -151,6 +153,7 @@ const (
 	LabelApp            = "composecd/app"
 	LabelSourceRevision = "composecd/source-revision"
 	LabelValuesRevision = "composecd/values-revision"
+	LabelApplicationSet = config.LabelApplicationSet
 	LabelOperationID    = "composecd/operation-id"
 	// LabelPrune records that the app allowed prune when it was synced, so a
 	// release can be pruned after its Application is gone from Git.

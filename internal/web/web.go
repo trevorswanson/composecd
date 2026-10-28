@@ -28,6 +28,7 @@ var files embed.FS
 
 type Controller interface {
 	Apps() []controller.AppStatus
+	ApplicationSets() []controller.ApplicationSetStatus
 	App(string) (controller.AppStatus, error)
 	History(string) ([]controller.Release, error)
 	Operations(string, int) ([]*store.Operation, error)
@@ -58,6 +59,7 @@ type Data struct {
 	Version, Page, Tab, Name, Error, Message, Token, EventsURL string
 	Root                                                       controller.RootStatus
 	Apps                                                       []controller.AppStatus
+	ApplicationSets                                            []controller.ApplicationSetStatus
 	App                                                        controller.AppStatus
 	Hosts                                                      []controller.HostStatus
 	Windows                                                    []windows.Status
@@ -96,7 +98,7 @@ var templates = template.Must(template.New("web").Funcs(template.FuncMap{
 func (s *Server) Register(mux *http.ServeMux) {
 	static, _ := fs.Sub(files, "static")
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(http.FS(static))))
-	for _, route := range []string{"/{$}", "/apps", "/apps/{name}", "/hosts", "/windows", "/operations", "/settings"} {
+	for _, route := range []string{"/{$}", "/apps", "/apps/{name}", "/hosts", "/windows", "/operations", "/settings", "/applicationsets"} {
 		mux.HandleFunc("GET "+route, s.Page)
 	}
 	mux.HandleFunc("POST /ui/apps/{name}/{action}", s.Action)
@@ -175,6 +177,8 @@ func (s *Server) data(r *http.Request, p *auth.Principal) (*Data, error) {
 		for i := range d.App.Sync.Changes {
 			d.App.Sync.Changes[i].Diff = s.C.Mask(d.Name, d.App.Sync.Changes[i].Diff)
 		}
+	case "applicationsets":
+		d.ApplicationSets = s.C.ApplicationSets()
 	case "hosts":
 		d.Hosts = s.C.HostStatuses()
 	case "windows":

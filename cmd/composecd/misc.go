@@ -37,6 +37,9 @@ func newHostCmd(cf *clientFlags) *cobra.Command {
 						engine = "default"
 					}
 					var notes []string
+					if h.Retired {
+						notes = append(notes, "removed from Git; retained for prune")
+					}
 					if h.Maintenance {
 						notes = append(notes, "maintenance: "+h.MaintenanceReason)
 					}
@@ -193,7 +196,7 @@ func newOperationCmd(cf *clientFlags) *cobra.Command {
 func newValidateCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "validate DIR",
-		Short: "Check the Host, Application and SyncWindow objects in a directory",
+		Short: "Check composecd objects and ApplicationSet definitions",
 		Long: `Read every composecd object under DIR, as the server reads its root, and report
 every problem. Also checks encrypted values filenames for SOPS metadata, without
 decrypting them. Useful in the GitOps repository's CI. It doesn't render charts
@@ -211,6 +214,9 @@ or contact hosts.`,
 				len(objs.Hosts), plural(len(objs.Hosts), "host", "hosts"),
 				len(objs.Applications), plural(len(objs.Applications), "application", "applications"),
 				len(objs.SyncWindows), plural(len(objs.SyncWindows), "window", "windows"))
+			if len(objs.ApplicationSets) > 0 {
+				fmt.Fprintf(cmd.OutOrStdout(), "%d ApplicationSets will be expanded and fully validated by the server.\n", len(objs.ApplicationSets))
+			}
 			return nil
 		},
 	}
@@ -221,4 +227,27 @@ func plural(n int, one, many string) string {
 		return one
 	}
 	return many
+}
+
+func newAppSetCmd(cf *clientFlags) *cobra.Command {
+	var format outputFormat
+	list := &cobra.Command{Use: "list", Aliases: []string{"ls"}, Short: "List ApplicationSets, generated apps and errors", Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			sets, err := cf.client().ApplicationSets(ctx(cmd))
+			if err != nil {
+				return err
+			}
+			return format.write(cmd.OutOrStdout(), sets, func(w io.Writer) {
+				tw := tabwriter.NewWriter(w, 0, 8, 2, ' ', 0)
+				fmt.Fprintln(tw, "NAME\tGENERATED\tREADY\tAPPLICATIONS\tERROR")
+				for _, s := range sets {
+					fmt.Fprintf(tw, "%s\t%d\t%t\t%s\t%s\n", s.Name, s.Generated, s.Ready, orDash(strings.Join(s.Applications, ",")), s.Error)
+				}
+				_ = tw.Flush()
+			})
+		}}
+	format.register(list)
+	cmd := &cobra.Command{Use: "appset", Aliases: []string{"applicationset", "applicationsets"}, Short: "Inspect ApplicationSets"}
+	cmd.AddCommand(list)
+	return cmd
 }

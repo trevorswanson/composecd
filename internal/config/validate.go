@@ -16,8 +16,13 @@ import (
 
 // Validate checks every object and the references between them, returning all
 // problems at once.
-func (o *Objects) Validate() error {
+func (o *Objects) Validate() error { return o.validate(false) }
+
+func (o *Objects) validate(allowGenerated bool) error {
 	var errs []error
+	if err := o.validateApplicationSets(); err != nil {
+		errs = append(errs, err)
+	}
 	fail := func(origin, format string, args ...interface{}) {
 		errs = append(errs, fmt.Errorf("%s: %s", origin, fmt.Sprintf(format, args...)))
 	}
@@ -137,7 +142,7 @@ func (o *Objects) Validate() error {
 	}
 	for _, a := range o.Applications {
 		for _, dep := range a.Spec.DependsOn {
-			if _, ok := apps[dep]; !ok {
+			if _, ok := apps[dep]; !ok && !allowGenerated {
 				fail(a.Origin, "application %q: dependsOn %q is not defined", a.Metadata.Name, dep)
 			}
 		}

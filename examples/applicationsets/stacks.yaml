@@ -1,0 +1,20 @@
+# Replace the explicit apps using these charts; do not append this beside apps
+# with the same names. Keep the Host and SyncWindow objects.
+apiVersion: composecd/v1alpha1
+kind: ApplicationSet
+metadata: {name: stacks}
+spec:
+  generators:
+    - gitDirectories:
+        directories: ["charts/*"]
+        exclude: ["charts/secret-demo"]
+  template:
+    metadata:
+      name: "{{ .path.basename }}"
+      labels: {appset: stacks}
+    spec:
+      source: {path: "{{ .path.path }}"}
+      destination: {host: nas}
+      # Enable automation after reviewing generated apps. Prune applies when
+      # a directory disappears, with an additional guard for zero output.
+      # syncPolicy: {automated: {prune: true}}

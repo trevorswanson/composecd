@@ -230,3 +230,8 @@ func (c *Client) SetPassword(ctx context.Context, name, password string) error {
 func (c *Client) DeleteUser(ctx context.Context, name string) error {
 	return c.do(ctx, "DELETE", "/api/v1/users/"+url.PathEscape(name), nil, nil)
 }
+
+func (c *Client) ApplicationSets(ctx context.Context) ([]controller.ApplicationSetStatus, error) {
+	var out []controller.ApplicationSetStatus
+	return out, c.do(ctx, "GET", "/api/v1/applicationsets", nil, &out)
+}

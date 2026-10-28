@@ -270,6 +270,7 @@ Every `/api/v1` endpoint needs `Authorization: Bearer <token>`, or a browser ses
 | Endpoint | |
 | --- | --- |
 | `GET /api/v1/apps`, `GET /api/v1/apps/{name}` | Status |
+| `GET /api/v1/applicationsets` | Generator output, apps and errors (readonly) |
 | `GET /api/v1/apps/{name}/containers/{container}/logs?follow=1&tail=200` | Container log SSE stream (readonly; tail 0–10000) |
 | `GET /api/v1/apps/{name}/history`, `GET /api/v1/apps/{name}/operations` | History |
 | `POST /api/v1/apps/{name}/sync`, `.../rollback` (`{"revision": N}`) | Start an operation (202, returns it) |
@@ -337,6 +338,7 @@ there is no CDN or Node build step.
 - **Applications** (`/apps`): filter by host, sync, health, or a label (`key` or `key=value`).
 - **Application details** (`/apps/NAME`): summary, containers and live log tails, colorized resource diffs,
   release history with rollback, and operations with their output. Admins can sync, pause, resume and refresh.
+- **ApplicationSets** (`/applicationsets`): generated apps, counts and expansion/validation errors.
 - **Hosts** (`/hosts`): connectivity, Docker/Compose versions, orphaned releases and admin maintenance toggles.
   Unmanaged project discovery and adoption arrive in Phase 3f.
 - **Sync windows** (`/windows`): open/closed state, next change, and matching applications.
@@ -359,6 +361,81 @@ inside their panels at phone widths.
 For a reverse proxy, allow long-lived SSE responses and disable response buffering on `/events` and log
 endpoints (`X-Accel-Buffering: no` is sent). Stream connections recheck credentials periodically so revoked
 sessions stop receiving updates.
+
+## ApplicationSets
+
+An `ApplicationSet` generates Applications from chart directories or Host labels. Place it beside your
+other GitOps objects:
+
+```yaml
+apiVersion: composecd/v1alpha1
+kind: ApplicationSet
+metadata: {name: stacks}
+spec:
+  generators:
+    - gitDirectories:
+        directories: ["charts/*"]
+        exclude: ["charts/experimental-*"]
+        # repoURL: https://git.example.lan/me/charts.git
+        # targetRevision: main
+  template:
+    metadata:
+      name: "{{ .path.basename }}"
+      labels: {appset: stacks}
+    spec:
+      source: {path: "{{ .path.path }}"}
+      destination: {host: nas}
+      syncPolicy: {automated: {prune: true}}
+```
+
+`gitDirectories` uses Go `path.Match` globs: `*` matches one path segment, and `**` has no recursive-glob
+meaning. Matching directories need a regular `Chart.yaml`; hidden and symlinked directories are skipped.
+Overlapping include globs within one generator generate each directory once. Repository and revision
+defaults follow the Git root, or `HEAD` for another repository. Generated Git sources with no explicit
+repository inherit their Git generator's repository/revision.
+
+Directory parameters are `.path.path`, `.path.basename` and `.path.segments`. A Host generator instead
+matches exact labels (an empty selector selects all Hosts) and provides `.host.name` and `.host.labels`:
+
+```yaml
+spec:
+  generators:
+    - hosts: {selector: {role: server}}
+  template:
+    metadata: {name: "agent-{{ .host.name }}"}
+    spec:
+      source: {path: charts/agent}
+      destination: {host: "{{ .host.name }}"}
+      syncPolicy: {automated: {prune: true}}
+```
+
+Each generator produces its own applications; generators are not combined into a matrix. Every string
+field and map key in the template is rendered with Go `text/template` and `missingkey=error`. Common,
+deterministic Sprig string helpers are available (`lower`, `upper`, `replace`, `trim`, `kebabcase`,
+`splitList`, `join`, and others); environment, file, network, random, date and crypto helpers are excluded.
+Booleans, numbers and durations keep their declared types.
+
+Generated apps carry `composecd/applicationset: NAME` and a definition such as
+`applicationset stacks (charts/media)`. Explicit and generated apps are validated together: duplicate
+names, invalid destinations, unresolved dependencies and cycles reject the snapshot. `dependsOn` works
+in both directions. `validate` checks definitions locally; the server performs expansion and the final
+reference checks. Generator repositories participate in push webhooks.
+
+A removed directory or Host selection removes its app; its recorded prune policy controls release
+removal. Changing set ownership or the template's prune flag updates release metadata through sync,
+even without a manifest change. Generation errors retain the last accepted snapshot and disable prune
+for that refresh. A set dropping from N apps to zero reports `generated: 0, was: N` and protects existing
+releases. Release ownership labels restore that protection after restart; protected releases may appear
+as host orphans until generation recovers. To intentionally retire the entire set, remove the set object
+while retaining a valid nonempty root, as with the existing whole-root prune guard.
+
+A Host removed from Git is retained as a retired connection for pending prune/retries during the current
+process. Its last connection is not persisted, so keep Host definitions until pruning completes if a
+restart is possible. Retired hosts appear on the Hosts page, with maintenance controls unavailable.
+
+Inspect sets with `composecd appset list` (`-o json` / `-o yaml`),
+`GET /api/v1/applicationsets`, or the **ApplicationSets** UI page. These are available to readonly users;
+configuration stays in Git. [The example](examples/applicationsets/README.md) generates apps over `charts/*`.
 
 ## OCI charts with values from Git
 
@@ -452,7 +529,7 @@ file, and an optional demo Application. Use your own identity for real secrets.
 **Webhooks.** Set `webhook.secretFile` in `composecd.yaml`, then add a push webhook in your Git server that
 points at `https://<composecd>/api/v1/webhook`, using the same secret and the JSON content type. Gitea,
 Forgejo and GitHub sign the payload with it; GitLab sends it as its token. A push to the root, or to any
-Application's chart or values repository, triggers a refresh right away.
+Application's chart/values or ApplicationSet generator repository, triggers a refresh right away.
 
 **Notifications** are configured in `composecd.yaml`, where their URLs and tokens can be read from files:
 
@@ -523,7 +600,8 @@ The events are `sync-succeeded`, `sync-failed` (which also covers failed rollbac
 | Encrypted values | SOPS + age via a mounted identity; plaintext stays out of the checkout and composecd output |
 | Web UI, roles, local sign-in and SSO | Embedded htmx UI with SSE, local users, API tokens and OIDC |
 | OCI chart with Git values | `valuesFrom` repository, independent chart/values revisions, SOPS and automatic sync |
-| ApplicationSets, adoption, image updater | Planned; see [docs/PLAN.md](docs/PLAN.md) |
+| ApplicationSets | Git-directory and Host-label generators, safe templates and zero-result protection |
+| Adoption, image updater | Planned; see [docs/PLAN.md](docs/PLAN.md) |
 
 ## Development
 

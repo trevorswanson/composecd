@@ -188,7 +188,7 @@ source:
   The desired-state key includes the values commit, so a values-only change auto-syncs.
 - Webhooks match `valuesFrom` repositories too.
 
-### 3e. ApplicationSets
+### 3e. ApplicationSets (delivered)
 ```yaml
 kind: ApplicationSet
 metadata: {name: stacks}

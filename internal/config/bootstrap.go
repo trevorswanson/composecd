@@ -315,6 +315,13 @@ func (o *Objects) Resolve(root Root) {
 			}
 		}
 	}
+	for _, set := range o.ApplicationSets {
+		for _, g := range set.Spec.Generators {
+			if d := g.GitDirectories; d != nil {
+				resolve(&d.RepoURL, &d.TargetRevision)
+			}
+		}
+	}
 	for _, a := range o.Applications {
 		s := &a.Spec.Source
 		if !s.IsOCI() {
