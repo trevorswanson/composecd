@@ -23,7 +23,11 @@ import (
 // is pruned.
 func (c *Controller) prune(ctx context.Context, objs *config.Objects, fresh bool) {
 	orphans := map[string][]string{}
-	for _, h := range c.Hosts.All() {
+	for _, h := range c.pruneHosts() {
+		if c.Hosts.Get(h.Name()) == nil {
+			h.Invalidate()
+			h.Ping(ctx)
+		}
 		if h.Status().State != hosts.StateUp {
 			c.mu.RLock()
 			orphans[h.Name()] = c.orphans[h.Name()] // keep what we knew
@@ -38,6 +42,8 @@ func (c *Controller) prune(ctx context.Context, objs *config.Objects, fresh bool
 			ws := c.windows
 			c.mu.RUnlock()
 			switch {
+			case c.emptySetReason(rel.Labels[LabelApplicationSet]) != "":
+				reason = c.emptySetReason(rel.Labels[LabelApplicationSet])
 			case rel.Labels[LabelPrune] != "true":
 				reason = "prune is off"
 			case !fresh:

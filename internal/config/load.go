@@ -17,9 +17,10 @@ import (
 
 // Objects are every composecd object read from a directory.
 type Objects struct {
-	Hosts        []*Host
-	Applications []*Application
-	SyncWindows  []*SyncWindow
+	Hosts           []*Host
+	Applications    []*Application
+	SyncWindows     []*SyncWindow
+	ApplicationSets []*ApplicationSet
 }
 
 // Host returns the host named name, or nil.
@@ -83,7 +84,7 @@ func LoadDir(dir string) (*Objects, error) {
 	if err := errors.Join(errs...); err != nil {
 		return nil, err
 	}
-	if err := objs.Validate(); err != nil {
+	if err := objs.ValidateDefinitions(); err != nil {
 		return nil, err
 	}
 	return objs, nil
@@ -96,7 +97,7 @@ func Parse(name string, data []byte) (*Objects, error) {
 	if err := objs.decode(name, data); err != nil {
 		return nil, err
 	}
-	if err := objs.Validate(); err != nil {
+	if err := objs.ValidateDefinitions(); err != nil {
 		return nil, err
 	}
 	return objs, nil
@@ -153,6 +154,16 @@ func (o *Objects) decode(name string, data []byte) error {
 				return fmt.Errorf("%s: %w", origin, err)
 			}
 			o.Applications = append(o.Applications, &Application{Metadata: obj.Metadata, Spec: obj.Spec, Origin: origin})
+		case KindApplicationSet:
+			var obj struct {
+				header   `yaml:",inline"`
+				Metadata Metadata           `yaml:"metadata"`
+				Spec     ApplicationSetSpec `yaml:"spec"`
+			}
+			if err := strictDecode(&doc, &obj); err != nil {
+				return fmt.Errorf("%s: %w", origin, err)
+			}
+			o.ApplicationSets = append(o.ApplicationSets, &ApplicationSet{Metadata: obj.Metadata, Spec: obj.Spec, Origin: origin})
 		case KindSyncWindow:
 			var obj struct {
 				header   `yaml:",inline"`
@@ -164,7 +175,7 @@ func (o *Objects) decode(name string, data []byte) error {
 			}
 			o.SyncWindows = append(o.SyncWindows, &SyncWindow{Metadata: obj.Metadata, Spec: obj.Spec, Origin: origin})
 		default:
-			return fmt.Errorf("%s: unknown kind %q (want %s, %s or %s)", origin, h.Kind, KindHost, KindApplication, KindSyncWindow)
+			return fmt.Errorf("%s: unknown kind %q (want %s, %s, %s or %s)", origin, h.Kind, KindHost, KindApplication, KindSyncWindow, KindApplicationSet)
 		}
 	}
 }

@@ -74,7 +74,12 @@ func TestTokens(t *testing.T) {
 	if ts, _ := a.Store.Tokens(); ts[0].LastUsedAt == nil || ts[0].CreatedBy != "trevor" {
 		t.Errorf("token record = %+v", ts[0])
 	}
-	for _, bad := range []string{"", "nope", tok[:len(tok)-1] + "0", "ccd_" + strings.Repeat("0", 16) + "_" + strings.Repeat("0", 64)} {
+	// Always change the secret; replacing an existing trailing zero is a no-op.
+	suffix := "0"
+	if strings.HasSuffix(tok, suffix) {
+		suffix = "1"
+	}
+	for _, bad := range []string{"", "nope", tok[:len(tok)-1] + suffix, "ccd_" + strings.Repeat("0", 16) + "_" + strings.Repeat("0", 64)} {
 		if _, err := a.Identify(bearer(bad)); !errors.Is(err, ErrUnauthenticated) {
 			t.Errorf("token %q: %v", bad, err)
 		}

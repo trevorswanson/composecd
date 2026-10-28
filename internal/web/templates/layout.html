@@ -15,7 +15,7 @@
 {{else}}
 <header><h1>composecd <span class="muted">{{.Version}}</span></h1><div>{{.User.Name}} <span class="badge">{{.User.Role}}</span>
 {{if .User.Session}}<form method="post" action="/logout"><input type="hidden" name="csrf" value="{{.User.CSRF}}"><button type="submit">Sign out</button></form>{{end}}</div></header>
-<nav aria-label="Main"><a href="/apps">Applications</a><a href="/hosts">Hosts</a><a href="/windows">Sync windows</a><a href="/operations">Operations</a><a href="/settings">Settings</a></nav>
+<nav aria-label="Main"><a href="/apps">Applications</a><a href="/applicationsets">ApplicationSets</a><a href="/hosts">Hosts</a><a href="/windows">Sync windows</a><a href="/operations">Operations</a><a href="/settings">Settings</a></nav>
 <p class="muted">Root <code>{{.Root.RepoURL}}</code> {{.Root.Path}} @ {{.Root.TargetRevision}} = <code>{{short .Root.Revision}}</code></p>
 {{with .Root.Error}}<p class="error" role="alert">{{.}}</p>{{end}}
 {{if eq .Page "apps"}}<h2>Applications</h2><form class="filters" method="get" action="/apps">
@@ -37,6 +37,7 @@
 {{define "panel"}}<section id="content" class="panel" {{if .OOB}}hx-swap-oob="outerHTML"{{end}}>
 {{if eq .Page "apps"}}{{template "apps" .}}{{end}}
 {{if eq .Page "detail"}}{{template "detail" .}}{{end}}
+{{if eq .Page "applicationsets"}}{{template "appsets" .}}{{end}}
 {{if eq .Page "hosts"}}<h2>Hosts</h2>{{template "hosts" .}}{{end}}
 {{if eq .Page "windows"}}<h2>Sync windows</h2>{{template "windows" .}}{{end}}
 {{if eq .Page "operations"}}<h2>Operations</h2>{{template "operations" .}}{{end}}

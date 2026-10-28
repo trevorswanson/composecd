@@ -268,3 +268,55 @@ func TestWebShowsOCIAndValuesRevisions(t *testing.T) {
 		}
 	}
 }
+
+type appsetErrorStub struct{ stub }
+
+func (s *appsetErrorStub) ApplicationSets() []controller.ApplicationSetStatus {
+	return []controller.ApplicationSetStatus{{Name: "stacks", Generated: 0, Previous: 2, Applications: []string{"media"}, Error: "template error <script>"}}
+}
+func TestApplicationSetsAPIAndPage(t *testing.T) {
+	a := newAuthn(t, "secret")
+	token, err := a.CreateToken("reader", auth.RoleReadonly, "admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(New(&appsetErrorStub{}, Options{Auth: a}))
+	defer srv.Close()
+	code, body := do(t, srv, "GET", "/api/v1/applicationsets", token, "")
+	if code != 200 || !strings.Contains(body, `"name": "stacks"`) || !strings.Contains(body, `"previous": 2`) {
+		t.Fatalf("%d %s", code, body)
+	}
+	code, body = do(t, srv, "GET", "/applicationsets", token, "")
+	for _, want := range []string{"ApplicationSets", "stacks", "not applied", "was 2", "template error &lt;script&gt;", "/apps/media"} {
+		if code != 200 || !strings.Contains(body, want) {
+			t.Errorf("%d missing %s: %s", code, want, body)
+		}
+	}
+	if strings.Contains(body, "<script>") {
+		t.Fatal("unescaped generator error")
+	}
+	if code, _ := do(t, srv, "GET", "/api/v1/applicationsets", "", ""); code != 401 {
+		t.Fatal(code)
+	}
+	// The new page participates in authenticated SSE panel swaps too.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, "GET", srv.URL+"/events?page=/applicationsets", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	scan := bufio.NewScanner(resp.Body)
+	var frame strings.Builder
+	for scan.Scan() {
+		if scan.Text() == "" {
+			break
+		}
+		frame.WriteString(scan.Text())
+	}
+	if !strings.Contains(frame.String(), `hx-swap-oob="outerHTML"`) || !strings.Contains(frame.String(), "stacks") {
+		t.Fatalf("bad appset SSE: %s", &frame)
+	}
+}

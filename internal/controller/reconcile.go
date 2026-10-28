@@ -142,15 +142,27 @@ func (c *Controller) assess(ctx context.Context, app *config.Application, fetchE
 		return fail(err)
 	}
 	projectDir := h.ProjectDir(name)
-	p.key = desiredKey(manifest, hks, projectDir)
+	var revisions []string
 	if app.Spec.Source.IsOCI() {
-		p.key = desiredKey(manifest, hks, projectDir, p.prep.ChartRef, p.prep.ValuesRevision)
+		revisions = append(revisions, p.prep.ChartRef, p.prep.ValuesRevision)
 	}
+	owner := app.Metadata.Labels[LabelApplicationSet]
+	prune := app.Spec.SyncPolicy.Automated != nil && app.Spec.SyncPolicy.Automated.Prune
+	if owner != "" {
+		revisions = append(revisions, owner, fmt.Sprint(prune))
+	}
+	p.key = desiredKey(manifest, hks, projectDir, revisions...)
 
 	var reasons []string
 	if deployed == nil {
 		reasons = append(reasons, "not deployed")
 	} else {
+		if owner != deployed.Labels[LabelApplicationSet] {
+			reasons = append(reasons, "ApplicationSet ownership changed")
+		}
+		if (owner != "" || deployed.Labels[LabelApplicationSet] != "") && (deployed.Labels[LabelPrune] == "true") != prune {
+			reasons = append(reasons, "ApplicationSet prune policy changed")
+		}
 		st.Sync.DeployedRevision = deployed.Labels[LabelSourceRevision]
 		st.Sync.DeployedValuesRevision = deployed.Labels[LabelValuesRevision]
 		if st.Sync.ValuesRevision != st.Sync.DeployedValuesRevision {

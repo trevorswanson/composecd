@@ -122,6 +122,7 @@ func (c *Controller) runSync(ctx context.Context, p *plan, op *store.Operation) 
 		// "" removes the label, for an oci:// chart that has no commit.
 		LabelSourceRevision: p.prep.Revision,
 		LabelValuesRevision: p.prep.ValuesRevision,
+		LabelApplicationSet: p.app.Metadata.Labels[config.LabelApplicationSet],
 		LabelOperationID:    fmt.Sprint(op.ID),
 		// "" removes it when prune is off.
 		LabelPrune: "",
