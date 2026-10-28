@@ -19,17 +19,21 @@ Please don't report security vulnerabilities in public issues. Use GitHub's
 
 ## Development
 
-You need Go (see `go.mod`) and git. Docker is only needed to run composecd for real.
+You need Go (see `go.mod`) and git. Docker is only needed for the integration tests and to run composecd for real.
 
 ```bash
 go test ./...                       # unit and end-to-end tests with a fake compose runner
 go test -race ./...
 golangci-lint run ./...
+go test -tags integration -run Integration -v ./...   # against the local Docker engine
 ```
 
 Some guidelines:
-- **Tests don't need Docker.** The controller and CLI tests build real Git repositories in temporary
+- **Unit tests don't need Docker.** The controller and CLI tests build real Git repositories in temporary
   directories, and use composetpl's fake compose runner (`pkg/compose/composetest`) for the hosts.
+- **Integration tests** (`//go:build integration`, named `TestIntegration...`) run the controller against
+  the local Docker engine, so they need docker with the compose plugin; they pull `busybox` and remove
+  everything they create. They skip without Docker, except when `CI` is set. CI runs them on every pull request.
 - **Changes that belong in composetpl** (rendering, releases, hooks, compose) go to
   [composetpl](https://github.com/trevorswanson/composetpl) first. composecd uses its public `pkg/` API.
 - **Match the code around you:** its naming, comment density and structure. `gofmt` and `goimports`
