@@ -43,7 +43,7 @@ func TestPrepareGitPath(t *testing.T) {
 		Values:     map[string]interface{}{"apps": map[string]interface{}{"sonarr": map[string]interface{}{"port": 9000}}},
 		Env:        map[string]string{"PUID": "1000"},
 	})
-	p, err := Prepare(context.Background(), a, host, root, "0123456789abcdef", nil)
+	p, err := Prepare(context.Background(), a, host, root, "0123456789abcdef", nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,7 +88,7 @@ func TestPrepareErrors(t *testing.T) {
 		cases["symlink escape"] = config.AppSource{Path: "chart", ValueFiles: []string{"link.yaml"}}
 	}
 	for name, src := range cases {
-		_, err := Prepare(context.Background(), app(src), &config.Host{}, root, "abc", nil)
+		_, err := Prepare(context.Background(), app(src), &config.Host{}, root, "abc", nil, "")
 		if err == nil {
 			t.Errorf("%s: expected an error", name)
 			continue
@@ -101,7 +101,7 @@ func TestPrepareErrors(t *testing.T) {
 
 func TestPrepareOCI(t *testing.T) {
 	a := app(config.AppSource{Chart: "oci://ghcr.io/me/charts/media", Version: "^1", Values: map[string]interface{}{"x": 1}})
-	p, err := Prepare(context.Background(), a, &config.Host{}, "", "", nil)
+	p, err := Prepare(context.Background(), a, &config.Host{}, "", "", nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}

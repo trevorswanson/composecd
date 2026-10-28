@@ -164,7 +164,7 @@ Triggers: poll timer, Git webhook, Docker `events` stream per host (`die`, `dest
   *Done. Self-management is not yet safe: composecd recreating its own container interrupts the upgrade, so install it with composetpl for now.*
 - **Phase 2: Reconciliation quality.** Docker events, self-heal (Repair), prune, sync windows, host maintenance mode, `dependsOn`, retry/backoff, webhooks, notifications, `sync-fail`, Prometheus metrics.
   *Done, except `sync-fail`, which needs the new hook event in composetpl first. Notifications are native (ntfy, Gotify, Discord, Slack, webhook) rather than shoutrrr, and live in `composecd.yaml` because their URLs are secrets. Maintenance mode is toggled at runtime (`host maintenance`), not in Git.*
-- **Phase 3: UI and scale-out.** **3a delivered:** local users, roles, named tokens, browser sessions, CSRF and OIDC. **3b delivered:** embedded Go templates and htmx, live panels and container logs via SSE, filters, diff, history/rollback, maintenance and account management. Remaining: ApplicationSets, multi-source, SOPS and adopting unmanaged projects; see [PHASE3.md](PHASE3.md).
+- **Phase 3: UI and scale-out.** **3a delivered:** local users, roles, named tokens, browser sessions, CSRF and OIDC. **3b delivered:** embedded Go templates and htmx, live panels and container logs via SSE, filters, diff, history/rollback, maintenance and account management. **3c delivered:** SOPS/age values via the CLI, in-memory decryption, output masking and a pinned image dependency. Remaining: ApplicationSets, multi-source and adopting unmanaged projects; see [PHASE3.md](PHASE3.md).
 - **Phase 4: Extras.** Image updater (write-back to Git and digest pinning), ignoreDifferences, GPG verification, the outbound agent, host housekeeping.
 
 ---

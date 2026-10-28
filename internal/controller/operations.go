@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/trevorswanson/composetpl/pkg/action"
-	"github.com/trevorswanson/composetpl/pkg/storage"
 
 	"github.com/trevorswanson/composecd/internal/config"
 	"github.com/trevorswanson/composecd/internal/source"
@@ -39,6 +38,8 @@ func (c *Controller) startOperation(app, kind, trigger, revision, user string) (
 }
 
 func (c *Controller) finishOperation(app string, op *store.Operation) {
+	op.Log = c.Mask(app, op.Log)
+	op.Message = c.Mask(app, op.Message)
 	if err := c.Store.FinishOperation(op); err != nil {
 		c.Log.Error("recording an operation", "app", app, "id", op.ID, "error", err)
 	}
@@ -230,6 +231,10 @@ func (c *Controller) Rollback(name string, revision int, user string) (*store.Op
 		func() {
 			defer h.Use()()
 			log := &logBuffer{max: maxLog}
+			if _, err := c.releaseHistory(h, name); err != nil {
+				op.Phase, op.Message = store.PhaseFailed, "reading release history: "+err.Error()
+				return
+			}
 			cfg := h.Configuration(source.Env(h.Spec, app), log)
 			o := app.Spec.SyncPolicy.Options
 			rb := action.NewRollback(cfg)
@@ -343,16 +348,13 @@ func (c *Controller) History(name string) ([]Release, error) {
 		return nil, fmt.Errorf("host %q is not defined", app.Spec.Destination.Host)
 	}
 	defer h.Use()()
-	hist, err := h.Store().History(name)
-	if errors.Is(err, storage.ErrNotFound) {
-		return []Release{}, nil
-	}
+	hist, err := c.releaseHistory(h, name)
 	if err != nil {
 		return nil, err
 	}
 	out := make([]Release, 0, len(hist))
 	for _, r := range hist {
-		out = append(out, *releaseInfo(r))
+		out = append(out, masked(c, name, *releaseInfo(r)))
 	}
 	return out, nil
 }
@@ -364,7 +366,17 @@ func (c *Controller) Operations(app string, limit int) ([]*store.Operation, erro
 			return nil, err
 		}
 	}
-	return c.Store.Operations(app, limit)
+	ops, err := c.Store.Operations(app, limit)
+	if err != nil {
+		return nil, err
+	}
+	for i, op := range ops {
+		copyOp := *op
+		copyOp.Log = c.Mask(op.App, op.Log)
+		copyOp.Message = c.Mask(op.App, op.Message)
+		ops[i] = &copyOp
+	}
+	return ops, nil
 }
 
 // Operation returns one operation with its log.
@@ -373,7 +385,13 @@ func (c *Controller) Operation(id int64) (*store.Operation, error) {
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, fmt.Errorf("operation %d: %w", id, ErrNotFound)
 	}
-	return op, err
+	if err != nil {
+		return nil, err
+	}
+	copyOp := *op
+	copyOp.Log = c.Mask(op.App, op.Log)
+	copyOp.Message = c.Mask(op.App, op.Message)
+	return &copyOp, nil
 }
 
 // logBuffer keeps the first max bytes written to it, concurrently.

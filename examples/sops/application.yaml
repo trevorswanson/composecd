@@ -1,0 +1,10 @@
+# Copy into your GitOps root's composecd/ directory after configuring the key.
+apiVersion: composecd/v1alpha1
+kind: Application
+metadata: {name: secret-demo}
+spec:
+  source:
+    path: charts/secret-demo
+    valueFiles: [../../secrets/demo.sops.yaml]
+  destination: {host: nas}
+  # Manual sync lets you verify the key and inspect a diff before deploying.

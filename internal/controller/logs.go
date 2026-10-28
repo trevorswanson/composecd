@@ -24,6 +24,9 @@ func (c *Controller) Logs(ctx context.Context, name, container string, tail int,
 		return ErrNotFound
 	}
 	defer h.Use()()
+	if _, err := c.releaseHistory(h, name); err != nil {
+		return fmt.Errorf("reading release history: %w", err)
+	}
 	containers, err := h.Configuration(source.Env(h.Spec, app), io.Discard).Compose.PS(ctx, name)
 	if err != nil {
 		return err

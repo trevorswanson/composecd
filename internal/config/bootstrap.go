@@ -33,6 +33,8 @@ type Bootstrap struct {
 	Webhook Webhook `yaml:"webhook,omitempty"`
 	// Notifications send events (failed syncs, degraded apps, ...) elsewhere.
 	Notifications []Notifier `yaml:"notifications,omitempty"`
+	// SOPSAgeKeyFile is a mounted age identity used only by the SOPS subprocess.
+	SOPSAgeKeyFile string `yaml:"sopsAgeKeyFile,omitempty"`
 }
 
 // Webhook configures POST /api/v1/webhook.

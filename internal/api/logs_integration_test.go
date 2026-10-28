@@ -24,6 +24,16 @@ import (
 )
 
 func TestIntegrationContainerLogStream(t *testing.T) {
+	for _, encrypted := range []bool{false, true} {
+		name := "inline"
+		if encrypted {
+			name = "sops"
+		}
+		t.Run(name, func(t *testing.T) { integrationContainerLogStream(t, encrypted) })
+	}
+}
+
+func integrationContainerLogStream(t *testing.T, encrypted bool) {
 	for _, args := range [][]string{{"compose", "version"}, {"info"}} {
 		if err := exec.Command("docker", args...).Run(); err != nil {
 			if os.Getenv("CI") != "" {
@@ -31,6 +41,22 @@ func TestIntegrationContainerLogStream(t *testing.T) {
 			}
 			t.Skip("Docker with compose required:", err)
 		}
+	}
+	keyFile := ""
+	message := "integration-secret"
+	if encrypted {
+		if _, err := exec.LookPath("sops"); err != nil {
+			if os.Getenv("CI") != "" {
+				t.Fatal("SOPS is required:", err)
+			}
+			t.Skip("SOPS is required:", err)
+		}
+		var err error
+		keyFile, err = filepath.Abs("../../examples/sops/test-age-key.txt")
+		if err != nil {
+			t.Fatal(err)
+		}
+		message = "sops-example-message"
 	}
 	name := fmt.Sprintf("ccd-logs-%d", time.Now().UnixNano())
 	repo, dir := t.TempDir(), t.TempDir()
@@ -51,6 +77,14 @@ func TestIntegrationContainerLogStream(t *testing.T) {
 		"charts/logs/Chart.yaml":          "apiVersion: v2\nname: logs\nversion: 0.1.0\n",
 		"charts/logs/templates/logs.yaml": "services:\n  box:\n    image: busybox:1.37\n    command: ['sh', '-c', 'echo stream-ready; echo {{ .Values.message }}; exec sleep 3600']\n",
 	}
+	if encrypted {
+		cipher, err := os.ReadFile("../../examples/gitops/secrets/demo.sops.yaml")
+		if err != nil {
+			t.Fatal(err)
+		}
+		files["charts/logs/values.sops.yaml"] = string(cipher)
+		files["composecd/apps.yaml"] = strings.Replace(files["composecd/apps.yaml"], "values: {message: integration-secret}", "valueFiles: [values.sops.yaml]", 1)
+	}
 	for p, body := range files {
 		path := filepath.Join(repo, filepath.FromSlash(p))
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -63,7 +97,7 @@ func TestIntegrationContainerLogStream(t *testing.T) {
 	run("git", "add", ".")
 	run("git", "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "--quiet", "-m", "fixture")
 	a := newAuthn(t, "secret")
-	c := controller.New(controller.Options{Boot: &config.Bootstrap{Concurrency: 1, Root: config.Root{RepoURL: repo, TargetRevision: "main", Path: "composecd"}}, Git: gitcache.New(filepath.Join(dir, "git"), nil), Hosts: hosts.NewRegistry(&hosts.CLI{DataDir: dir}), Store: a.Store, Log: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	c := controller.New(controller.Options{Boot: &config.Bootstrap{Concurrency: 1, SOPSAgeKeyFile: keyFile, Root: config.Root{RepoURL: repo, TargetRevision: "main", Path: "composecd"}}, Git: gitcache.New(filepath.Join(dir, "git"), nil), Hosts: hosts.NewRegistry(&hosts.CLI{DataDir: dir}), Store: a.Store, Log: slog.New(slog.NewTextHandler(io.Discard, nil))})
 	defer func() {
 		c.Close()
 		c.Wait()
@@ -85,8 +119,32 @@ func TestIntegrationContainerLogStream(t *testing.T) {
 		}
 		t.Fatalf("app: %+v %v", st, err)
 	}
+	rawLogs := ""
+	for until := time.Now().Add(10 * time.Second); time.Now().Before(until); {
+		rawLogs = run("docker", "logs", st.Health.Containers[0].Name)
+		if strings.Contains(rawLogs, message) {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if !strings.Contains(rawLogs, message) {
+		t.Fatal("decrypted message never reached the real container")
+	}
+	if encrypted {
+		hist, err := c.Hosts.Get("local").Store().History(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if hist[0].Config["message"] != message {
+			t.Fatal("host release lost its plaintext values")
+		}
+	}
 	srv := httptest.NewServer(New(c, Options{Auth: a}))
 	defer srv.Close()
+	_, body := do(t, srv, "GET", "/api/v1/apps/"+name, "secret", "")
+	if strings.Contains(body, message) || strings.Contains(body, "example-only-password") {
+		t.Fatal("API leaked secret values")
+	}
 	req, _ := http.NewRequestWithContext(ctx, "GET", srv.URL+"/api/v1/apps/"+name+"/containers/"+st.Health.Containers[0].Name+"/logs?follow=1&tail=200", nil)
 	req.Header.Set("Authorization", "Bearer secret")
 	resp, err := http.DefaultClient.Do(req)
@@ -107,7 +165,7 @@ func TestIntegrationContainerLogStream(t *testing.T) {
 		}
 	}
 	cancel()
-	if strings.Contains(output.String(), "integration-secret") || !strings.Contains(output.String(), "event: log") || !strings.Contains(output.String(), "••••••") {
+	if strings.Contains(output.String(), message) || !strings.Contains(output.String(), "event: log") || !strings.Contains(output.String(), "••••••") {
 		t.Fatalf("unmasked or missing logs: %s", &output)
 	}
 	// No other project or fabricated container name is accepted.

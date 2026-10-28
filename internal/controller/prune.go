@@ -11,6 +11,7 @@ import (
 
 	"github.com/trevorswanson/composecd/internal/config"
 	"github.com/trevorswanson/composecd/internal/hosts"
+	"github.com/trevorswanson/composecd/internal/masking"
 	"github.com/trevorswanson/composecd/internal/store"
 	"github.com/trevorswanson/composecd/internal/windows"
 )
@@ -76,6 +77,7 @@ func (c *Controller) leftovers(h *hosts.Host, objs *config.Objects) []*release.R
 	}
 	var out []*release.Release
 	for _, r := range rels {
+		c.remember(r.Name, masking.Leaves(r.Config))
 		if r.Labels[LabelManagedBy] != ManagedBy || r.Status == release.StatusUninstalled {
 			continue
 		}
@@ -98,6 +100,10 @@ func (c *Controller) pruneOne(ctx context.Context, h *hosts.Host, rel *release.R
 	c.Log.Info("pruning", "app", name, "host", h.Name())
 	func() {
 		defer h.Use()()
+		if _, err := c.releaseHistory(h, name); err != nil {
+			op.Phase, op.Message = store.PhaseFailed, "reading release history: "+err.Error()
+			return
+		}
 		log := &logBuffer{max: maxLog}
 		cfg := h.Configuration(nil, log)
 		u := action.NewUninstall(cfg)

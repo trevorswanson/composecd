@@ -6,7 +6,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"sort"
@@ -107,18 +106,16 @@ func (c *Controller) assess(ctx context.Context, app *config.Application, fetchE
 	}
 	defer h.Use()()
 
+	cfg := h.Configuration(source.Env(h.Spec, app), io.Discard)
+	hist, err := c.releaseHistory(h, name)
+	if err != nil {
+		return fail(fmt.Errorf("reading release history: %w", err))
+	}
 	p, err := c.prepare(ctx, app, h)
 	if err != nil {
 		return fail(err)
 	}
 	st.Sync.Revision = p.prep.Revision
-	cfg := h.Configuration(p.prep.Env, io.Discard)
-
-	hist, err := cfg.Store.History(name)
-	if err != nil && !errors.Is(err, storage.ErrNotFound) {
-		p.done()
-		return fail(fmt.Errorf("reading release history: %w", err))
-	}
 	var deployed, latest *release.Release
 	if len(hist) > 0 {
 		latest = hist[len(hist)-1]
@@ -225,11 +222,12 @@ func (c *Controller) prepare(ctx context.Context, app *config.Application, h *ho
 			return nil, err
 		}
 	}
-	prep, err := source.Prepare(ctx, app, h.Spec, checkout, sha, c.Registry)
+	prep, err := source.Prepare(ctx, app, h.Spec, checkout, sha, c.Registry, c.Boot.SOPSAgeKeyFile)
 	if err != nil {
 		p.done()
 		return nil, err
 	}
+	c.remember(app.Metadata.Name, prep.Secrets)
 	p.prep = prep
 	return p, nil
 }

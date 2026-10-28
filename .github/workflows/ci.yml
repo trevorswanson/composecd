@@ -63,6 +63,11 @@ jobs:
         with:
           go-version-file: go.mod
       - run: docker version && docker compose version && git version
+      - name: Install pinned SOPS for encrypted-values integration tests
+        run: |
+          curl -fsSL https://github.com/getsops/sops/releases/download/v3.13.3/sops-v3.13.3.linux.amd64 -o /tmp/sops
+          echo "e5bec3346a873ae91d871550f3e698c1aad962aff462a080e40f25fde17fef6b  /tmp/sops" | sha256sum -c -
+          sudo install -m 0755 /tmp/sops /usr/local/bin/sops
       - name: integration tests (real Docker engine)
         run: go test -tags integration -run Integration -v -timeout 15m ./...
 
@@ -97,7 +102,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: build the container image
-        run: docker build --build-arg VERSION=ci -t composecd:ci . && docker run --rm composecd:ci version
+        run: docker build --build-arg VERSION=ci -t composecd:ci . && docker run --rm composecd:ci version && docker run --rm --entrypoint sops composecd:ci --version
 
   # The single check to require in branch protection: matrix job names change
   # with the matrix, this one doesn't.

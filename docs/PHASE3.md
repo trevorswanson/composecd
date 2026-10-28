@@ -145,7 +145,9 @@ in with a local user, OIDC, or the admin token entered as a password.
 - the logs endpoint refusing containers from other projects;
 - htmx actions sending CSRF tokens.
 
-### 3c. SOPS values files
+### 3c. SOPS values files (delivered)
+- Pinned SOPS 3.13.3 with per-architecture checksum verification; no Go SOPS/KMS dependency.
+- Retained release user values restore masking after restart and across rotations/rollbacks.
 - **Decrypting.**
   - Set `sopsAgeKeyFile` in `composecd.yaml`.
   - A values file is decrypted when its name matches `*.sops.yaml` / `*.sops.yml`, or when it has top-level
