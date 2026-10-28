@@ -396,9 +396,10 @@ HTML panels swapped with `hx-swap-oob`. Reconnecting clients receive a fresh sna
 reconciliation, even if a browser is slow. Log tails stay connected when other panels update.
 
 The log endpoint checks a fresh compose project listing and its project label before streaming; a container
-from another project is refused. Log lines, diffs and displayed operation output mask configured inline value
-leaves and environment values of four characters or more. SOPS-decrypted values are masked too. Masking is
-best effort: short values and transformed values (for example base64) may remain visible.
+from another project is refused. Log lines, diffs and displayed operation output mask SOPS-decrypted values
+of four characters or more (see [Encrypted values with SOPS](#encrypted-values-with-sops)); plain values are already in Git and
+are shown as they are. Masking is best effort: short values and transformed values (for example base64) may
+remain visible.
 Readonly users can view these outputs. Light/dark styling follows your system preference, and tables scroll
 inside their panels at phone widths.
 
@@ -555,8 +556,9 @@ root. External source repositories are checked when the controller prepares them
 creation-rules file is left alone.
 
 Decrypted scalar values of four characters or more are masked with `••••••` in diffs, API/UI output,
-operation output and errors, container logs, and notifications. Old values remain masked after rotation;
-retained release history restores that knowledge after restart. Operation logs are masked before SQLite
+operation output and errors, container logs, and notifications. Plain values aren't masked. Old values
+remain masked after rotation: composecd reads the values that retained releases saved at the encrypted
+files' keys, which works after a restart and even without the age identity, since SOPS keeps keys in plaintext. Operation logs are masked before SQLite
 storage. Application and container names remain usable as routing identifiers. Masking is best effort:
 short values and transformed values (base64, URLs, escaping, etc.) can still be visible.
 

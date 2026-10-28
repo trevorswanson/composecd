@@ -11,7 +11,6 @@ import (
 
 	"github.com/trevorswanson/composecd/internal/config"
 	"github.com/trevorswanson/composecd/internal/hosts"
-	"github.com/trevorswanson/composecd/internal/masking"
 	"github.com/trevorswanson/composecd/internal/store"
 	"github.com/trevorswanson/composecd/internal/windows"
 )
@@ -83,7 +82,7 @@ func (c *Controller) leftovers(h *hosts.Host, objs *config.Objects) []*release.R
 	}
 	var out []*release.Release
 	for _, r := range rels {
-		c.remember(r.Name, masking.Leaves(r.Config))
+		c.rememberRelease(r)
 		if r.Labels[LabelManagedBy] != ManagedBy || r.Status == release.StatusUninstalled {
 			continue
 		}

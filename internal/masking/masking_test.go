@@ -56,3 +56,22 @@ func TestNumericValuesAreMasked(t *testing.T) {
 		t.Fatal("mutated user values")
 	}
 }
+
+func TestPathsAndAt(t *testing.T) {
+	v := map[string]interface{}{
+		"db":    map[string]interface{}{"password": "x", "users": []interface{}{"a", "b"}},
+		"token": "y",
+	}
+	got := Paths(v)
+	want := [][]string{{"db", "password"}, {"db", "users"}, {"token"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatal(got)
+	}
+	old := map[string]interface{}{"db": map[string]interface{}{"password": "old-password"}, "token": 7}
+	if At(old, []string{"db", "password"}) != "old-password" || At(old, []string{"token"}) != 7 {
+		t.Fatal("At did not find values")
+	}
+	if At(old, []string{"token", "deeper"}) != nil || At(old, []string{"missing"}) != nil {
+		t.Fatal("At found a missing value")
+	}
+}

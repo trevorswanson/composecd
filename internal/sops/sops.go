@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/trevorswanson/composecd/internal/masking"
 )
 
 // Named identifies encrypted values by suffix, excluding SOPS' own rules file.
@@ -98,4 +100,15 @@ func (b *limitedBuffer) Write(p []byte) (int, error) {
 		return 0, errors.New("decrypted values exceed 16 MiB")
 	}
 	return b.Buffer.Write(p)
+}
+
+// Paths returns the key paths of the encrypted values in an encrypted file.
+// SOPS keeps keys in plaintext, so no identity is needed to find them.
+func Paths(data []byte) [][]string {
+	doc := map[string]interface{}{}
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		return nil
+	}
+	delete(doc, "sops")
+	return masking.Paths(doc)
 }

@@ -20,6 +20,7 @@ import (
 	"github.com/trevorswanson/composecd/internal/gitcache"
 	"github.com/trevorswanson/composecd/internal/health"
 	"github.com/trevorswanson/composecd/internal/hosts"
+	"github.com/trevorswanson/composecd/internal/masking"
 	"github.com/trevorswanson/composecd/internal/store"
 	"github.com/trevorswanson/composecd/internal/windows"
 )
@@ -51,6 +52,8 @@ type Controller struct {
 	changes      subscriptions
 	maskMu       sync.RWMutex
 	secretValues map[string]map[string]bool
+	secretPaths  map[string]map[string][]string
+	maskers      map[string]*masking.Masker
 
 	// ctx is the Run context; operations started from the API use it.
 	ctx       context.Context
