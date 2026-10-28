@@ -36,6 +36,7 @@ Two roles:
 | Sync, rollback, pause, resume, refresh | | ✓ |
 | Host maintenance | | ✓ |
 | Manage users and tokens | | ✓ |
+| Export adoption YAML with saved values | | ✓ |
 
 Ways to authenticate:
 - **Bearer tokens.**
@@ -147,7 +148,8 @@ in with a local user, OIDC, or the admin token entered as a password.
 
 ### 3c. SOPS values files (delivered)
 - Pinned SOPS 3.13.3 with per-architecture checksum verification; no Go SOPS/KMS dependency.
-- Retained release user values restore masking after restart and across rotations/rollbacks.
+- Retained releases restore masking after restart and across rotations/rollbacks: values saved at the
+  encrypted files' key paths (readable without the age key) are masked. Plain values are never masked.
 - **Decrypting.**
   - Set `sopsAgeKeyFile` in `composecd.yaml`.
   - A values file is decrypted when its name matches `*.sops.yaml` / `*.sops.yml`, or when it has top-level
@@ -241,10 +243,15 @@ spec:
 - the empty-generator guard;
 - a generated app being pruned when its directory is removed.
 
-### 3f. Adopt existing releases
+### 3f. Adopt existing releases (delivered)
+- Admin-only YAML export contains saved user values; inventory remains readonly and omits values.
+- Export is a suggestion, with automation off and warnings for secrets, missing charts and project directory changes.
+- Orphaned releases can be exported; conflicting Application names and pending operations are blocked.
+- Plain project config paths are read from container labels because the pinned Runner.Ls omits that field.
 - **Listing.** Per host, list composetpl releases that composecd doesn't manage, and compose projects that
   aren't composetpl releases at all. This uses `Store().List()` and `compose.Runner.Ls`.
   - Exposed as `GET /api/v1/hosts/{name}/unmanaged`, `composecd host unmanaged NAME`, and on the UI hosts page.
+  - `GET /api/v1/hosts/{name}/adopt/{release}` returns YAML and warnings as JSON for admins; the UI renders the same preview.
 - **Adopting a composetpl release.**
   - `composecd adopt HOST RELEASE` (and **Adopt** in the UI) prints an `Application` YAML.
   - The YAML has the same name, `destination.host`, the chart from `release.Chart.Ref` (a path under the root

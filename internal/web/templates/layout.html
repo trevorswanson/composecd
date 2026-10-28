@@ -27,7 +27,7 @@
 <nav aria-label="Application tabs">{{range $tab := lines "summary\ncontainers\ndiff\nhistory\noperations"}}<a href="/apps/{{path $.Name}}?tab={{$tab}}" {{if eq $.Tab $tab}}aria-current="page"{{end}}>{{$tab}}</a>{{end}}</nav>
 {{if .Admin}}<div class="actions">{{range $action := lines "sync\npause\nresume\nrefresh"}}<form method="post" action="/ui/apps/{{path $.Name}}/{{$action}}" hx-post="/ui/apps/{{path $.Name}}/{{$action}}" hx-target="#action-result"><input type="hidden" name="csrf" value="{{$.User.CSRF}}"><button type="submit">{{$action}}</button></form>{{end}}</div>{{end}}{{end}}
 <div id="action-result" role="status" aria-live="polite">{{if .Token}}{{template "result" .}}{{end}}</div>
-{{if ne .Page "settings"}}<div hx-ext="sse" sse-connect="{{.EventsURL}}" sse-swap="app,host,operation" hx-swap="none" aria-hidden="true"></div>{{end}}
+{{if and (ne .Page "settings") (ne .Page "adopt")}}<div hx-ext="sse" sse-connect="{{.EventsURL}}" sse-swap="app,host,operation" hx-swap="none" aria-hidden="true"></div>{{end}}
 {{template "panel" .}}
 {{if and (eq .Page "detail") (eq .Tab "containers")}}{{with .Filters.Get "container"}}<h2>Logs · {{.}}</h2><div hx-ext="sse" sse-connect="/api/v1/apps/{{path $.Name}}/containers/{{path .}}/logs?follow=1&amp;tail=200" sse-close="end"><pre class="card log" sse-swap="log" hx-swap="beforeend"></pre><p sse-swap="error" role="alert"></p></div><noscript><a href="/api/v1/apps/{{path $.Name}}/containers/{{path .}}/logs?tail=200">Read log stream</a></noscript>{{end}}{{end}}
 {{end}}</main></body></html>{{end}}
@@ -42,4 +42,7 @@
 {{if eq .Page "windows"}}<h2>Sync windows</h2>{{template "windows" .}}{{end}}
 {{if eq .Page "operations"}}<h2>Operations</h2>{{template "operations" .}}{{end}}
 {{if eq .Page "settings"}}{{template "settings" .}}{{end}}
+{{if eq .Page "adopt"}}<h2>Adopt an existing release</h2>{{with .Adoption}}
+<p>This export changes neither Git nor the running release. Review the YAML, commit it to the root repository, run <code>composecd app diff NAME</code>, then sync explicitly.</p>
+{{range .Warnings}}<p class="error">{{.}}</p>{{end}}<pre class="card">{{.YAML}}</pre>{{end}}<a href="/hosts">Back to hosts</a>{{end}}
 </section>{{end}}

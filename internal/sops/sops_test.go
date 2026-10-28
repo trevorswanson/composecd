@@ -55,3 +55,15 @@ func TestDecryptCancellationAndMissingCLI(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// Keys stay plaintext in an encrypted file, so paths need no identity.
+func TestPaths(t *testing.T) {
+	data := []byte("db:\n  password: ENC[AES256_GCM,data:x]\napiKey: ENC[AES256_GCM,data:y]\nsops:\n  age: []\n")
+	got := Paths(data)
+	if len(got) != 2 || strings.Join(got[0], ".") != "apiKey" || strings.Join(got[1], ".") != "db.password" {
+		t.Fatal(got)
+	}
+	if Paths([]byte(":\n- bad")) != nil {
+		t.Fatal("invalid YAML produced paths")
+	}
+}

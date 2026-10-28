@@ -252,6 +252,8 @@ host maintenance, a retry or self-heal backoff, or a failed sync waiting for a c
 | `app operations NAME`, `operation list`, `operation get ID` | Sync and rollback history, with each operation's output. |
 | `app refresh NAME`, `refresh` | Fetch and reconcile now instead of waiting for the interval. |
 | `host list` | Reachability, engine versions, maintenance and orphaned releases. |
+| `host unmanaged NAME` | Unmanaged/orphaned releases and plain Compose projects, including config paths. `-o json\|yaml` |
+| `adopt HOST RELEASE` | Export Application YAML with saved user values (admin); warnings go to stderr. |
 | `host maintenance NAME on\|off` | While on, nothing on the host is synced, healed or pruned automatically. Manual operations still work. |
 | `window list` | Sync windows, whether they're open, and the apps they match. |
 | `validate DIR` | Check objects offline. |
@@ -265,7 +267,7 @@ Hooks are composetpl's: `x-composetpl` hook services run at `pre-install`/`pre-u
 ### API
 
 Every `/api/v1` endpoint needs `Authorization: Bearer <token>`, or a browser session. Reads need the
-`readonly` role. Everything that changes state needs `admin`:
+`readonly` role. Everything that changes state needs `admin`; adoption exports also need admin because they include saved values in plaintext:
 
 | Endpoint | |
 | --- | --- |
@@ -277,6 +279,8 @@ Every `/api/v1` endpoint needs `Authorization: Bearer <token>`, or a browser ses
 | `POST /api/v1/apps/{name}/pause` (`{"reason": "..."}`), `.../resume`, `.../refresh` | |
 | `GET /api/v1/operations`, `GET /api/v1/operations/{id}` | Operations, with output |
 | `GET /api/v1/hosts`, `POST /api/v1/hosts/{name}/maintenance` (`{"enabled": true, "reason": "..."}`) | |
+| `GET /api/v1/hosts/{name}/unmanaged` | Release metadata and plain Compose config paths (readonly) |
+| `GET /api/v1/hosts/{name}/adopt/{release}` | Application YAML and warnings as JSON (admin; contains plaintext user values) |
 | `GET /api/v1/windows`, `GET /api/v1/root`, `POST /api/v1/refresh`, `GET /api/v1/version` | |
 | `GET /api/v1/me` | Who you are, your role, and how you signed in |
 | `GET/POST /api/v1/tokens` (`{"name", "role"}`), `DELETE /api/v1/tokens/{name}` | API tokens (admin) |
@@ -284,10 +288,50 @@ Every `/api/v1` endpoint needs `Authorization: Bearer <token>`, or a browser ses
 
 `/healthz` and `/metrics` need no token. `POST /api/v1/webhook` checks the Git server's signature instead.
 
+## Adopt existing releases
+
+Use the same host connection and release storage as your existing composetpl install. Volume storage
+uses the engine's composetpl release volume. For `storage: local`, migrate the release records into
+`<dataDir>/hosts/<host>/releases` first; composecd cannot discover another client's local state directory.
+
+```bash
+composecd host unmanaged nas
+# From the GitOps repository root, assuming objects are under composecd/.
+composecd adopt nas media > composecd/media.yaml
+# Review the YAML and warnings and protect secrets before committing.
+git add composecd/media.yaml && git commit -m "feat: manage media with composecd" && git push
+composecd refresh
+composecd app diff media
+composecd app sync media
+```
+
+The admin-only export contains **plaintext saved user values**. This is an intentional exception to
+normal API/UI masking. Encrypt secrets in a SOPS values file and reference it with `valueFiles` before
+committing; remove the corresponding inline values so they do not override the encrypted file.
+The UI Hosts page's **Adopt** link shows the same YAML and warnings. Discovery only exposes metadata.
+
+Exporting changes neither Git nor Docker. The YAML keeps the release name and host, so the first sync
+upgrades its existing history in place. Automation and prune are off until you explicitly configure them.
+The diff reports that composecd will take ownership, even if the rendered resources already match.
+An existing Application with the same name or a pending composetpl operation blocks export.
+Orphaned composecd releases on configured hosts can also be exported.
+
+A chart path is suggested only when its recorded location maps into the current root repository and
+contains `Chart.yaml`. OCI references retain their recorded tag/digest (or recorded version for a bare
+reference). Otherwise the export suggests `charts/<release>` and warns you to copy the original chart
+there or replace the source with its OCI reference. Relative recorded paths are interpreted from the
+repository root; review them before syncing. Also match `Host.spec.projectRoot` to the original release's
+project directory, and review host environment overrides and the chart version. A name match preserves
+the project identity, but a changed manifest or project directory can still recreate containers.
+
+Plain Compose projects have no composetpl history to adopt. Their config paths come from their container
+labels, and may be unavailable for projects without containers. Convert them to a chart with
+`composetpl create`; automatic conversion is not supported. See [the adoption example](examples/adoption/README.md).
+
 ## Users and access
 
-There are two roles. **readonly** sees everything: apps, diffs, history, operations and hosts. **admin** can
-also sync, roll back, pause, refresh, toggle maintenance, and manage users and tokens. Manual operations record
+There are two roles. **readonly** sees apps, masked diffs, history, operations and hosts. **admin** can
+also sync, roll back, pause, refresh, toggle maintenance, export adoption YAML, and manage users and tokens. Manual operations record
 who ran them.
 
 There are four ways to authenticate:
@@ -340,7 +384,7 @@ there is no CDN or Node build step.
   release history with rollback, and operations with their output. Admins can sync, pause, resume and refresh.
 - **ApplicationSets** (`/applicationsets`): generated apps, counts and expansion/validation errors.
 - **Hosts** (`/hosts`): connectivity, Docker/Compose versions, orphaned releases and admin maintenance toggles.
-  Unmanaged project discovery and adoption arrive in Phase 3f.
+  Lists unmanaged composetpl releases and plain Compose projects with config paths. Admins can use **Adopt** to preview Application YAML.
 - **Sync windows** (`/windows`): open/closed state, next change, and matching applications.
 - **Operations** (`/operations`): the latest 50 operations across applications, including who acted and output.
 - **Settings** (`/settings`): your identity; admins can create/revoke tokens and add/delete users or change
@@ -352,9 +396,10 @@ HTML panels swapped with `hx-swap-oob`. Reconnecting clients receive a fresh sna
 reconciliation, even if a browser is slow. Log tails stay connected when other panels update.
 
 The log endpoint checks a fresh compose project listing and its project label before streaming; a container
-from another project is refused. Log lines, diffs and displayed operation output mask configured inline value
-leaves and environment values of four characters or more. SOPS-decrypted values are masked too. Masking is
-best effort: short values and transformed values (for example base64) may remain visible.
+from another project is refused. Log lines, diffs and displayed operation output mask SOPS-decrypted values
+of four characters or more (see [Encrypted values with SOPS](#encrypted-values-with-sops)); plain values are already in Git and
+are shown as they are. Masking is best effort: short values and transformed values (for example base64) may
+remain visible.
 Readonly users can view these outputs. Light/dark styling follows your system preference, and tables scroll
 inside their panels at phone widths.
 
@@ -423,9 +468,10 @@ reference checks. Generator repositories participate in push webhooks.
 
 A removed directory or Host selection removes its app; its recorded prune policy controls release
 removal. Changing set ownership or the template's prune flag updates release metadata through sync,
-even without a manifest change. Generation errors retain the last accepted snapshot and disable prune
-for that refresh. A set dropping from N apps to zero reports `generated: 0, was: N` and protects existing
-releases. Release ownership labels restore that protection after restart; protected releases may appear
+even without a manifest change. A set that fails to generate (a template error, an unreachable
+repository) keeps the apps it generated before and reports the error on the set and the root; the rest of
+Git still applies. A set dropping from N apps to zero reports `generated: 0, was: N`, keeps its apps and
+protects existing releases. Release ownership labels restore that protection after restart; protected releases may appear
 as host orphans until generation recovers. To intentionally retire the entire set, remove the set object
 while retaining a valid nonempty root, as with the existing whole-root prune guard.
 
@@ -511,8 +557,9 @@ root. External source repositories are checked when the controller prepares them
 creation-rules file is left alone.
 
 Decrypted scalar values of four characters or more are masked with `••••••` in diffs, API/UI output,
-operation output and errors, container logs, and notifications. Old values remain masked after rotation;
-retained release history restores that knowledge after restart. Operation logs are masked before SQLite
+operation output and errors, container logs, and notifications. Plain values aren't masked. Old values
+remain masked after rotation: composecd reads the values that retained releases saved at the encrypted
+files' keys, which works after a restart and even without the age identity, since SOPS keeps keys in plaintext. Operation logs are masked before SQLite
 storage. Application and container names remain usable as routing identifiers. Masking is best effort:
 short values and transformed values (base64, URLs, escaping, etc.) can still be visible.
 
@@ -601,7 +648,8 @@ The events are `sync-succeeded`, `sync-failed` (which also covers failed rollbac
 | Web UI, roles, local sign-in and SSO | Embedded htmx UI with SSE, local users, API tokens and OIDC |
 | OCI chart with Git values | `valuesFrom` repository, independent chart/values revisions, SOPS and automatic sync |
 | ApplicationSets | Git-directory and Host-label generators, safe templates and zero-result protection |
-| Adoption, image updater | Planned; see [docs/PLAN.md](docs/PLAN.md) |
+| Adoption | Unmanaged discovery and admin Application YAML export; commit and sync to upgrade in place |
+| Image updater | Planned; see [docs/PLAN.md](docs/PLAN.md) |
 
 ## Development
 

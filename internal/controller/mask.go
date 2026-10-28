@@ -2,6 +2,7 @@ package controller
 
 import (
 	"errors"
+	"strings"
 
 	"github.com/trevorswanson/composetpl/pkg/release"
 	"github.com/trevorswanson/composetpl/pkg/storage"
@@ -22,28 +23,70 @@ func (c *Controller) remember(name string, secrets []string) {
 		c.secretValues[name] = map[string]bool{}
 	}
 	for _, s := range secrets {
-		c.secretValues[name][s] = true
+		if !c.secretValues[name][s] {
+			c.secretValues[name][s] = true
+			delete(c.maskers, name)
+		}
 	}
 }
 
+// rememberPaths records where an app's encrypted values sit in its user
+// values. Paths are key names only, never values.
+func (c *Controller) rememberPaths(name string, paths [][]string) {
+	c.maskMu.Lock()
+	defer c.maskMu.Unlock()
+	if c.secretPaths == nil {
+		c.secretPaths = map[string]map[string][]string{}
+	}
+	if c.secretPaths[name] == nil {
+		c.secretPaths[name] = map[string][]string{}
+	}
+	for _, p := range paths {
+		c.secretPaths[name][strings.Join(p, "\x00")] = p
+	}
+}
+
+// rememberRelease learns the values a release saved at an app's secret paths.
+// Plain values are left alone: they are in Git, and masking them would only
+// make diffs and logs unreadable.
+func (c *Controller) rememberRelease(r *release.Release) {
+	c.maskMu.RLock()
+	paths := make([][]string, 0, len(c.secretPaths[r.Name]))
+	for _, p := range c.secretPaths[r.Name] {
+		paths = append(paths, p)
+	}
+	c.maskMu.RUnlock()
+	var secrets []string
+	for _, p := range paths {
+		secrets = append(secrets, masking.Leaves(masking.At(r.Config, p))...)
+	}
+	c.remember(r.Name, secrets)
+}
+
+// masker covers decrypted SOPS values only, so it is rebuilt only when an app
+// learns a new one.
 func (c *Controller) masker(name string) *masking.Masker {
 	c.maskMu.RLock()
+	m := c.maskers[name]
+	c.maskMu.RUnlock()
+	if m != nil {
+		return m
+	}
+	c.maskMu.Lock()
+	defer c.maskMu.Unlock()
 	secrets := make([]string, 0, len(c.secretValues[name]))
 	for s := range c.secretValues[name] {
 		secrets = append(secrets, s)
 	}
-	c.maskMu.RUnlock()
-	if app, err := c.application(name); err == nil {
-		secrets = append(secrets, masking.Leaves(app.Spec.Source.Values)...)
-		secrets = append(secrets, masking.Leaves(app.Spec.Source.Env)...)
-		if h := c.Hosts.Get(app.Spec.Destination.Host); h != nil {
-			secrets = append(secrets, masking.Leaves(h.Spec.Spec.Env)...)
-		}
+	m = masking.New(secrets)
+	if c.maskers == nil {
+		c.maskers = map[string]*masking.Masker{}
 	}
-	return masking.New(secrets)
+	c.maskers[name] = m
+	return m
 }
 
-// Mask hides decrypted and configured values in human-readable output.
+// Mask hides decrypted values in human-readable output.
 func (c *Controller) Mask(name, text string) string { return c.masker(name).Text(text) }
 
 // masked redacts a detached public value. Internal manifests, source values and
@@ -57,9 +100,10 @@ func masked[T any](c *Controller, name string, in T) T {
 	return out
 }
 
-// releaseHistory recovers user values from every retained revision. This also
-// restores masking after restart, during rollback and with a missing age key.
-// The host's own release records remain plaintext, as composetpl requires.
+// releaseHistory recovers older secret values from every retained revision,
+// at the keys the app's encrypted files use. This keeps rotated secrets masked
+// in diffs, rollbacks and old containers, even with a missing age key. The
+// host's own release records remain plaintext, as composetpl requires.
 func (c *Controller) releaseHistory(h *hosts.Host, name string) ([]*release.Release, error) {
 	hist, err := h.Store().History(name)
 	if errors.Is(err, storage.ErrNotFound) {
@@ -69,7 +113,7 @@ func (c *Controller) releaseHistory(h *hosts.Host, name string) ([]*release.Rele
 		return nil, err
 	}
 	for _, r := range hist {
-		c.remember(name, masking.Leaves(r.Config))
+		c.rememberRelease(r)
 	}
 	return hist, nil
 }

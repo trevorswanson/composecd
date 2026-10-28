@@ -84,6 +84,14 @@ func New(c Controller, o Options) http.Handler {
 	read("GET /api/v1/hosts", func(*http.Request, *auth.Principal) (int, interface{}, error) {
 		return http.StatusOK, nonNil(c.HostStatuses()), nil
 	})
+	read("GET /api/v1/hosts/{name}/unmanaged", func(r *http.Request, _ *auth.Principal) (int, interface{}, error) {
+		out, err := c.Unmanaged(r.Context(), r.PathValue("name"))
+		return http.StatusOK, out, err
+	})
+	act("GET /api/v1/hosts/{name}/adopt/{release}", func(r *http.Request, _ *auth.Principal) (int, interface{}, error) {
+		out, err := c.Adopt(r.Context(), r.PathValue("name"), r.PathValue("release"))
+		return http.StatusOK, out, err
+	})
 	act("POST /api/v1/hosts/{name}/maintenance", func(r *http.Request, p *auth.Principal) (int, interface{}, error) {
 		var body struct {
 			Enabled bool   `json:"enabled"`
@@ -225,7 +233,7 @@ func (s *server) json(need auth.Role, h handler) http.HandlerFunc {
 				status = http.StatusNotFound
 			case errors.Is(err, store.ErrExists):
 				status = http.StatusConflict
-			case errors.Is(err, controller.ErrBusy), errors.Is(err, controller.ErrBlocked):
+			case errors.Is(err, controller.ErrBusy), errors.Is(err, controller.ErrBlocked), errors.Is(err, controller.ErrAdoptionBlocked):
 				status = http.StatusConflict
 			default:
 				status = http.StatusInternalServerError
@@ -239,6 +247,7 @@ func (s *server) json(need auth.Role, h handler) http.HandlerFunc {
 
 func writeJSON(w http.ResponseWriter, status int, body interface{}) {
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(status)
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")

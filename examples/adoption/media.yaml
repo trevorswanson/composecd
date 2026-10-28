@@ -1,0 +1,15 @@
+# Reviewed Application skeleton for an existing release named media on nas.
+# Copy the original chart into this path, and set nas.spec.projectRoot to the
+# original project's parent directory before syncing. Keep secrets in SOPS files.
+apiVersion: composecd/v1alpha1
+kind: Application
+metadata:
+  name: media
+spec:
+  source:
+    path: charts/media
+    values:
+      timezone: UTC
+  destination:
+    host: nas
+  # No automated policy: commit, inspect app diff, then sync explicitly.

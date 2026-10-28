@@ -84,7 +84,7 @@ reconciles the host's apps right away.`,
 	maint.Flags().StringVar(&reason, "reason", "", "why, shown in the status")
 
 	cmd := &cobra.Command{Use: "host", Aliases: []string{"hosts"}, Short: "Inspect Docker hosts"}
-	cmd.AddCommand(list, maint)
+	cmd.AddCommand(list, maint, newUnmanagedCmd(cf))
 	return cmd
 }
 

@@ -16,6 +16,8 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/trevorswanson/composecd/internal/auth"
 	"github.com/trevorswanson/composecd/internal/controller"
@@ -34,6 +36,8 @@ type Controller interface {
 	Operations(string, int) ([]*store.Operation, error)
 	Operation(int64) (*store.Operation, error)
 	HostStatuses() []controller.HostStatus
+	Unmanaged(context.Context, string) (*controller.Unmanaged, error)
+	Adopt(context.Context, string, string) (*controller.Adoption, error)
 	Root() controller.RootStatus
 	Windows() []windows.Status
 	Sync(string, string) (*store.Operation, error)
@@ -51,6 +55,42 @@ type Server struct {
 	C       Controller
 	Auth    *auth.Authenticator
 	Version string
+
+	inventoryMu sync.Mutex
+	inventory   map[string]inventory
+}
+
+type inventory struct {
+	at  time.Time
+	out *controller.Unmanaged
+	err error
+}
+
+// inventoryTTL bounds how stale live hosts-page updates may show discovery.
+// Discovery lists releases and runs compose ls and ps on every host, too much
+// to repeat on each controller change for each open browser tab.
+const inventoryTTL = time.Minute
+
+// liveKey marks a render for an SSE update rather than a page load.
+type liveKey struct{}
+
+// unmanaged runs discovery on page loads, and reuses a recent result for live
+// updates.
+func (s *Server) unmanaged(r *http.Request, host string) (*controller.Unmanaged, error) {
+	s.inventoryMu.Lock()
+	cached, ok := s.inventory[host]
+	s.inventoryMu.Unlock()
+	if ok && r.Context().Value(liveKey{}) != nil && time.Since(cached.at) < inventoryTTL {
+		return cached.out, cached.err
+	}
+	out, err := s.C.Unmanaged(r.Context(), host)
+	s.inventoryMu.Lock()
+	defer s.inventoryMu.Unlock()
+	if s.inventory == nil {
+		s.inventory = map[string]inventory{}
+	}
+	s.inventory[host] = inventory{at: time.Now(), out: out, err: err}
+	return out, err
 }
 
 type Data struct {
@@ -67,6 +107,9 @@ type Data struct {
 	History                                                    []controller.Release
 	Users                                                      []*store.User
 	Tokens                                                     []*store.Token
+	Unmanaged                                                  map[string]*controller.Unmanaged
+	DiscoveryErrors                                            map[string]string
+	Adoption                                                   *controller.Adoption
 	Filters                                                    url.Values
 }
 
@@ -101,6 +144,7 @@ func (s *Server) Register(mux *http.ServeMux) {
 	for _, route := range []string{"/{$}", "/apps", "/apps/{name}", "/hosts", "/windows", "/operations", "/settings", "/applicationsets"} {
 		mux.HandleFunc("GET "+route, s.Page)
 	}
+	mux.HandleFunc("GET /hosts/{name}/adopt/{release}", s.Adopt)
 	mux.HandleFunc("POST /ui/apps/{name}/{action}", s.Action)
 	mux.HandleFunc("POST /ui/hosts/{name}/maintenance", s.Action)
 	mux.HandleFunc("POST /ui/settings/{action}", s.Action)
@@ -181,6 +225,19 @@ func (s *Server) data(r *http.Request, p *auth.Principal) (*Data, error) {
 		d.ApplicationSets = s.C.ApplicationSets()
 	case "hosts":
 		d.Hosts = s.C.HostStatuses()
+		d.Unmanaged = map[string]*controller.Unmanaged{}
+		d.DiscoveryErrors = map[string]string{}
+		for _, h := range d.Hosts {
+			if h.Retired {
+				continue
+			}
+			inventory, err := s.unmanaged(r, h.Name)
+			if err != nil {
+				d.DiscoveryErrors[h.Name] = err.Error()
+			} else {
+				d.Unmanaged[h.Name] = inventory
+			}
+		}
 	case "windows":
 		d.Windows = s.C.Windows()
 	case "operations":
@@ -284,7 +341,7 @@ func pageError(w http.ResponseWriter, err error) {
 		code = http.StatusBadRequest
 	case errors.Is(err, controller.ErrNotFound), errors.Is(err, store.ErrNotFound):
 		code = 404
-	case errors.Is(err, controller.ErrBusy), errors.Is(err, controller.ErrBlocked), errors.Is(err, store.ErrExists):
+	case errors.Is(err, controller.ErrBusy), errors.Is(err, controller.ErrBlocked), errors.Is(err, controller.ErrAdoptionBlocked), errors.Is(err, store.ErrExists):
 		code = 409
 	}
 	http.Error(w, err.Error(), code)
@@ -387,3 +444,17 @@ func (s *Server) Action(w http.ResponseWriter, r *http.Request) {
 type invalidRequest string
 
 func (e invalidRequest) Error() string { return string(e) }
+
+// Adopt previews a sensitive YAML export; generating it changes no state.
+func (s *Server) Adopt(w http.ResponseWriter, r *http.Request) {
+	p := s.identify(w, r, auth.RoleAdmin)
+	if p == nil {
+		return
+	}
+	adoption, err := s.C.Adopt(r.Context(), r.PathValue("name"), r.PathValue("release"))
+	if err != nil {
+		pageError(w, err)
+		return
+	}
+	render(w, 200, "page", &Data{User: p, Admin: true, Page: "adopt", Root: s.C.Root(), Version: s.Version, Adoption: adoption})
+}

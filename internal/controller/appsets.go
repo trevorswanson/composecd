@@ -29,15 +29,17 @@ func (c *Controller) ApplicationSets() []ApplicationSetStatus {
 	return out
 }
 
-// expand validates one atomic snapshot. If any set fails, RefreshAll retains
-// the previous object snapshot and disables prune for this refresh.
+// expand adds each ApplicationSet's Applications to objs. A set that fails, or
+// suddenly generates nothing, keeps the Applications it generated before and
+// reports the error in its status, so one broken set doesn't hold back the
+// rest of Git. Only a failed validation of the whole snapshot returns an error.
 func (c *Controller) expand(ctx context.Context, objs *config.Objects) (*config.Objects, []ApplicationSetStatus, map[string]error, error) {
 	c.mu.RLock()
-	previous := map[string][]string{}
+	previous := map[string][]*config.Application{}
 	if c.objects != nil {
 		for _, a := range c.objects.Applications {
 			if owner := a.Metadata.Labels[config.LabelApplicationSet]; owner != "" {
-				previous[owner] = append(previous[owner], a.Metadata.Name)
+				previous[owner] = append(previous[owner], a)
 			}
 		}
 	}
@@ -65,50 +67,53 @@ func (c *Controller) expand(ctx context.Context, objs *config.Objects) (*config.
 	expanded := *objs
 	expanded.Applications = append([]*config.Application{}, objs.Applications...)
 	statuses := make([]ApplicationSetStatus, 0, len(objs.ApplicationSets))
-	var errs []error
 	for _, set := range objs.ApplicationSets {
 		apps, err := appset.Generate(ctx, set, objs.Hosts, checkout)
-		st := ApplicationSetStatus{Name: set.Metadata.Name, Origin: set.Origin, Generated: len(apps), Previous: len(previous[set.Metadata.Name]), Applications: []string{}}
+		kept := previous[set.Metadata.Name]
+		st := ApplicationSetStatus{Name: set.Metadata.Name, Origin: set.Origin, Generated: len(apps), Previous: len(kept), Applications: []string{}}
 		if err == nil && len(apps) == 0 && st.Previous > 0 {
-			err = fmt.Errorf("generated: 0, was: %d; refusing to remove every generated application", st.Previous)
+			err = fmt.Errorf("generated: 0, was: %d; keeping the applications it generated before", st.Previous)
 		}
 		if err != nil {
 			m := masking.New(append(masking.Leaves(set.Spec.Template.Spec.Source.Values), masking.Leaves(set.Spec.Template.Spec.Source.Env)...))
 			st.Error = m.Text(err.Error())
-			st.Applications = append(st.Applications, previous[st.Name]...)
-			errs = append(errs, fmt.Errorf("applicationset %s: %s", st.Name, st.Error))
-		} else {
-			for _, a := range apps {
-				st.Applications = append(st.Applications, a.Metadata.Name)
-			}
-			expanded.Applications = append(expanded.Applications, apps...)
+			apps = kept
 		}
+		for _, a := range apps {
+			st.Applications = append(st.Applications, a.Metadata.Name)
+		}
+		expanded.Applications = append(expanded.Applications, apps...)
 		sort.Strings(st.Applications)
 		statuses = append(statuses, st)
 	}
-	if len(errs) == 0 {
-		expanded.Resolve(c.Boot.Root)
-		if err := expanded.Validate(); err != nil {
-			errs = append(errs, err)
-			for i := range statuses {
-				if strings.Contains(err.Error(), "applicationset "+statuses[i].Name+" (") {
-					statuses[i].Error = err.Error()
-				}
+	sort.Slice(statuses, func(i, j int) bool { return statuses[i].Name < statuses[j].Name })
+	expanded.Resolve(c.Boot.Root)
+	if err := expanded.Validate(); err != nil {
+		for i := range statuses {
+			if statuses[i].Error == "" && strings.Contains(err.Error(), "applicationset "+statuses[i].Name+" (") {
+				statuses[i].Error = err.Error()
+			}
+			if statuses[i].Error == "" {
+				statuses[i].Error = "snapshot not applied: another object or ApplicationSet failed validation"
 			}
 		}
-	}
-	err := errors.Join(errs...)
-	for i := range statuses {
-		statuses[i].Ready = err == nil
-		if err != nil && statuses[i].Error == "" {
-			statuses[i].Error = "snapshot not applied: another object or ApplicationSet failed validation"
-		}
-	}
-	sort.Slice(statuses, func(i, j int) bool { return statuses[i].Name < statuses[j].Name })
-	if err != nil {
 		return nil, statuses, fetched, err
 	}
+	for i := range statuses {
+		statuses[i].Ready = statuses[i].Error == ""
+	}
 	return &expanded, statuses, fetched, nil
+}
+
+// setErrors reports the sets that failed without failing the snapshot.
+func setErrors(statuses []ApplicationSetStatus) error {
+	var errs []error
+	for _, s := range statuses {
+		if s.Error != "" {
+			errs = append(errs, fmt.Errorf("applicationset %s: %s", s.Name, s.Error))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // restoreEmptyGuards recovers previous counts from release ownership labels.
@@ -168,14 +173,22 @@ func (c *Controller) restoreEmptyGuards() {
 	}
 }
 
-func (c *Controller) emptySetReason(owner string) string {
+// setPruneGuard says why an ApplicationSet's releases must not be pruned: the
+// set failed or generated nothing, so its missing apps prove nothing.
+func (c *Controller) setPruneGuard(owner string) string {
 	if owner == "" {
 		return ""
 	}
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	for _, s := range c.appsets {
-		if s.Name == owner && s.Generated == 0 {
+		if s.Name != owner {
+			continue
+		}
+		if s.Error != "" {
+			return "applicationset " + owner + " failed: " + s.Error
+		}
+		if s.Generated == 0 {
 			return fmt.Sprintf("applicationset %s generated: 0, was: %d", owner, s.Previous)
 		}
 	}
