@@ -16,6 +16,8 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/trevorswanson/composecd/internal/auth"
 	"github.com/trevorswanson/composecd/internal/controller"
@@ -53,6 +55,42 @@ type Server struct {
 	C       Controller
 	Auth    *auth.Authenticator
 	Version string
+
+	inventoryMu sync.Mutex
+	inventory   map[string]inventory
+}
+
+type inventory struct {
+	at  time.Time
+	out *controller.Unmanaged
+	err error
+}
+
+// inventoryTTL bounds how stale live hosts-page updates may show discovery.
+// Discovery lists releases and runs compose ls and ps on every host, too much
+// to repeat on each controller change for each open browser tab.
+const inventoryTTL = time.Minute
+
+// liveKey marks a render for an SSE update rather than a page load.
+type liveKey struct{}
+
+// unmanaged runs discovery on page loads, and reuses a recent result for live
+// updates.
+func (s *Server) unmanaged(r *http.Request, host string) (*controller.Unmanaged, error) {
+	s.inventoryMu.Lock()
+	cached, ok := s.inventory[host]
+	s.inventoryMu.Unlock()
+	if ok && r.Context().Value(liveKey{}) != nil && time.Since(cached.at) < inventoryTTL {
+		return cached.out, cached.err
+	}
+	out, err := s.C.Unmanaged(r.Context(), host)
+	s.inventoryMu.Lock()
+	defer s.inventoryMu.Unlock()
+	if s.inventory == nil {
+		s.inventory = map[string]inventory{}
+	}
+	s.inventory[host] = inventory{at: time.Now(), out: out, err: err}
+	return out, err
 }
 
 type Data struct {
@@ -193,7 +231,7 @@ func (s *Server) data(r *http.Request, p *auth.Principal) (*Data, error) {
 			if h.Retired {
 				continue
 			}
-			inventory, err := s.C.Unmanaged(r.Context(), h.Name)
+			inventory, err := s.unmanaged(r, h.Name)
 			if err != nil {
 				d.DiscoveryErrors[h.Name] = err.Error()
 			} else {

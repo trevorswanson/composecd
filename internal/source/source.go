@@ -41,6 +41,10 @@ type Prepared struct {
 	ValuesRevision string
 	// Secrets are decrypted leaf values used for output masking, never persisted.
 	Secrets []string `json:"-"`
+	// SecretPaths locate the encrypted keys in user values. They come from the
+	// encrypted files' structure, so they are known even when decryption fails,
+	// and let older values at the same keys be found in release history.
+	SecretPaths [][]string `json:"-"`
 }
 
 // Lookup backs the env and expandenv template functions with Env only, so a
@@ -61,7 +65,8 @@ var depLocks sync.Map
 // Prepare resolves app's source. checkout is the root of the app's repository at
 // revision. For OCI charts it is the valuesFrom repository root; without
 // valuesFrom, checkout and revision are ignored. If the chart has a Chart.lock,
-// its dependencies are vendored into the checkout first.
+// its dependencies are vendored into the checkout first. When a values file
+// can't be decrypted, the error comes with a Prepared holding only SecretPaths.
 func Prepare(ctx context.Context, app *config.Application, host *config.Host, checkout, revision string, reg *registry.Client, ageKeyFile string) (*Prepared, error) {
 	s := app.Spec.Source
 	p := &Prepared{Env: mergeEnv(host.Spec.Env, s.Env)}
@@ -96,6 +101,9 @@ func Prepare(ctx context.Context, app *config.Application, host *config.Host, ch
 		}
 		p.ChartRef, p.Revision = dir, revision
 	}
+	// After a decryption failure, keep reading the remaining files' SOPS key
+	// paths: the caller masks older values at those keys from release history.
+	var decryptErr error
 	for _, vf := range s.ValueFiles {
 		f, err := inside(root, filepath.Join(dir, filepath.FromSlash(vf)))
 		if err != nil {
@@ -110,10 +118,18 @@ func Prepare(ctx context.Context, app *config.Application, host *config.Host, ch
 			return nil, err
 		}
 		if encrypted {
+			p.SecretPaths = append(p.SecretPaths, sops.Paths(data)...)
+			if decryptErr != nil {
+				continue
+			}
 			data, err = sops.Decrypt(ctx, f, ageKeyFile)
 			if err != nil {
-				return nil, fmt.Errorf("valueFiles %q: %w", vf, err)
+				decryptErr = fmt.Errorf("valueFiles %q: %w", vf, err)
+				continue
 			}
+		}
+		if decryptErr != nil {
+			continue
 		}
 		cur := map[string]interface{}{}
 		if err := yaml.Unmarshal(data, &cur); err != nil {
@@ -123,6 +139,9 @@ func Prepare(ctx context.Context, app *config.Application, host *config.Host, ch
 			p.Secrets = append(p.Secrets, masking.Leaves(cur)...)
 		}
 		vals = values.Merge(vals, cur)
+	}
+	if decryptErr != nil {
+		return &Prepared{SecretPaths: p.SecretPaths}, decryptErr
 	}
 	if !s.IsOCI() {
 		if err := vendor(ctx, dir, reg); err != nil {

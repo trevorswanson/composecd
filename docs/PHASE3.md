@@ -148,7 +148,8 @@ in with a local user, OIDC, or the admin token entered as a password.
 
 ### 3c. SOPS values files (delivered)
 - Pinned SOPS 3.13.3 with per-architecture checksum verification; no Go SOPS/KMS dependency.
-- Retained release user values restore masking after restart and across rotations/rollbacks.
+- Retained releases restore masking after restart and across rotations/rollbacks: values saved at the
+  encrypted files' key paths (readable without the age key) are masked. Plain values are never masked.
 - **Decrypting.**
   - Set `sopsAgeKeyFile` in `composecd.yaml`.
   - A values file is decrypted when its name matches `*.sops.yaml` / `*.sops.yml`, or when it has top-level

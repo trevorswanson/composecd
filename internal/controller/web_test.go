@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"io"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -125,15 +124,23 @@ func TestLogsVerifyFreshProjectMembership(t *testing.T) {
 		t.Fatal(err)
 	}
 }
-func TestMaskConfiguredLeaves(t *testing.T) {
+
+// Plain values are in Git already; masking them would make every diff and log
+// unreadable (a "true" or "8080" anywhere). Only decrypted SOPS values count.
+func TestMaskLeavesPlainValues(t *testing.T) {
 	e := newEnv(t)
 	e.c.RefreshAll(context.Background())
 	e.c.mu.Lock()
 	app := e.c.objects.Application("web")
-	app.Spec.Source.Values = map[string]interface{}{"password": "long-password", "short": "abc", "array": []interface{}{"another-secret"}}
+	app.Spec.Source.Values = map[string]interface{}{"enabled": "true", "port": "8080", "image": "nginx:1.27"}
+	app.Spec.Source.Env = map[string]string{"TZ": "Europe/London"}
 	e.c.mu.Unlock()
-	got := e.c.Mask("web", "long-password another-secret abc")
-	if strings.Contains(got, "long-password") || strings.Contains(got, "another-secret") || !strings.Contains(got, "abc") {
+	text := "enabled: true, port 8080, nginx:1.27, Europe/London"
+	if got := e.c.Mask("web", text); got != text {
+		t.Fatal(got)
+	}
+	e.c.remember("web", []string{"long-password"})
+	if got := e.c.Mask("web", "pw long-password on 8080"); got != "pw •••••• on 8080" {
 		t.Fatal(got)
 	}
 }

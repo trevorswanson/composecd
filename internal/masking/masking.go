@@ -151,3 +151,38 @@ func (m *Masker) Values(in map[string]interface{}) map[string]interface{} {
 	}
 	return out
 }
+
+// Paths lists the key path to every value under v that isn't a map. A list
+// counts as one value, so a path never indexes into it.
+func Paths(v map[string]interface{}) [][]string {
+	var out [][]string
+	var visit func(map[string]interface{}, []string)
+	visit = func(m map[string]interface{}, prefix []string) {
+		for k, x := range m {
+			p := append(append([]string{}, prefix...), k)
+			if child, ok := x.(map[string]interface{}); ok {
+				visit(child, p)
+			} else {
+				out = append(out, p)
+			}
+		}
+	}
+	visit(v, nil)
+	sort.Slice(out, func(i, j int) bool { return strings.Join(out[i], "\x00") < strings.Join(out[j], "\x00") })
+	return out
+}
+
+// At returns the value at path in v, or nil when there is none.
+func At(v interface{}, path []string) interface{} {
+	for _, k := range path {
+		switch m := v.(type) {
+		case map[string]interface{}:
+			v = m[k]
+		case map[interface{}]interface{}:
+			v = m[k]
+		default:
+			return nil
+		}
+	}
+	return v
+}

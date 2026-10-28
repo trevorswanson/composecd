@@ -108,13 +108,15 @@ func (c *Controller) assess(ctx context.Context, app *config.Application, fetchE
 	defer h.Use()()
 
 	cfg := h.Configuration(source.Env(h.Spec, app), io.Discard)
-	hist, err := c.releaseHistory(h, name)
-	if err != nil {
-		return fail(fmt.Errorf("reading release history: %w", err))
-	}
+	// Prepare first: it learns the secret paths that reading history masks.
 	p, err := c.prepare(ctx, app, h)
+	hist, herr := c.releaseHistory(h, name)
 	if err != nil {
 		return fail(err)
+	}
+	if herr != nil {
+		p.done()
+		return fail(fmt.Errorf("reading release history: %w", herr))
 	}
 	st.Sync.Revision = p.prep.Revision
 	st.Sync.ValuesRevision = p.prep.ValuesRevision
@@ -254,6 +256,9 @@ func (c *Controller) prepare(ctx context.Context, app *config.Application, h *ho
 		}
 	}
 	prep, err := source.Prepare(ctx, app, h.Spec, checkout, sha, c.Registry, c.Boot.SOPSAgeKeyFile)
+	if prep != nil {
+		c.rememberPaths(app.Metadata.Name, prep.SecretPaths)
+	}
 	if err != nil {
 		p.done()
 		return nil, err
