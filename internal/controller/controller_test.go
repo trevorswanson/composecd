@@ -407,3 +407,7 @@ func contains(list []string, s string) bool {
 	}
 	return false
 }
+
+func (b *fakeBackend) Logs(context.Context, *hosts.Host, string, int, bool, io.Writer) error {
+	return nil
+}

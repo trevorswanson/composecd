@@ -315,3 +315,7 @@ func TestAccountsCLI(t *testing.T) {
 	run("", "app", "sync", "dashboard")
 	expect(t, run("", "app", "operations", "dashboard"), "admin")
 }
+
+func (b *fakeBackend) Logs(context.Context, *hosts.Host, string, int, bool, io.Writer) error {
+	return nil
+}

@@ -55,6 +55,8 @@ type Backend interface {
 	// Watch calls on with the compose project of every container event on h
 	// until ctx is done or the event stream ends.
 	Watch(ctx context.Context, h *Host, on func(project string)) error
+	// Logs streams stdout and stderr until completion or cancellation.
+	Logs(ctx context.Context, h *Host, container string, tail int, follow bool, w io.Writer) error
 }
 
 // Host is one engine.

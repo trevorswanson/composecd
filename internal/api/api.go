@@ -20,27 +20,14 @@ import (
 	"github.com/trevorswanson/composecd/internal/auth"
 	"github.com/trevorswanson/composecd/internal/controller"
 	"github.com/trevorswanson/composecd/internal/store"
-	"github.com/trevorswanson/composecd/internal/windows"
+	"github.com/trevorswanson/composecd/internal/web"
 )
 
 // Controller is what the API needs from the controller.
 type Controller interface {
-	Apps() []controller.AppStatus
-	App(name string) (controller.AppStatus, error)
-	History(name string) ([]controller.Release, error)
-	Operations(app string, limit int) ([]*store.Operation, error)
-	Operation(id int64) (*store.Operation, error)
-	HostStatuses() []controller.HostStatus
-	Root() controller.RootStatus
-	Sync(name, user string) (*store.Operation, error)
-	Rollback(name string, revision int, user string) (*store.Operation, error)
-	Pause(name, reason string) error
-	Resume(name string) error
-	RefreshApp(name string) error
+	web.Controller
 	Refresh()
 	RefreshRepos(urls []string) bool
-	Windows() []windows.Status
-	SetMaintenance(host string, on bool, reason string) error
 	OperationMetrics() []controller.OperationMetric
 }
 
@@ -70,7 +57,7 @@ func New(c Controller, o Options) http.Handler {
 	s := &server{c: c, Options: o}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok\n")) })
-	mux.HandleFunc("GET /{$}", s.page(s.statusPage))
+	(&web.Server{C: c, Auth: o.Auth, Version: o.Version}).Register(mux)
 	mux.HandleFunc("POST /login", s.login)
 	mux.HandleFunc("POST /logout", s.logout)
 	if o.Auth.OIDC != nil {
@@ -292,6 +279,8 @@ type statusRecorder struct {
 	http.ResponseWriter
 	status int
 }
+
+func (r *statusRecorder) Unwrap() http.ResponseWriter { return r.ResponseWriter }
 
 func (r *statusRecorder) WriteHeader(code int) {
 	r.status = code

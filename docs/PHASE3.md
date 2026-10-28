@@ -89,7 +89,7 @@ Ways to authenticate:
 
 ## Workstreams (one PR each, in this order)
 
-### 3a. Auth foundation
+### 3a. Auth foundation (delivered)
 Covers everything in the roles and auth model above, plus the CLI (`token create|list|revoke`,
 `user add|passwd|delete|list`, and `login`, which saves the server and token to
 `~/.config/composecd/config.yaml` so `--token` isn't needed every time).
@@ -105,7 +105,9 @@ in with a local user, OIDC, or the admin token entered as a password.
 - OIDC against an in-process fake issuer (`httptest`) that signs ID tokens;
 - session expiry.
 
-### 3b. Web UI (htmx)
+### 3b. Web UI (htmx) (delivered)
+- The host page shows orphaned releases now; unmanaged discovery and **Adopt** are added in 3f.
+- `Subscribe` uses `Update` for its invalidations because `controller.Change` already names a resource diff.
 - **Files.**
   - Pages and partials as `html/template` files under `internal/web/templates`, loaded with `go:embed`.
   - htmx and its SSE extension vendored under `internal/web/static` at pinned versions (0BSD license, noted in

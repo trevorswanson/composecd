@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
@@ -306,8 +307,7 @@ func TestSessions(t *testing.T) {
 		t.Fatalf("login: %q", loc)
 	}
 	status, _, body = b.do("GET", "/", "", nil)
-	for _, want := range []string{"<strong>media</strong>", `class="badge synced"`, `class="badge healthy"`, `class="badge up"`,
-		"<strong>nightly</strong>", `<span class="badge outofsync">open</span>`, "trevor <span class=\"badge\">admin</span>", "Sign out"} {
+	for _, want := range []string{"<strong>media</strong>", `class="badge synced"`, `class="badge healthy"`, "trevor <span class=\"badge\">admin</span>", "Sign out"} {
 		if status != 200 || !strings.Contains(body, want) {
 			t.Errorf("status page lacks %q:\n%s", want, body)
 		}
@@ -534,4 +534,18 @@ func TestWebhook(t *testing.T) {
 	if n := strings.Count(strings.Join(st.calls, ";"), "webhook refresh"); n != 3 {
 		t.Errorf("refreshes = %d (%v)", n, st.calls)
 	}
+}
+
+func (s *stub) Subscribe() (<-chan controller.Update, func()) {
+	return make(chan controller.Update), func() {}
+}
+func (s *stub) Logs(_ context.Context, name, container string, _ int, _ bool, w io.Writer) error {
+	if name != "media" || container != "media-web-1" {
+		return controller.ErrNotFound
+	}
+	_, err := io.WriteString(w, "hello <script>\n")
+	return err
+}
+func (s *stub) Mask(_ string, text string) string {
+	return strings.ReplaceAll(text, "secret-value", "••••••")
 }
