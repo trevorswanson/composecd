@@ -90,6 +90,8 @@ func newEnv(t *testing.T) *env {
 		Boot: boot, Git: gitcache.New(filepath.Join(dir, "git"), nil), Hosts: hosts.NewRegistry(e.backend),
 		Store: st, Log: slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
+	// Let background operations finish before the temp dirs are removed.
+	t.Cleanup(e.c.Wait)
 	return e
 }
 
