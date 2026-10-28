@@ -110,12 +110,12 @@ func TestAdoptionChartPathsAndWarnings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, ref := range []string{"charts/web", filepath.Join(checkout, "charts/web"), filepath.Join(e.repo, "charts/web")} {
+	for _, ref := range []string{"charts/web", filepath.Join("charts", "web"), filepath.Join(checkout, "charts/web"), filepath.Join(e.repo, "charts/web")} {
 		if got := e.c.adoptionChartPath(ctx, ref); got != "charts/web" {
 			t.Errorf("%q => %q", ref, got)
 		}
 	}
-	for _, ref := range []string{"../charts/web", "", "missing", filepath.Join(t.TempDir(), "charts/web"), `C:\outside\web`} {
+	for _, ref := range []string{"../charts/web", filepath.Join("..", "charts", "web"), "", "missing", filepath.Join(t.TempDir(), "charts/web"), `C:\outside\web`} {
 		if got := e.c.adoptionChartPath(ctx, ref); got != "" {
 			t.Errorf("unsafe path %q => %q", ref, got)
 		}
