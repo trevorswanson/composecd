@@ -124,6 +124,7 @@ func TestLogsVerifyFreshProjectMembership(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
 // Plain values are in Git already; masking them would make every diff and log
 // unreadable (a "true" or "8080" anywhere). Only decrypted SOPS values count.
 func TestMaskLeavesPlainValues(t *testing.T) {

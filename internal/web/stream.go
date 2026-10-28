@@ -54,7 +54,7 @@ func (s *Server) Events(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid event page", 400)
 		return
 	}
-	view := r.Clone(r.Context())
+	view := r.Clone(context.WithValue(r.Context(), liveKey{}, true))
 	view.URL.Path = page
 	if strings.HasPrefix(page, "/apps/") {
 		name, err := urlPathName(page)
