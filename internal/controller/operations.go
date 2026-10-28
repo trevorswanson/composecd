@@ -23,13 +23,13 @@ const maxLog = 256 << 10
 
 // startOperation records a running operation for app, failing with ErrBusy if
 // one is already running.
-func (c *Controller) startOperation(app, kind, trigger, revision string) (*store.Operation, error) {
+func (c *Controller) startOperation(app, kind, trigger, revision, user string) (*store.Operation, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.running[app] != 0 {
 		return nil, ErrBusy
 	}
-	op := &store.Operation{App: app, Kind: kind, Trigger: trigger, SourceRevision: revision}
+	op := &store.Operation{App: app, Kind: kind, Trigger: trigger, SourceRevision: revision, User: user}
 	if err := c.Store.StartOperation(op); err != nil {
 		return nil, err
 	}
@@ -59,12 +59,15 @@ func (c *Controller) finishOperation(app string, op *store.Operation) {
 	}
 	c.mu.Unlock()
 	c.Log.Info("operation finished", "app", app, "id", op.ID, "kind", op.Kind, "trigger", op.Trigger,
-		"phase", op.Phase, "message", op.Message)
+		"user", op.User, "phase", op.Phase, "message", op.Message)
 
 	ev := Event{App: app, Host: host, Revision: op.SourceRevision}
 	what := op.Kind
 	if op.Trigger == store.TriggerAuto && op.Kind == store.KindSync {
 		what = "automatic sync"
+	}
+	if op.User != "" {
+		what += " by " + op.User
 	}
 	switch {
 	case op.Phase == store.PhaseFailed:
@@ -140,7 +143,8 @@ func (c *Controller) runSync(ctx context.Context, p *plan, op *store.Operation) 
 
 // Sync starts syncing app to Git (fetching its repository first) and returns
 // the running operation. It works even when automatic sync is paused.
-func (c *Controller) Sync(name string) (*store.Operation, error) {
+// user is who asked, recorded on the operation.
+func (c *Controller) Sync(name, user string) (*store.Operation, error) {
 	app, err := c.application(name)
 	if err != nil {
 		return nil, err
@@ -148,7 +152,7 @@ func (c *Controller) Sync(name string) (*store.Operation, error) {
 	if err := c.manualAllowed(app); err != nil {
 		return nil, err
 	}
-	op, err := c.startOperation(name, store.KindSync, store.TriggerManual, "")
+	op, err := c.startOperation(name, store.KindSync, store.TriggerManual, "", user)
 	if err != nil {
 		return nil, err
 	}
@@ -199,7 +203,8 @@ func (c *Controller) manualAllowed(app *config.Application) error {
 // Rollback starts redeploying an earlier composetpl revision of app (0: the one
 // before the latest). An automated app is paused afterwards, as Argo CD does,
 // so auto-sync doesn't undo the rollback.
-func (c *Controller) Rollback(name string, revision int) (*store.Operation, error) {
+// user is who asked, recorded on the operation.
+func (c *Controller) Rollback(name string, revision int, user string) (*store.Operation, error) {
 	app, err := c.application(name)
 	if err != nil {
 		return nil, err
@@ -211,7 +216,7 @@ func (c *Controller) Rollback(name string, revision int) (*store.Operation, erro
 	if err := c.manualAllowed(app); err != nil {
 		return nil, err
 	}
-	op, err := c.startOperation(name, store.KindRollback, store.TriggerManual, "")
+	op, err := c.startOperation(name, store.KindRollback, store.TriggerManual, "", user)
 	if err != nil {
 		return nil, err
 	}

@@ -257,7 +257,7 @@ func TestSyncWindows(t *testing.T) {
 	if e.ups("web") != 0 || !strings.Contains(web.Blocked, "deny window freeze") {
 		t.Errorf("deny window: %d ups, blocked %q", e.ups("web"), web.Blocked)
 	}
-	if _, err := e.c.Sync("web"); err == nil || !strings.Contains(err.Error(), "blocked by a sync window") {
+	if _, err := e.c.Sync("web", "trevor"); err == nil || !strings.Contains(err.Error(), "blocked by a sync window") {
 		t.Errorf("manual sync in a deny window: %v", err)
 	}
 	if ws := e.c.Windows(); len(ws) != 1 || !ws[0].Open || ws[0].Applications[0] != "web" {
@@ -269,7 +269,7 @@ func TestSyncWindows(t *testing.T) {
 	if e.ups("web") != 0 {
 		t.Error("manualSync windows still block automatic syncs")
 	}
-	if _, err := e.c.Sync("web"); err != nil {
+	if _, err := e.c.Sync("web", "trevor"); err != nil {
 		t.Fatalf("manual sync with manualSync: %v", err)
 	}
 	e.c.Wait()
@@ -297,7 +297,7 @@ func TestDependsOn(t *testing.T) {
 	if web := e.app("web"); e.ups("web") != 0 || web.Blocked != "waiting for dependency db (OutOfSync, Missing)" {
 		t.Errorf("web before db: %d ups, blocked %q", e.ups("web"), web.Blocked)
 	}
-	if _, err := e.c.Sync("db"); err != nil {
+	if _, err := e.c.Sync("db", "trevor"); err != nil {
 		t.Fatal(err)
 	}
 	e.c.Wait()

@@ -110,8 +110,14 @@ Git, live state is on the hosts, and release history is in composetpl's storage 
    docker exec composecd cat /var/lib/composecd/admin-token
    ```
 
-5. **Use the token** from the CLI (`--server`/`$COMPOSECD_SERVER` and `--token`/`$COMPOSECD_TOKEN`), the API, or
-   the status page at `http://<host>:8080/`.
+5. **Sign in and set up access.** Save the server and token for the CLI, then create accounts for everyday use
+   (see [Users and access](#users-and-access)):
+
+   ```bash
+   composecd --server http://nas.lan:8080 login        # paste the admin token
+   composecd user add trevor --role admin              # a local user for the web UI
+   composecd token create grafana --role readonly      # a token for scripts and dashboards
+   ```
 
 ## Objects
 
@@ -247,13 +253,17 @@ host maintenance, a retry or self-heal backoff, or a failed sync waiting for a c
 | `host maintenance NAME on\|off` | While on, nothing on the host is synced, healed or pruned automatically. Manual operations still work. |
 | `window list` | Sync windows, whether they're open, and the apps they match. |
 | `validate DIR` | Check objects offline. |
+| `login`, `logout`, `whoami` | Save, forget or check the server and token the CLI uses. |
+| `token create NAME --role R`, `token list`, `token revoke NAME` | API tokens (admin). |
+| `user add NAME --role R`, `user passwd NAME`, `user delete NAME`, `user list` | Local users (admin; anyone can change their own password through the API). |
 
 Hooks are composetpl's: `x-composetpl` hook services run at `pre-install`/`pre-upgrade` (Argo's PreSync),
 `post-install`/`post-upgrade` (PostSync), and around rollbacks.
 
 ### API
 
-Every `/api/v1` endpoint needs `Authorization: Bearer <token>`:
+Every `/api/v1` endpoint needs `Authorization: Bearer <token>`, or a browser session. Reads need the
+`readonly` role. Everything that changes state needs `admin`:
 
 | Endpoint | |
 | --- | --- |
@@ -264,9 +274,57 @@ Every `/api/v1` endpoint needs `Authorization: Bearer <token>`:
 | `GET /api/v1/operations`, `GET /api/v1/operations/{id}` | Operations, with output |
 | `GET /api/v1/hosts`, `POST /api/v1/hosts/{name}/maintenance` (`{"enabled": true, "reason": "..."}`) | |
 | `GET /api/v1/windows`, `GET /api/v1/root`, `POST /api/v1/refresh`, `GET /api/v1/version` | |
+| `GET /api/v1/me` | Who you are, your role, and how you signed in |
+| `GET/POST /api/v1/tokens` (`{"name", "role"}`), `DELETE /api/v1/tokens/{name}` | API tokens (admin) |
+| `GET/POST /api/v1/users` (`{"name", "role", "password"}`), `PUT .../{name}/password`, `DELETE .../{name}` | Local users (admin, or yourself for your password) |
 
-`/healthz` and `/metrics` need no token. `POST /api/v1/webhook` checks the Git server's signature instead. The status page at `/` asks for the token once and keeps it in a cookie. That cookie
-only works for reads, so a cross-site request can't trigger a sync.
+`/healthz` and `/metrics` need no token. `POST /api/v1/webhook` checks the Git server's signature instead.
+
+## Users and access
+
+There are two roles. **readonly** sees everything: apps, diffs, history, operations and hosts. **admin** can
+also sync, roll back, pause, refresh, toggle maintenance, and manage users and tokens. Manual operations record
+who ran them.
+
+There are four ways to authenticate:
+- **The bootstrap admin token.** It's `auth.tokenFile`, or the generated `<dataDir>/admin-token`, and acts as
+  the admin. Keep it for break-glass use. Browser sessions signed in with it end whenever composecd restarts.
+- **API tokens.** Create them with `composecd token create NAME --role readonly|admin`.
+  - A token looks like `ccd_<id>_<secret>` and is shown once. composecd stores only a hash, and records when
+    each token was last used.
+  - Revoking a token also ends any browser sessions signed in with it.
+- **Local users.** Create them with `composecd user add NAME --role ...`.
+  - Passwords need at least 10 characters and are stored as bcrypt hashes.
+  - After five failed sign-ins, a name and address are locked out for one minute, doubling up to 15 minutes.
+  - Changing a password signs that user out everywhere. Role changes and deletions take effect immediately.
+- **OIDC.** Works with Authentik, Authelia, Keycloak, Pocket ID and others. Groups map to roles:
+
+  ```yaml
+  # composecd.yaml
+  auth:
+    oidc:
+      issuer: https://auth.example.lan/application/o/composecd/
+      clientID: composecd
+      clientSecretFile: /run/secrets/oidc-secret   # omit for a public client
+      redirectURL: https://composecd.example.lan/auth/callback
+      adminGroups: [homelab-admins]
+      readonlyGroups: [homelab-users]   # omit to let anyone else who signs in read
+      # groupsClaim: groups             # the default
+      # usernameClaim: preferred_username
+  ```
+
+  Register composecd with your provider as an OAuth2/OpenID client with that redirect URL. It uses the
+  authorization code flow with PKCE.
+
+**The web page.** It signs you in with a user name and password, through your identity provider, or with an API
+token pasted as the password (leave the user name empty).
+- A sign-in starts a server-side session. The cookie is `HttpOnly` and `SameSite=Lax`, and only its hash is
+  stored. A session ends after 7 days idle, and after 30 days at most.
+- Anything a session changes needs the session's CSRF token, which the page sends for you. API tokens in the
+  `Authorization` header don't.
+
+**The CLI.** `composecd login` saves the server and a token in `composecd/login.yaml`, in your user config
+directory (`~/.config` on Linux), readable only by you. `--server`/`--token` and `$COMPOSECD_SERVER`/`$COMPOSECD_TOKEN` take precedence over it.
 
 ## Webhooks, notifications and metrics
 
@@ -318,8 +376,9 @@ The events are `sync-succeeded`, `sync-failed` (which also covers failed rollbac
 
 - **Anyone who can push to the root can run anything on your hosts.** Charts can mount the Docker socket or
   `/`. Protect the branch composecd follows.
-- **The admin token can deploy anything in Git, and roll back.** Keep it secret, and put the API behind TLS
-  (a reverse proxy) if it's reachable beyond localhost. `auth.disabled: true` turns it off, for use behind a
+- **Admins can deploy anything in Git, and roll back.** Give most people the `readonly` role. Put composecd
+  behind TLS (a reverse proxy) if it's reachable beyond localhost: browser session cookies are marked `Secure`
+  only over HTTPS. `auth.disabled: true` turns authentication off entirely, which only makes sense behind a
   proxy that authenticates.
 - **Secrets** in values end up in composetpl's release records on each host, and in rendered compose files, as
   with composetpl itself.

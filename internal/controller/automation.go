@@ -107,7 +107,7 @@ func (c *Controller) automate(ctx context.Context, app *config.Application, st *
 	switch kind {
 	case store.KindSync:
 		c.Log.Info("auto-syncing", "app", name, "revision", short(p.prep.Revision), "reasons", strings.Join(st.Sync.Reasons, "; "))
-		op, err := c.startOperation(name, store.KindSync, store.TriggerAuto, p.prep.Revision)
+		op, err := c.startOperation(name, store.KindSync, store.TriggerAuto, p.prep.Revision, "")
 		if err != nil {
 			return false
 		}
@@ -126,7 +126,7 @@ func (c *Controller) automate(ctx context.Context, app *config.Application, st *
 		c.mu.Unlock()
 	case store.KindHeal:
 		c.Log.Info("self-healing", "app", name, "drift", driftSummary(st.Sync.Drift))
-		op, err := c.startOperation(name, store.KindHeal, store.TriggerAuto, st.Sync.DeployedRevision)
+		op, err := c.startOperation(name, store.KindHeal, store.TriggerAuto, st.Sync.DeployedRevision, "")
 		if err != nil {
 			return false
 		}

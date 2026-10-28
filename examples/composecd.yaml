@@ -37,3 +37,11 @@ auth:
   # With no tokenFile, composecd generates <dataDir>/admin-token on first start.
   # tokenFile: /run/secrets/composecd-token
   disabled: false
+  # Sign in to the web page with an OpenID Connect provider.
+  # oidc:
+  #   issuer: https://auth.example.lan/application/o/composecd/
+  #   clientID: composecd
+  #   clientSecretFile: /run/secrets/oidc-secret
+  #   redirectURL: https://composecd.example.lan/auth/callback
+  #   adminGroups: [homelab-admins]
+  #   readonlyGroups: [homelab-users]

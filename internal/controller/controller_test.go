@@ -246,16 +246,16 @@ func TestManualSyncAndDiff(t *testing.T) {
 		t.Errorf("an undeployed app has no per-resource changes: %+v", manual.Sync.Changes)
 	}
 
-	op, err := e.c.Sync("manual")
+	op, err := e.c.Sync("manual", "trevor")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := e.c.Sync("manual"); err != ErrBusy && err != nil {
+	if _, err := e.c.Sync("manual", "trevor"); err != ErrBusy && err != nil {
 		t.Errorf("second sync: %v", err)
 	}
 	e.c.ops.Wait()
 	got, err := e.c.Operation(op.ID)
-	if err != nil || got.Phase != store.PhaseSucceeded || got.Trigger != store.TriggerManual || got.ReleaseRevision != 1 {
+	if err != nil || got.Phase != store.PhaseSucceeded || got.Trigger != store.TriggerManual || got.ReleaseRevision != 1 || got.User != "trevor" {
 		t.Fatalf("operation = %+v, %v", got, err)
 	}
 	if e.app("manual").Sync.Status != Synced {
@@ -273,7 +273,7 @@ func TestManualSyncAndDiff(t *testing.T) {
 	if ch.Resource != "services/web" || ch.Op != "changed" || !strings.Contains(ch.Diff, "-image: nginx:1") || !strings.Contains(ch.Diff, "+image: nginx:3") {
 		t.Errorf("change = %+v", ch)
 	}
-	if _, err := e.c.Sync("nope"); err == nil {
+	if _, err := e.c.Sync("nope", "trevor"); err == nil {
 		t.Error("sync of an unknown app should fail")
 	}
 }
@@ -308,7 +308,7 @@ func TestRollbackPausesAndResume(t *testing.T) {
 	e.commit(map[string]string{"charts/web/values.yaml": "tag: '2'\n"})
 	e.refresh()
 
-	op, err := e.c.Rollback("web", 1)
+	op, err := e.c.Rollback("web", 1, "trevor")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1,24 +1,23 @@
 // Package api serves composecd's REST API, its status page and /healthz.
 //
-// Every /api/v1 endpoint needs the admin token as "Authorization: Bearer
-// <token>", unless authentication is disabled. The exceptions verify
-// themselves: /api/v1/webhook checks the Git server's signature. /metrics and
-// /healthz are open. The status page also accepts
-// the token as a cookie set by its login form; the cookie is only honored for
-// GET requests, so it can't be used to trigger operations.
+// Every /api/v1 endpoint needs credentials (see package auth): a bearer token,
+// or a browser session from signing in. Reading needs the readonly role and
+// acting needs admin; session requests that change something must also carry
+// the session's CSRF token. The exceptions verify themselves:
+// /api/v1/webhook checks the Git server's signature, and /metrics and
+// /healthz are open.
 package api
 
 import (
-	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"strconv"
-	"strings"
 	"time"
 
+	"github.com/trevorswanson/composecd/internal/auth"
 	"github.com/trevorswanson/composecd/internal/controller"
 	"github.com/trevorswanson/composecd/internal/store"
 	"github.com/trevorswanson/composecd/internal/windows"
@@ -33,8 +32,8 @@ type Controller interface {
 	Operation(id int64) (*store.Operation, error)
 	HostStatuses() []controller.HostStatus
 	Root() controller.RootStatus
-	Sync(name string) (*store.Operation, error)
-	Rollback(name string, revision int) (*store.Operation, error)
+	Sync(name, user string) (*store.Operation, error)
+	Rollback(name string, revision int, user string) (*store.Operation, error)
 	Pause(name, reason string) error
 	Resume(name string) error
 	RefreshApp(name string) error
@@ -47,22 +46,21 @@ type Controller interface {
 
 // Options configure the server.
 type Options struct {
-	// Token is the admin token; ignored when AuthDisabled.
-	Token        string
-	AuthDisabled bool
+	// Auth authenticates requests.
+	Auth *auth.Authenticator
 	// WebhookSecret enables POST /api/v1/webhook.
 	WebhookSecret string
 	Version       string
 	Log           *slog.Logger
 }
 
-// cookieName holds the token for the status page.
-const cookieName = "composecd_token"
-
 type server struct {
 	c Controller
 	Options
 }
+
+// handler serves one API route for an authenticated principal.
+type handler func(r *http.Request, p *auth.Principal) (int, interface{}, error)
 
 // New returns the HTTP handler.
 func New(c Controller, o Options) http.Handler {
@@ -75,22 +73,31 @@ func New(c Controller, o Options) http.Handler {
 	mux.HandleFunc("GET /{$}", s.page(s.statusPage))
 	mux.HandleFunc("POST /login", s.login)
 	mux.HandleFunc("POST /logout", s.logout)
+	if o.Auth.OIDC != nil {
+		mux.HandleFunc("GET /auth/oidc", s.oidcBegin)
+		mux.HandleFunc("GET "+o.Auth.OIDC.CallbackPath(), s.oidcCallback)
+	}
 	mux.HandleFunc("POST /api/v1/webhook", s.webhook)
 	mux.HandleFunc("GET /metrics", s.metrics)
 
-	api := func(pattern string, h func(*http.Request) (int, interface{}, error)) {
-		mux.HandleFunc(pattern, s.json(h))
-	}
-	api("GET /api/v1/version", func(*http.Request) (int, interface{}, error) {
+	read := func(pattern string, h handler) { mux.HandleFunc(pattern, s.json(auth.RoleReadonly, h)) }
+	act := func(pattern string, h handler) { mux.HandleFunc(pattern, s.json(auth.RoleAdmin, h)) }
+
+	read("GET /api/v1/version", func(*http.Request, *auth.Principal) (int, interface{}, error) {
 		return http.StatusOK, map[string]string{"version": s.Version}, nil
 	})
-	api("GET /api/v1/root", func(*http.Request) (int, interface{}, error) { return http.StatusOK, c.Root(), nil })
-	api("POST /api/v1/refresh", func(*http.Request) (int, interface{}, error) {
+	read("GET /api/v1/me", func(_ *http.Request, p *auth.Principal) (int, interface{}, error) {
+		return http.StatusOK, p, nil
+	})
+	read("GET /api/v1/root", func(*http.Request, *auth.Principal) (int, interface{}, error) { return http.StatusOK, c.Root(), nil })
+	act("POST /api/v1/refresh", func(*http.Request, *auth.Principal) (int, interface{}, error) {
 		c.Refresh()
 		return http.StatusAccepted, map[string]string{"status": "refresh requested"}, nil
 	})
-	api("GET /api/v1/hosts", func(*http.Request) (int, interface{}, error) { return http.StatusOK, nonNil(c.HostStatuses()), nil })
-	api("POST /api/v1/hosts/{name}/maintenance", func(r *http.Request) (int, interface{}, error) {
+	read("GET /api/v1/hosts", func(*http.Request, *auth.Principal) (int, interface{}, error) {
+		return http.StatusOK, nonNil(c.HostStatuses()), nil
+	})
+	act("POST /api/v1/hosts/{name}/maintenance", func(r *http.Request, p *auth.Principal) (int, interface{}, error) {
 		var body struct {
 			Enabled bool   `json:"enabled"`
 			Reason  string `json:"reason"`
@@ -98,20 +105,24 @@ func New(c Controller, o Options) http.Handler {
 		if err := decode(r, &body); err != nil {
 			return 0, nil, err
 		}
-		err := c.SetMaintenance(r.PathValue("name"), body.Enabled, body.Reason)
+		err := c.SetMaintenance(r.PathValue("name"), body.Enabled, by(body.Reason, "maintenance", p))
 		return http.StatusOK, map[string]bool{"maintenance": body.Enabled}, err
 	})
-	api("GET /api/v1/windows", func(*http.Request) (int, interface{}, error) { return http.StatusOK, nonNil(c.Windows()), nil })
-	api("GET /api/v1/apps", func(*http.Request) (int, interface{}, error) { return http.StatusOK, nonNil(c.Apps()), nil })
-	api("GET /api/v1/apps/{name}", func(r *http.Request) (int, interface{}, error) {
+	read("GET /api/v1/windows", func(*http.Request, *auth.Principal) (int, interface{}, error) {
+		return http.StatusOK, nonNil(c.Windows()), nil
+	})
+	read("GET /api/v1/apps", func(*http.Request, *auth.Principal) (int, interface{}, error) {
+		return http.StatusOK, nonNil(c.Apps()), nil
+	})
+	read("GET /api/v1/apps/{name}", func(r *http.Request, _ *auth.Principal) (int, interface{}, error) {
 		st, err := c.App(r.PathValue("name"))
 		return http.StatusOK, st, err
 	})
-	api("GET /api/v1/apps/{name}/history", func(r *http.Request) (int, interface{}, error) {
+	read("GET /api/v1/apps/{name}/history", func(r *http.Request, _ *auth.Principal) (int, interface{}, error) {
 		h, err := c.History(r.PathValue("name"))
 		return http.StatusOK, h, err
 	})
-	api("GET /api/v1/apps/{name}/operations", func(r *http.Request) (int, interface{}, error) {
+	read("GET /api/v1/apps/{name}/operations", func(r *http.Request, _ *auth.Principal) (int, interface{}, error) {
 		limit, err := intParam(r, "limit")
 		if err != nil {
 			return 0, nil, err
@@ -119,11 +130,11 @@ func New(c Controller, o Options) http.Handler {
 		ops, err := c.Operations(r.PathValue("name"), limit)
 		return http.StatusOK, nonNil(ops), err
 	})
-	api("POST /api/v1/apps/{name}/sync", func(r *http.Request) (int, interface{}, error) {
-		op, err := c.Sync(r.PathValue("name"))
+	act("POST /api/v1/apps/{name}/sync", func(r *http.Request, p *auth.Principal) (int, interface{}, error) {
+		op, err := c.Sync(r.PathValue("name"), p.Name)
 		return http.StatusAccepted, op, err
 	})
-	api("POST /api/v1/apps/{name}/rollback", func(r *http.Request) (int, interface{}, error) {
+	act("POST /api/v1/apps/{name}/rollback", func(r *http.Request, p *auth.Principal) (int, interface{}, error) {
 		var body struct {
 			Revision int `json:"revision"`
 		}
@@ -133,28 +144,28 @@ func New(c Controller, o Options) http.Handler {
 		if body.Revision < 0 {
 			return 0, nil, badRequest("revision must not be negative")
 		}
-		op, err := c.Rollback(r.PathValue("name"), body.Revision)
+		op, err := c.Rollback(r.PathValue("name"), body.Revision, p.Name)
 		return http.StatusAccepted, op, err
 	})
-	api("POST /api/v1/apps/{name}/pause", func(r *http.Request) (int, interface{}, error) {
+	act("POST /api/v1/apps/{name}/pause", func(r *http.Request, p *auth.Principal) (int, interface{}, error) {
 		var body struct {
 			Reason string `json:"reason"`
 		}
 		if err := decode(r, &body); err != nil {
 			return 0, nil, err
 		}
-		err := c.Pause(r.PathValue("name"), body.Reason)
+		err := c.Pause(r.PathValue("name"), by(body.Reason, "paused", p))
 		return http.StatusOK, map[string]string{"status": "paused"}, err
 	})
-	api("POST /api/v1/apps/{name}/resume", func(r *http.Request) (int, interface{}, error) {
+	act("POST /api/v1/apps/{name}/resume", func(r *http.Request, _ *auth.Principal) (int, interface{}, error) {
 		err := c.Resume(r.PathValue("name"))
 		return http.StatusOK, map[string]string{"status": "resumed"}, err
 	})
-	api("POST /api/v1/apps/{name}/refresh", func(r *http.Request) (int, interface{}, error) {
+	act("POST /api/v1/apps/{name}/refresh", func(r *http.Request, _ *auth.Principal) (int, interface{}, error) {
 		err := c.RefreshApp(r.PathValue("name"))
 		return http.StatusAccepted, map[string]string{"status": "refresh requested"}, err
 	})
-	api("GET /api/v1/operations", func(r *http.Request) (int, interface{}, error) {
+	read("GET /api/v1/operations", func(r *http.Request, _ *auth.Principal) (int, interface{}, error) {
 		limit, err := intParam(r, "limit")
 		if err != nil {
 			return 0, nil, err
@@ -162,7 +173,7 @@ func New(c Controller, o Options) http.Handler {
 		ops, err := c.Operations("", limit)
 		return http.StatusOK, nonNil(ops), err
 	})
-	api("GET /api/v1/operations/{id}", func(r *http.Request) (int, interface{}, error) {
+	read("GET /api/v1/operations/{id}", func(r *http.Request, _ *auth.Principal) (int, interface{}, error) {
 		id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 		if err != nil {
 			return 0, nil, badRequest("invalid operation id")
@@ -170,24 +181,16 @@ func New(c Controller, o Options) http.Handler {
 		op, err := c.Operation(id)
 		return http.StatusOK, op, err
 	})
+	s.accountRoutes(read, act)
 	return s.logRequests(mux)
 }
 
-// authorized checks the bearer token, or, for GET requests, the page cookie.
-func (s *server) authorized(r *http.Request) bool {
-	if s.AuthDisabled {
-		return true
+// by adds who did something to a reason, e.g. "disk swap (by trevor)".
+func by(reason, def string, p *auth.Principal) string {
+	if reason == "" {
+		reason = def
 	}
-	if s.Token == "" {
-		return false
-	}
-	got := ""
-	if h := r.Header.Get("Authorization"); strings.HasPrefix(h, "Bearer ") {
-		got = strings.TrimPrefix(h, "Bearer ")
-	} else if c, err := r.Cookie(cookieName); err == nil && r.Method == http.MethodGet {
-		got = c.Value
-	}
-	return subtle.ConstantTimeCompare([]byte(got), []byte(s.Token)) == 1
+	return fmt.Sprintf("%s (by %s)", reason, p.Name)
 }
 
 type apiError struct {
@@ -201,21 +204,37 @@ func badRequest(format string, args ...interface{}) error {
 	return &apiError{status: http.StatusBadRequest, msg: fmt.Sprintf(format, args...)}
 }
 
-// json adapts a handler returning (status, body, error) to JSON over HTTP.
-func (s *server) json(h func(*http.Request) (int, interface{}, error)) http.HandlerFunc {
+// json serves h as JSON to principals with the need role.
+func (s *server) json(need auth.Role, h handler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if !s.authorized(r) {
-			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "missing or invalid token"})
+		p, err := s.Auth.Identify(r)
+		if err != nil {
+			if !errors.Is(err, auth.ErrUnauthenticated) {
+				s.Log.Error("authenticating a request", "path", r.URL.Path, "error", err)
+			}
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": auth.ErrUnauthenticated.Error()})
 			return
 		}
-		status, body, err := h(r)
+		if !p.Role.Allows(need) {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": fmt.Sprintf("%s: this needs the %s role", auth.ErrForbidden, need)})
+			return
+		}
+		if err := auth.CheckCSRF(r, p); err != nil {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": err.Error()})
+			return
+		}
+		status, body, err := h(r, p)
 		if err != nil {
 			var ae *apiError
 			switch {
 			case errors.As(err, &ae):
 				status = ae.status
-			case errors.Is(err, controller.ErrNotFound):
+			case errors.As(err, new(*auth.InvalidError)):
+				status = http.StatusBadRequest
+			case errors.Is(err, controller.ErrNotFound), errors.Is(err, store.ErrNotFound):
 				status = http.StatusNotFound
+			case errors.Is(err, store.ErrExists):
+				status = http.StatusConflict
 			case errors.Is(err, controller.ErrBusy), errors.Is(err, controller.ErrBlocked):
 				status = http.StatusConflict
 			default:

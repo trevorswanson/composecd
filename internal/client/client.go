@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/trevorswanson/composecd/internal/auth"
 	"github.com/trevorswanson/composecd/internal/controller"
 	"github.com/trevorswanson/composecd/internal/store"
 	"github.com/trevorswanson/composecd/internal/windows"
@@ -187,4 +188,45 @@ func (c *Client) Wait(ctx context.Context, id int64, every time.Duration) (*stor
 		case <-t.C:
 		}
 	}
+}
+
+// Me is who the client's token belongs to.
+func (c *Client) Me(ctx context.Context) (*auth.Principal, error) {
+	out := &auth.Principal{}
+	return out, c.do(ctx, "GET", "/api/v1/me", nil, out)
+}
+
+// CreateToken makes an API token and returns it.
+func (c *Client) CreateToken(ctx context.Context, name, role string) (string, error) {
+	var out struct {
+		Token string `json:"token"`
+	}
+	err := c.do(ctx, "POST", "/api/v1/tokens", map[string]string{"name": name, "role": role}, &out)
+	return out.Token, err
+}
+
+func (c *Client) Tokens(ctx context.Context) ([]*store.Token, error) {
+	var out []*store.Token
+	return out, c.do(ctx, "GET", "/api/v1/tokens", nil, &out)
+}
+
+func (c *Client) RevokeToken(ctx context.Context, name string) error {
+	return c.do(ctx, "DELETE", "/api/v1/tokens/"+url.PathEscape(name), nil, nil)
+}
+
+func (c *Client) Users(ctx context.Context) ([]*store.User, error) {
+	var out []*store.User
+	return out, c.do(ctx, "GET", "/api/v1/users", nil, &out)
+}
+
+func (c *Client) AddUser(ctx context.Context, name, role, password string) error {
+	return c.do(ctx, "POST", "/api/v1/users", map[string]string{"name": name, "role": role, "password": password}, nil)
+}
+
+func (c *Client) SetPassword(ctx context.Context, name, password string) error {
+	return c.do(ctx, "PUT", "/api/v1/users/"+url.PathEscape(name)+"/password", map[string]string{"password": password}, nil)
+}
+
+func (c *Client) DeleteUser(ctx context.Context, name string) error {
+	return c.do(ctx, "DELETE", "/api/v1/users/"+url.PathEscape(name), nil, nil)
 }

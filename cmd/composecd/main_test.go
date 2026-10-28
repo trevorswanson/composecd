@@ -18,12 +18,27 @@ import (
 	"github.com/trevorswanson/composetpl/pkg/storage"
 
 	"github.com/trevorswanson/composecd/internal/api"
+	"github.com/trevorswanson/composecd/internal/auth"
 	"github.com/trevorswanson/composecd/internal/config"
 	"github.com/trevorswanson/composecd/internal/controller"
 	"github.com/trevorswanson/composecd/internal/gitcache"
 	"github.com/trevorswanson/composecd/internal/hosts"
 	"github.com/trevorswanson/composecd/internal/store"
 )
+
+func TestMain(m *testing.M) {
+	// Never read or write the developer's own saved login.
+	dir, err := os.MkdirTemp("", "composecd-cli-test")
+	if err != nil {
+		panic(err)
+	}
+	os.Setenv("COMPOSECD_LOGIN_FILE", filepath.Join(dir, "login.yaml"))
+	os.Unsetenv("COMPOSECD_SERVER")
+	os.Unsetenv("COMPOSECD_TOKEN")
+	code := m.Run()
+	os.RemoveAll(dir)
+	os.Exit(code)
+}
 
 type fakeBackend struct {
 	dir  string
@@ -80,7 +95,8 @@ func startServer(t *testing.T) (*httptest.Server, *controller.Controller, *compo
 		Store: st, Log: log,
 	})
 	c.RefreshAll(context.Background())
-	srv := httptest.NewServer(api.New(c, api.Options{Token: "test-token-0123456789", Version: "test", Log: log}))
+	authn := &auth.Authenticator{Store: st, AdminToken: "test-token-0123456789"}
+	srv := httptest.NewServer(api.New(c, api.Options{Auth: authn, Version: "test", Log: log}))
 	// Cleanups run last-registered first: stop serving, then let background
 	// operations (app refresh, resume) finish before the temp dirs are removed.
 	// On Windows, files a running git still holds can't be deleted.
@@ -146,8 +162,8 @@ func TestCLIAgainstServer(t *testing.T) {
 	mustCLI(t, srv, "app", "diff", "dashboard", "--exit-code")
 
 	expect(t, mustCLI(t, srv, "app", "history", "whoami"), "REVISION", "1 ", "deployed", "composecd sync to")
-	expect(t, mustCLI(t, srv, "app", "operations", "dashboard"), "sync", "manual", "Succeeded")
-	expect(t, mustCLI(t, srv, "operation", "list"), "APP", "whoami", "auto", "dashboard", "manual")
+	expect(t, mustCLI(t, srv, "app", "operations", "dashboard"), "sync", "admin", "Succeeded")
+	expect(t, mustCLI(t, srv, "operation", "list"), "APP", "whoami", "auto", "dashboard", "admin")
 	expect(t, mustCLI(t, srv, "operation", "get", "1", "-o", "json"), `"app": "whoami"`, `"phase": "Succeeded"`)
 	expect(t, mustCLI(t, srv, "host", "list"), "nas", "Up", "29.0.0", "2.30.0")
 
@@ -227,4 +243,75 @@ func TestAdminToken(t *testing.T) {
 	if got, _ := adminToken(boot, log); got != "" {
 		t.Errorf("disabled: %q", got)
 	}
+}
+
+// cliIn runs the CLI with stdin, and only the flags given.
+func cliIn(t *testing.T, stdin string, args ...string) (string, error) {
+	t.Helper()
+	cmd := newRootCmd()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetIn(strings.NewReader(stdin))
+	cmd.SetArgs(args)
+	err := cmd.Execute()
+	return out.String(), err
+}
+
+func TestAccountsCLI(t *testing.T) {
+	srv, _, _ := startServer(t)
+	admin := []string{"--server", srv.URL, "--token", "test-token-0123456789"}
+	run := func(stdin string, args ...string) string {
+		t.Helper()
+		out, err := cliIn(t, stdin, append(append([]string{}, admin...), args...)...)
+		if err != nil {
+			t.Fatalf("composecd %v: %v\n%s", args, err, out)
+		}
+		return out
+	}
+
+	tok := strings.TrimSpace(run("", "token", "create", "grafana"))
+	if !strings.HasPrefix(tok, "ccd_") {
+		t.Fatalf("token = %q", tok)
+	}
+	expect(t, run("", "token", "list"), "NAME", "grafana", "readonly", "admin")
+	expect(t, run("long enough password\n", "user", "add", "kid", "--role", "readonly"), "User kid (readonly) added")
+	expect(t, run("", "user", "list"), "kid", "readonly")
+	expect(t, run("another long password\n", "user", "passwd", "kid"), "Password of kid changed")
+	if out, err := cliIn(t, "short\n", append(append([]string{}, admin...), "user", "add", "x")...); err == nil || !strings.Contains(err.Error(), "at least 10") {
+		t.Errorf("short password: %v %s", err, out)
+	}
+
+	// login checks and saves the token; later commands need no flags.
+	out, err := cliIn(t, tok+"\n", "--server", srv.URL, "login")
+	if err != nil {
+		t.Fatalf("login: %v\n%s", err, out)
+	}
+	expect(t, out, "Signed in to "+srv.URL+" as grafana (readonly)")
+	out, err = cliIn(t, "", "whoami")
+	if err != nil {
+		t.Fatalf("whoami: %v", err)
+	}
+	expect(t, out, "grafana (readonly, via token) on "+srv.URL)
+	if _, err := cliIn(t, "", "app", "list"); err != nil {
+		t.Errorf("app list with the saved login: %v", err)
+	}
+	if _, err := cliIn(t, "", "app", "sync", "whoami"); err == nil || !strings.Contains(err.Error(), "admin role") {
+		t.Errorf("readonly sync: %v", err)
+	}
+	if _, err := cliIn(t, "wrong-token\n", "--server", srv.URL, "login"); err == nil {
+		t.Error("login with a bad token succeeded")
+	}
+	expect(t, run("", "token", "revoke", "grafana"), "Token grafana revoked")
+	if _, err := cliIn(t, "", "whoami"); err == nil {
+		t.Error("revoked saved token still works")
+	}
+	if out, _ := cliIn(t, "", "logout"); !strings.Contains(out, "Signed out") {
+		t.Errorf("logout: %s", out)
+	}
+	expect(t, run("", "user", "delete", "kid"), "User kid deleted")
+
+	// Operations record who ran them.
+	run("", "app", "sync", "dashboard")
+	expect(t, run("", "app", "operations", "dashboard"), "admin")
 }

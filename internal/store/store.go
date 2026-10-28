@@ -37,6 +37,8 @@ type Operation struct {
 	App     string `json:"app"`
 	Kind    string `json:"kind"`
 	Trigger string `json:"trigger"`
+	// User is who started a manual operation ("" for automatic ones).
+	User string `json:"user,omitempty"`
 	// SourceRevision is the Git commit synced ("" for an oci:// chart or a rollback).
 	SourceRevision string `json:"sourceRevision,omitempty"`
 	// ReleaseRevision is the composetpl revision the operation created.
@@ -74,6 +76,30 @@ CREATE TABLE IF NOT EXISTS operations (
 	finished_at      TEXT
 );
 CREATE INDEX IF NOT EXISTS operations_app ON operations (app, id);
+CREATE TABLE IF NOT EXISTS users (
+	name          TEXT PRIMARY KEY,
+	role          TEXT NOT NULL,
+	password_hash TEXT NOT NULL,
+	created_at    TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS tokens (
+	id           TEXT PRIMARY KEY,
+	name         TEXT NOT NULL UNIQUE,
+	role         TEXT NOT NULL,
+	secret_hash  TEXT NOT NULL,
+	created_by   TEXT NOT NULL DEFAULT '',
+	created_at   TEXT NOT NULL,
+	last_used_at TEXT
+);
+CREATE TABLE IF NOT EXISTS sessions (
+	id_hash      TEXT PRIMARY KEY,
+	user         TEXT NOT NULL,
+	role         TEXT NOT NULL,
+	via          TEXT NOT NULL,
+	csrf         TEXT NOT NULL,
+	created_at   TEXT NOT NULL,
+	last_seen_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS host_state (
 	host               TEXT PRIMARY KEY,
 	maintenance        INTEGER NOT NULL DEFAULT 0,
@@ -102,6 +128,10 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("initializing %s: %w", path, err)
 	}
+	if err := migrate(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrating %s: %w", path, err)
+	}
 	if err := os.Chmod(path, 0o600); err != nil {
 		db.Close()
 		return nil, err
@@ -115,6 +145,37 @@ func Open(path string) (*Store, error) {
 	return s, nil
 }
 
+// migrate brings databases created by older versions up to the current schema.
+func migrate(db *sql.DB) error {
+	cols, err := columns(db, "operations")
+	if err != nil {
+		return err
+	}
+	if !cols["user"] {
+		if _, err := db.Exec(`ALTER TABLE operations ADD COLUMN user TEXT NOT NULL DEFAULT ''`); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func columns(db *sql.DB, table string) (map[string]bool, error) {
+	rows, err := db.Query(`SELECT name FROM pragma_table_info(?)`, table)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]bool{}
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		out[name] = true
+	}
+	return out, rows.Err()
+}
+
 // Close closes the database.
 func (s *Store) Close() error { return s.db.Close() }
 
@@ -124,8 +185,8 @@ func (s *Store) StartOperation(op *Operation) error {
 	if op.StartedAt.IsZero() {
 		op.StartedAt = time.Now()
 	}
-	res, err := s.db.Exec(`INSERT INTO operations (app, kind, trigger, source_revision, phase, started_at) VALUES (?, ?, ?, ?, ?, ?)`,
-		op.App, op.Kind, op.Trigger, op.SourceRevision, op.Phase, formatTime(op.StartedAt))
+	res, err := s.db.Exec(`INSERT INTO operations (app, kind, trigger, user, source_revision, phase, started_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		op.App, op.Kind, op.Trigger, op.User, op.SourceRevision, op.Phase, formatTime(op.StartedAt))
 	if err != nil {
 		return err
 	}
@@ -183,7 +244,7 @@ func (s *Store) query(withLog bool, where string, args ...interface{}) ([]*Opera
 		logCol = `log`
 	}
 	// logCol and where are constants from this file; values are bound parameters.
-	rows, err := s.db.Query(`SELECT id, app, kind, trigger, source_revision, release_revision, phase, message, `+logCol+ //nolint:gosec // see above
+	rows, err := s.db.Query(`SELECT id, app, kind, trigger, user, source_revision, release_revision, phase, message, `+logCol+ //nolint:gosec // see above
 		`, started_at, finished_at FROM operations `+where, args...)
 	if err != nil {
 		return nil, err
@@ -194,7 +255,7 @@ func (s *Store) query(withLog bool, where string, args ...interface{}) ([]*Opera
 		op := &Operation{}
 		var started string
 		var finished sql.NullString
-		if err := rows.Scan(&op.ID, &op.App, &op.Kind, &op.Trigger, &op.SourceRevision, &op.ReleaseRevision,
+		if err := rows.Scan(&op.ID, &op.App, &op.Kind, &op.Trigger, &op.User, &op.SourceRevision, &op.ReleaseRevision,
 			&op.Phase, &op.Message, &op.Log, &started, &finished); err != nil {
 			return nil, err
 		}
