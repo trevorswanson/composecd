@@ -157,6 +157,9 @@ func (c *Controller) assess(ctx context.Context, app *config.Application, fetchE
 	if deployed == nil {
 		reasons = append(reasons, "not deployed")
 	} else {
+		if deployed.Labels[LabelManagedBy] != ManagedBy || deployed.Labels[LabelApp] != name {
+			reasons = append(reasons, "release is not yet managed by this Application")
+		}
 		if owner != deployed.Labels[LabelApplicationSet] {
 			reasons = append(reasons, "ApplicationSet ownership changed")
 		}

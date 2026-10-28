@@ -34,6 +34,8 @@ type Controller interface {
 	Operations(string, int) ([]*store.Operation, error)
 	Operation(int64) (*store.Operation, error)
 	HostStatuses() []controller.HostStatus
+	Unmanaged(context.Context, string) (*controller.Unmanaged, error)
+	Adopt(context.Context, string, string) (*controller.Adoption, error)
 	Root() controller.RootStatus
 	Windows() []windows.Status
 	Sync(string, string) (*store.Operation, error)
@@ -67,6 +69,9 @@ type Data struct {
 	History                                                    []controller.Release
 	Users                                                      []*store.User
 	Tokens                                                     []*store.Token
+	Unmanaged                                                  map[string]*controller.Unmanaged
+	DiscoveryErrors                                            map[string]string
+	Adoption                                                   *controller.Adoption
 	Filters                                                    url.Values
 }
 
@@ -101,6 +106,7 @@ func (s *Server) Register(mux *http.ServeMux) {
 	for _, route := range []string{"/{$}", "/apps", "/apps/{name}", "/hosts", "/windows", "/operations", "/settings", "/applicationsets"} {
 		mux.HandleFunc("GET "+route, s.Page)
 	}
+	mux.HandleFunc("GET /hosts/{name}/adopt/{release}", s.Adopt)
 	mux.HandleFunc("POST /ui/apps/{name}/{action}", s.Action)
 	mux.HandleFunc("POST /ui/hosts/{name}/maintenance", s.Action)
 	mux.HandleFunc("POST /ui/settings/{action}", s.Action)
@@ -181,6 +187,19 @@ func (s *Server) data(r *http.Request, p *auth.Principal) (*Data, error) {
 		d.ApplicationSets = s.C.ApplicationSets()
 	case "hosts":
 		d.Hosts = s.C.HostStatuses()
+		d.Unmanaged = map[string]*controller.Unmanaged{}
+		d.DiscoveryErrors = map[string]string{}
+		for _, h := range d.Hosts {
+			if h.Retired {
+				continue
+			}
+			inventory, err := s.C.Unmanaged(r.Context(), h.Name)
+			if err != nil {
+				d.DiscoveryErrors[h.Name] = err.Error()
+			} else {
+				d.Unmanaged[h.Name] = inventory
+			}
+		}
 	case "windows":
 		d.Windows = s.C.Windows()
 	case "operations":
@@ -284,7 +303,7 @@ func pageError(w http.ResponseWriter, err error) {
 		code = http.StatusBadRequest
 	case errors.Is(err, controller.ErrNotFound), errors.Is(err, store.ErrNotFound):
 		code = 404
-	case errors.Is(err, controller.ErrBusy), errors.Is(err, controller.ErrBlocked), errors.Is(err, store.ErrExists):
+	case errors.Is(err, controller.ErrBusy), errors.Is(err, controller.ErrBlocked), errors.Is(err, controller.ErrAdoptionBlocked), errors.Is(err, store.ErrExists):
 		code = 409
 	}
 	http.Error(w, err.Error(), code)
@@ -387,3 +406,17 @@ func (s *Server) Action(w http.ResponseWriter, r *http.Request) {
 type invalidRequest string
 
 func (e invalidRequest) Error() string { return string(e) }
+
+// Adopt previews a sensitive YAML export; generating it changes no state.
+func (s *Server) Adopt(w http.ResponseWriter, r *http.Request) {
+	p := s.identify(w, r, auth.RoleAdmin)
+	if p == nil {
+		return
+	}
+	adoption, err := s.C.Adopt(r.Context(), r.PathValue("name"), r.PathValue("release"))
+	if err != nil {
+		pageError(w, err)
+		return
+	}
+	render(w, 200, "page", &Data{User: p, Admin: true, Page: "adopt", Root: s.C.Root(), Version: s.Version, Adoption: adoption})
+}

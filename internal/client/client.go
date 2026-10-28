@@ -235,3 +235,13 @@ func (c *Client) ApplicationSets(ctx context.Context) ([]controller.ApplicationS
 	var out []controller.ApplicationSetStatus
 	return out, c.do(ctx, "GET", "/api/v1/applicationsets", nil, &out)
 }
+
+func (c *Client) Unmanaged(ctx context.Context, host string) (*controller.Unmanaged, error) {
+	out := &controller.Unmanaged{}
+	return out, c.do(ctx, "GET", "/api/v1/hosts/"+url.PathEscape(host)+"/unmanaged", nil, out)
+}
+
+func (c *Client) Adopt(ctx context.Context, host, release string) (*controller.Adoption, error) {
+	out := &controller.Adoption{}
+	return out, c.do(ctx, "GET", "/api/v1/hosts/"+url.PathEscape(host)+"/adopt/"+url.PathEscape(release), nil, out)
+}
