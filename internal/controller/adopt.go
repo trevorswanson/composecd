@@ -255,5 +255,5 @@ func (c *Controller) adoptionChartPath(ctx context.Context, ref string) string {
 }
 
 func confinedPath(p string) bool {
-	return !filepath.IsAbs(p) && p != ".." && !strings.HasPrefix(p, ".."+string(filepath.Separator)) && !strings.Contains(p, `\`)
+	return filepath.IsLocal(p) && !strings.Contains(filepath.ToSlash(p), `\`)
 }
