@@ -178,7 +178,7 @@ func releasesDir(e *env) string {
 func itApp(name, chart, automated string) string {
 	return "apiVersion: composecd/v1alpha1\nkind: Application\nmetadata: {name: " + name + "}\nspec:\n" +
 		"  source: {path: charts/" + chart + "}\n  destination: {host: local}\n" +
-		"  syncPolicy: {automated: " + automated + ", options: {timeout: 2m}}\n"
+		"  syncPolicy: {automated: " + automated + ", options: {timeout: 2m}}\n---\n"
 }
 
 // composetpl runs the composetpl CLI, built from the version composecd uses.
@@ -242,8 +242,13 @@ func TestIntegrationUpgradeRunsHooks(t *testing.T) {
 	if st.Sync.Status != Synced || st.Release.Revision != 2 || st.Operation == nil || st.Operation.Phase != store.PhaseSucceeded {
 		t.Fatalf("after upgrade: sync %+v release %+v op %+v", st.Sync, st.Release, st.Operation)
 	}
-	if !strings.Contains(st.Operation.Log, "Running pre-upgrade hook migrate") {
-		t.Errorf("the pre-upgrade hook didn't run:\n%s", st.Operation.Log)
+	// The status's operation has no log; read it from the store.
+	op, err := e.c.Store.Operation(st.Operation.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(op.Log, "Running pre-upgrade hook migrate") {
+		t.Errorf("the pre-upgrade hook didn't run:\n%s", op.Log)
 	}
 	if got := docker(t, "exec", name+"-box-1", "cat", "/etc/greeting"); got != "bonjour" {
 		t.Errorf("/etc/greeting = %q", got)
@@ -328,6 +333,9 @@ func TestIntegrationPruneKeepsVolumes(t *testing.T) {
 	keep := itApp(name+"-keep", "box", "null")
 	e.apps(itApp(name, "box", "{prune: true}"), keep)
 	e.refresh()
+	if st := e.app(name); st.Sync.Status != Synced {
+		t.Fatalf("not deployed: sync %+v error %q", st.Sync, st.Error)
+	}
 	volume := name + "_data"
 	docker(t, "exec", name+"-box-1", "touch", "/data/kept")
 
