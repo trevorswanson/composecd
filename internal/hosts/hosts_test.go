@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -127,5 +129,45 @@ func TestPingAndInvalidate(t *testing.T) {
 	h.Store()
 	if b.built != 2 {
 		t.Errorf("store not rebuilt after invalidate: %d", b.built)
+	}
+}
+
+func (b *pingBackend) Logs(context.Context, *Host, string, int, bool, io.Writer) error { return nil }
+
+func TestCLILogs(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses a shell script as a fake docker")
+	}
+	dir := t.TempDir()
+	script := `#!/bin/sh
+printf '%s\n' "$@"
+printf 'env:%s\n' "$LOG_TEST"
+printf 'stderr\n' >&2
+`
+	if err := os.WriteFile(filepath.Join(dir, "docker"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	r := NewRegistry(&CLI{})
+	r.Sync([]*config.Host{host("test", config.HostSpec{Context: "remote", Env: map[string]string{"LOG_TEST": "present"}})})
+	var out strings.Builder
+	err := r.Backend.Logs(context.Background(), r.Get("test"), "web-1", 200, true, &out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"--context\nremote\nlogs\n--tail\n200\n--follow\n--\nweb-1", "env:present", "stderr"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("missing %s: %s", want, &out)
+		}
+	}
+	for _, name := range []string{"", "--help"} {
+		if err := r.Backend.Logs(context.Background(), r.Get("test"), name, 200, false, io.Discard); err == nil {
+			t.Fatal("accepted bad name")
+		}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := r.Backend.Logs(ctx, r.Get("test"), "web-1", 200, false, io.Discard); err == nil {
+		t.Fatal("ignored cancellation")
 	}
 }

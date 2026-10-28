@@ -34,6 +34,7 @@ func (c *Controller) startOperation(app, kind, trigger, revision, user string) (
 		return nil, err
 	}
 	c.running[app] = op.ID
+	c.publish("operation", app)
 	return op, nil
 }
 
@@ -58,6 +59,7 @@ func (c *Controller) finishOperation(app string, op *store.Operation) {
 		host = s.status.Host
 	}
 	c.mu.Unlock()
+	c.publish("operation", app)
 	c.Log.Info("operation finished", "app", app, "id", op.ID, "kind", op.Kind, "trigger", op.Trigger,
 		"user", op.User, "phase", op.Phase, "message", op.Message)
 
@@ -289,6 +291,7 @@ func (c *Controller) Resume(name string) error {
 		s.status.Paused, s.status.PausedReason = false, ""
 	}
 	c.mu.Unlock()
+	c.publish("app", name)
 	c.reconcileAsync(app, true)
 	return nil
 }
@@ -321,6 +324,7 @@ func (c *Controller) reconcileAsync(app *config.Application, fetch bool) {
 }
 
 func (c *Controller) updateStatus(name string, f func(*AppStatus)) {
+	defer c.publish("app", name)
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if s, ok := c.apps[name]; ok {

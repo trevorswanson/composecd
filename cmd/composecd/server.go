@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -42,7 +43,7 @@ func newServerCmd() *cobra.Command {
 		Long: `Run the controller: every refresh interval it fetches the root of the GitOps
 repository, reads the Host and Application objects there, and reconciles each
 Application with its composetpl release, syncing automated ones. It also serves
-the REST API, a status page on / and /healthz.
+the REST API, the web UI on / and /healthz.
 
 The configuration file (--config, $COMPOSECD_CONFIG) names the root and holds
 credentials; see the README for its format.`,
@@ -142,6 +143,8 @@ func runServer(parent context.Context, boot *config.Bootstrap, log *slog.Logger)
 		Addr:              boot.Listen,
 		Handler:           api.New(ctrl, api.Options{Auth: authn, WebhookSecret: webhookSecret, Version: version, Log: log}),
 		ReadHeaderTimeout: 10 * time.Second,
+		// Cancel SSE requests and docker log follows when the server stops.
+		BaseContext: func(net.Listener) context.Context { return ctx },
 	}
 	errc := make(chan error, 1)
 	go func() {

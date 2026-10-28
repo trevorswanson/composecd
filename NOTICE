@@ -28,3 +28,9 @@ their own licenses: BSD-3-Clause (e.g. modernc.org/sqlite, pflag,
 golang.org/x/*), MIT (e.g. Sprig, semver, sigs.k8s.io/yaml) and Apache-2.0
 (e.g. cobra, oras-go, opencontainers). See each module's LICENSE file, e.g.
 with `go mod download` under $(go env GOMODCACHE).
+
+The embedded web UI vendors htmx 2.0.11 (https://htmx.org) and the htmx SSE
+extension 2.2.4 (https://github.com/bigskysoftware/htmx-extensions), both under
+the Zero-Clause BSD (0BSD) license. The upstream license texts are included in
+internal/web/static/HTMX-LICENSE and internal/web/static/SSE-LICENSE. Browser
+assets are served locally; see internal/web/static/README.md for pinned sources.

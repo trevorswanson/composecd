@@ -48,6 +48,7 @@ type Options struct {
 // Controller reconciles every Application.
 type Controller struct {
 	Options
+	changes subscriptions
 
 	// ctx is the Run context; operations started from the API use it.
 	ctx       context.Context
@@ -304,6 +305,7 @@ func (c *Controller) RefreshAll(ctx context.Context) {
 			defer wg.Done()
 			h.Invalidate()
 			prev := h.Status().State
+			defer c.publish("host", h.Name())
 			if s := h.Ping(ctx); s.State != hosts.StateUp {
 				c.Log.Warn("host is down", "host", s.Name, "error", s.Error)
 				if prev == hosts.StateUp {
@@ -357,6 +359,7 @@ func (c *Controller) RefreshAll(ctx context.Context) {
 	}
 	c.prune(ctx, objs, fresh)
 	c.pruneCheckouts(sha)
+	c.publish("app", "")
 }
 
 // loadRoot fetches the root repository and reads the objects at its revision.
@@ -456,6 +459,7 @@ func (c *Controller) setStatus(st *AppStatus) {
 	prev := s.status
 	s.status = *st
 	c.mu.Unlock()
+	c.publish("app", st.Name)
 	if !ok || prev.Name == "" {
 		return
 	}
@@ -544,6 +548,7 @@ func (c *Controller) SetMaintenance(host string, on bool, reason string) error {
 	if err := c.Store.SetMaintenance(host, on, reason); err != nil {
 		return err
 	}
+	c.publish("host", host)
 	if !on {
 		// Catch up on whatever maintenance held back.
 		c.mu.RLock()

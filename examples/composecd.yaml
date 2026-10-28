@@ -1,5 +1,7 @@
 # composecd's own configuration. Everything else (hosts, applications) lives in
 # Git, under root.path of root.repoURL.
+# Open this address for the embedded UI: /apps, /hosts, /windows, /operations, /settings.
+# Reverse proxies must allow long-lived SSE and disable buffering for /events and log endpoints.
 listen: ":8080"
 dataDir: /var/lib/composecd
 refreshInterval: 3m

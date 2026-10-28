@@ -268,6 +268,7 @@ Every `/api/v1` endpoint needs `Authorization: Bearer <token>`, or a browser ses
 | Endpoint | |
 | --- | --- |
 | `GET /api/v1/apps`, `GET /api/v1/apps/{name}` | Status |
+| `GET /api/v1/apps/{name}/containers/{container}/logs?follow=1&tail=200` | Container log SSE stream (readonly; tail 0–10000) |
 | `GET /api/v1/apps/{name}/history`, `GET /api/v1/apps/{name}/operations` | History |
 | `POST /api/v1/apps/{name}/sync`, `.../rollback` (`{"revision": N}`) | Start an operation (202, returns it) |
 | `POST /api/v1/apps/{name}/pause` (`{"reason": "..."}`), `.../resume`, `.../refresh` | |
@@ -316,7 +317,7 @@ There are four ways to authenticate:
   Register composecd with your provider as an OAuth2/OpenID client with that redirect URL. It uses the
   authorization code flow with PKCE.
 
-**The web page.** It signs you in with a user name and password, through your identity provider, or with an API
+**The web UI.** It signs you in with a user name and password, through your identity provider, or with an API
 token pasted as the password (leave the user name empty).
 - A sign-in starts a server-side session. The cookie is `HttpOnly` and `SameSite=Lax`, and only its hash is
   stored. A session ends after 7 days idle, and after 30 days at most.
@@ -325,6 +326,37 @@ token pasted as the password (leave the user name empty).
 
 **The CLI.** `composecd login` saves the server and a token in `composecd/login.yaml`, in your user config
 directory (`~/.config` on Linux), readable only by you. `--server`/`--token` and `$COMPOSECD_SERVER`/`$COMPOSECD_TOKEN` take precedence over it.
+
+## Web UI
+
+Open the server URL to sign in. The UI and its pinned htmx/SSE scripts are embedded in the binary;
+there is no CDN or Node build step.
+
+- **Applications** (`/apps`): filter by host, sync, health, or a label (`key` or `key=value`).
+- **Application details** (`/apps/NAME`): summary, containers and live log tails, colorized resource diffs,
+  release history with rollback, and operations with their output. Admins can sync, pause, resume and refresh.
+- **Hosts** (`/hosts`): connectivity, Docker/Compose versions, orphaned releases and admin maintenance toggles.
+  Unmanaged project discovery and adoption arrive in Phase 3f.
+- **Sync windows** (`/windows`): open/closed state, next change, and matching applications.
+- **Operations** (`/operations`): the latest 50 operations across applications, including who acted and output.
+- **Settings** (`/settings`): your identity; admins can create/revoke tokens and add/delete users or change
+  passwords. A newly created token is shown once.
+
+Pages are server-rendered and readable without JavaScript; actions also accept ordinary forms. With
+JavaScript enabled, authenticated `GET /events` delivers `app`, `host` and `operation` SSE events containing
+HTML panels swapped with `hx-swap-oob`. Reconnecting clients receive a fresh snapshot. Changes never block
+reconciliation, even if a browser is slow. Log tails stay connected when other panels update.
+
+The log endpoint checks a fresh compose project listing and its project label before streaming; a container
+from another project is refused. Log lines, diffs and displayed operation output mask configured inline value
+leaves and environment values of four characters or more. Values from encrypted files join this masking in
+Phase 3c. Masking is best effort: short values and transformed values (for example base64) may remain visible.
+Readonly users can view these outputs. Light/dark styling follows your system preference, and tables scroll
+inside their panels at phone widths.
+
+For a reverse proxy, allow long-lived SSE responses and disable response buffering on `/events` and log
+endpoints (`X-Accel-Buffering: no` is sent). Stream connections recheck credentials periodically so revoked
+sessions stop receiving updates.
 
 ## Webhooks, notifications and metrics
 
@@ -399,7 +431,8 @@ The events are `sync-succeeded`, `sync-failed` (which also covers failed rollbac
 | Retry with backoff | `syncPolicy.retry` |
 | Git webhooks, notifications, metrics | Same; native ntfy, Gotify, Discord, Slack and webhook notifiers |
 | — | Host maintenance mode; reconciles on Docker events |
-| ApplicationSets, multi-source apps, SOPS, web UI, SSO, image updater | Planned; see [docs/PLAN.md](docs/PLAN.md) |
+| Web UI, roles, local sign-in and SSO | Embedded htmx UI with SSE, local users, API tokens and OIDC |
+| ApplicationSets, multi-source apps, SOPS, adoption, image updater | Planned; see [docs/PLAN.md](docs/PLAN.md) |
 
 ## Development
 

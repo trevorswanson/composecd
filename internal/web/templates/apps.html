@@ -1,0 +1,24 @@
+{{define "apps"}}<div class="card"><table><thead><tr><th>Name</th><th>Host</th><th>Sync</th><th>Health</th><th>Revision</th><th>Last operation</th></tr></thead><tbody>
+{{range .Apps}}<tr><td><a href="/apps/{{path .Name}}"><strong>{{.Name}}</strong></a>{{if .Automated}} <span class="muted">auto</span>{{end}}{{if .Paused}} <span class="badge suspended" title="{{.PausedReason}}">paused</span>{{end}}{{with .Error}}<div class="error">{{.}}</div>{{end}}</td>
+<td>{{.Host}}</td><td><span class="badge {{lower .Sync.Status}}">{{.Sync.Status}}</span>{{range .Sync.Reasons}}<div class="muted">{{.}}</div>{{end}}{{with .Blocked}}<div class="muted">waiting: {{.}}</div>{{end}}</td>
+<td><span class="badge {{lower .Health.Status}}">{{.Health.Status}}</span>{{with .Health.Message}}<div class="muted">{{.}}</div>{{end}}</td><td><code>{{short .Sync.Revision}}</code>{{with .Release}}<div>release rev {{.Revision}} · {{.Chart}}</div>{{end}}</td><td>{{with .Operation}}<span class="badge {{lower .Phase}}">{{.Phase}}</span> {{.Kind}} ({{.Trigger}}){{else}}none{{end}}</td></tr>
+{{else}}<tr><td colspan="6">No applications match these filters.</td></tr>{{end}}</tbody></table></div>{{end}}
+
+{{define "detail"}}
+{{if eq .Tab "summary"}}<div class="card"><dl>
+<dt>Host</dt><dd>{{.App.Host}}</dd><dt>Source</dt><dd><code>{{.App.Source.RepoURL}} {{.App.Source.Path}} {{.App.Source.Chart}} {{.App.Source.Version}}</code> @ {{.App.Source.TargetRevision}}</dd>
+<dt>Definition</dt><dd>{{.App.Origin}}</dd><dt>Desired revision</dt><dd>{{.App.Sync.Revision}}</dd><dt>Deployed revision</dt><dd>{{.App.Sync.DeployedRevision}}</dd>
+<dt>Sync</dt><dd>{{.App.Sync.Status}}{{range .App.Sync.Reasons}}<p>{{.}}</p>{{end}}</dd><dt>Health</dt><dd>{{.App.Health.Status}} {{.App.Health.Message}}</dd>
+<dt>Automation</dt><dd>{{if .App.Automated}}enabled{{else}}manual{{end}}{{if .App.Paused}} · paused: {{.App.PausedReason}}{{end}}{{with .App.Blocked}} · waiting: {{.}}{{end}}</dd>
+<dt>Dependencies</dt><dd>{{range .App.DependsOn}}<a href="/apps/{{path .}}">{{.}}</a> {{else}}none{{end}}</dd>
+<dt>Retry</dt><dd>{{with .App.Retry}}{{.Failures}} failures / {{.Limit}} retries; next: {{if .NextAt.IsZero}}no retry scheduled{{else}}{{.NextAt}}{{end}}{{else}}none{{end}}</dd>
+<dt>Reconciled</dt><dd>{{.App.ReconciledAt}}</dd>{{with .App.Error}}<dt>Error</dt><dd class="error">{{.}}</dd>{{end}}</dl></div>{{end}}
+{{if eq .Tab "containers"}}<div class="card"><table><thead><tr><th>Container / service</th><th>State</th><th>Health</th><th>Image</th><th>Logs</th></tr></thead><tbody>
+{{range .App.Health.Containers}}<tr><td>{{.Name}}<div class="muted">{{.Service}}</div></td><td>{{.State}}</td><td>{{.Health}}</td><td><code>{{.Image}}</code></td><td><a href="/apps/{{path $.Name}}?tab=containers&amp;container={{.Name}}">View tail</a></td></tr>{{else}}<tr><td colspan="5">No containers.</td></tr>{{end}}
+</tbody></table></div>
+{{end}}
+{{if eq .Tab "diff"}}{{range .App.Sync.Changes}}<h2>{{.Resource}} · {{.Op}}</h2><pre class="card diff">{{range lines .Diff}}<span class="{{lineClass .}}">{{.}}</span>{{end}}</pre>{{else}}<p>No resource differences.</p>{{end}}
+{{range .App.Sync.Drift}}<p>{{.Service}}: {{.Reason}}</p>{{end}}{{end}}
+{{if eq .Tab "history"}}<div class="card"><table><thead><tr><th>Revision</th><th>Status</th><th>Chart</th><th>Deployed</th><th>Description</th>{{if .Admin}}<th>Action</th>{{end}}</tr></thead><tbody>{{range .History}}<tr><td>{{.Revision}}</td><td>{{.Status}}</td><td>{{.Chart}}</td><td>{{.LastDeployed}}</td><td>{{.Description}}</td>{{if $.Admin}}<td><form method="post" action="/ui/apps/{{path $.Name}}/rollback" hx-post="/ui/apps/{{path $.Name}}/rollback" hx-target="#action-result" hx-confirm="Roll back to revision {{.Revision}}? Automated sync will pause."><input type="hidden" name="csrf" value="{{$.User.CSRF}}"><input type="hidden" name="revision" value="{{.Revision}}"><button type="submit">Rollback</button></form></td>{{end}}</tr>{{else}}<tr><td colspan="6">No release history.</td></tr>{{end}}</tbody></table></div>{{end}}
+{{if eq .Tab "operations"}}{{template "operations" .}}{{end}}
+{{end}}
