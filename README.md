@@ -349,14 +349,63 @@ reconciliation, even if a browser is slow. Log tails stay connected when other p
 
 The log endpoint checks a fresh compose project listing and its project label before streaming; a container
 from another project is refused. Log lines, diffs and displayed operation output mask configured inline value
-leaves and environment values of four characters or more. Values from encrypted files join this masking in
-Phase 3c. Masking is best effort: short values and transformed values (for example base64) may remain visible.
+leaves and environment values of four characters or more. SOPS-decrypted values are masked too. Masking is
+best effort: short values and transformed values (for example base64) may remain visible.
 Readonly users can view these outputs. Light/dark styling follows your system preference, and tables scroll
 inside their panels at phone widths.
 
 For a reverse proxy, allow long-lived SSE responses and disable response buffering on `/events` and log
 endpoints (`X-Accel-Buffering: no` is sent). Stream connections recheck credentials periodically so revoked
 sessions stop receiving updates.
+
+## Encrypted values with SOPS
+
+Set `sopsAgeKeyFile` in the server's `composecd.yaml` and mount your age identity read-only:
+
+```yaml
+sopsAgeKeyFile: /run/secrets/sops-age-key
+```
+
+The container image includes checksum-verified SOPS **3.13.3** for amd64 and arm64. Outside the image,
+install the [SOPS CLI](https://github.com/getsops/sops/releases) on the server's `PATH` and generate your
+own identity with [age-keygen](https://github.com/FiloSottile/age). Keep the identity outside Git. Encrypt
+values with its public recipient, then list the encrypted file alongside regular values files:
+
+```sh
+sops --encrypt --age YOUR_AGE_RECIPIENT values.yaml > values.sops.yaml
+```
+
+```yaml
+spec:
+  source:
+    path: charts/media
+    valueFiles: [values-nas.yaml, values.sops.yaml]
+```
+
+Files named `*.sops.yaml` / `*.sops.yml`, or containing top-level `sops:` metadata, are decrypted through
+`sops --decrypt --output-type yaml --input-type yaml FILE`. Stdout is parsed in memory; no decrypted
+values file is created in the checkout. File order and inline overrides work as before. Missing keys,
+missing SOPS, malformed metadata and decryption errors make the app's sync state `Unknown`, naming the
+values file. Raw SOPS diagnostics are suppressed because they can contain sensitive data.
+
+`composecd validate DIR` checks that encrypted filenames have SOPS metadata without decrypting them.
+It also checks local referenced values in sibling chart directories when it can find the surrounding Git
+root. External source repositories are checked when the controller prepares them. SOPS' own `.sops.yaml`
+creation-rules file is left alone.
+
+Decrypted scalar values of four characters or more are masked with `••••••` in diffs, API/UI output,
+operation output and errors, container logs, and notifications. Old values remain masked after rotation;
+retained release history restores that knowledge after restart. Operation logs are masked before SQLite
+storage. Application and container names remain usable as routing identifiers. Masking is best effort:
+short values and transformed values (base64, URLs, escaping, etc.) can still be visible.
+
+**Deployed values stay plain.** Composetpl stores user values and rendered manifests on each host; Docker
+and the containers also receive the plain values. Protect the release volume/local release directory and
+Docker access. Masking does not encrypt those records, and after old history is purged, a restarted
+controller can only recover secrets from the values and history still available.
+
+[The example](examples/sops/README.md) includes a disposable public test identity, a real encrypted values
+file, and an optional demo Application. Use your own identity for real secrets.
 
 ## Webhooks, notifications and metrics
 
@@ -431,8 +480,9 @@ The events are `sync-succeeded`, `sync-failed` (which also covers failed rollbac
 | Retry with backoff | `syncPolicy.retry` |
 | Git webhooks, notifications, metrics | Same; native ntfy, Gotify, Discord, Slack and webhook notifiers |
 | — | Host maintenance mode; reconciles on Docker events |
+| Encrypted values | SOPS + age via a mounted identity; plaintext stays out of the checkout and composecd output |
 | Web UI, roles, local sign-in and SSO | Embedded htmx UI with SSE, local users, API tokens and OIDC |
-| ApplicationSets, multi-source apps, SOPS, adoption, image updater | Planned; see [docs/PLAN.md](docs/PLAN.md) |
+| ApplicationSets, multi-source apps, adoption, image updater | Planned; see [docs/PLAN.md](docs/PLAN.md) |
 
 ## Development
 

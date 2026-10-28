@@ -174,3 +174,10 @@ func TestBootstrapOIDC(t *testing.T) {
 		}
 	}
 }
+
+func TestSOPSAgeKeyBootstrap(t *testing.T) {
+	b, err := ParseBootstrap([]byte("root: {repoURL: /repo}\nsopsAgeKeyFile: /run/secrets/age-key\n"))
+	if err != nil || b.SOPSAgeKeyFile != "/run/secrets/age-key" {
+		t.Fatalf("%+v %v", b, err)
+	}
+}

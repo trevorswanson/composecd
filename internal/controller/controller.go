@@ -48,7 +48,9 @@ type Options struct {
 // Controller reconciles every Application.
 type Controller struct {
 	Options
-	changes subscriptions
+	changes      subscriptions
+	maskMu       sync.RWMutex
+	secretValues map[string]map[string]bool
 
 	// ctx is the Run context; operations started from the API use it.
 	ctx       context.Context
@@ -157,6 +159,7 @@ func (c *Controller) notify(e Event) {
 		e.Time = time.Now()
 	}
 	if c.Notify != nil {
+		e.Message = c.Mask(e.App, e.Message)
 		c.Notify.Notify(e)
 	}
 }
@@ -477,34 +480,37 @@ func (c *Controller) setStatus(st *AppStatus) {
 // reconciled are listed with Unknown status.
 func (c *Controller) Apps() []AppStatus {
 	c.mu.RLock()
-	defer c.mu.RUnlock()
 	var out []AppStatus
-	if c.objects == nil {
-		return out
-	}
-	for _, a := range c.objects.Applications {
-		if s, ok := c.apps[a.Metadata.Name]; ok {
-			out = append(out, s.status)
-		} else {
-			out = append(out, pendingStatus(a))
+	if c.objects != nil {
+		for _, a := range c.objects.Applications {
+			if s, ok := c.apps[a.Metadata.Name]; ok {
+				out = append(out, s.status)
+			} else {
+				out = append(out, pendingStatus(a))
+			}
 		}
+	}
+	c.mu.RUnlock()
+	for i := range out {
+		out[i] = c.maskStatus(out[i])
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
 }
 
-// App returns one Application's status.
+// App returns one application's status with secrets redacted for API/UI use.
 func (c *Controller) App(name string) (AppStatus, error) {
 	a, err := c.application(name)
 	if err != nil {
 		return AppStatus{}, err
 	}
 	c.mu.RLock()
-	defer c.mu.RUnlock()
+	st := pendingStatus(a)
 	if s, ok := c.apps[name]; ok {
-		return s.status, nil
+		st = s.status
 	}
-	return pendingStatus(a), nil
+	c.mu.RUnlock()
+	return c.maskStatus(st), nil
 }
 
 func pendingStatus(a *config.Application) AppStatus {

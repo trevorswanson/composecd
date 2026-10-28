@@ -7,6 +7,9 @@ dataDir: /var/lib/composecd
 refreshInterval: 3m
 concurrency: 4
 
+# Optional SOPS-encrypted valueFiles; mount your own age identity read-only here.
+# sopsAgeKeyFile: /run/secrets/sops-age-key
+
 root:
   repoURL: https://git.example.lan/me/homelab.git
   targetRevision: main

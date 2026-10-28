@@ -1,0 +1,4 @@
+# PUBLIC TEST IDENTITY ONLY - never encrypt real secrets with this key.
+# created: 2026-10-28T11:16:24-04:00
+# public key: age1mkkg9fdlenrgrggdkpxnjz0r5aedg288u7vnd82ug24mrfa6fussrza3wn
+AGE-SECRET-KEY-1RPKCZUS25KRM6SW5F03J6MTVRPALYFMLFVF5GSAVQU7VH9RT8JSQXAFNME

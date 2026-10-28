@@ -18,8 +18,11 @@ import (
 	"github.com/trevorswanson/composetpl/pkg/chart"
 	"github.com/trevorswanson/composetpl/pkg/registry"
 	"github.com/trevorswanson/composetpl/pkg/values"
+	"sigs.k8s.io/yaml"
 
 	"github.com/trevorswanson/composecd/internal/config"
+	"github.com/trevorswanson/composecd/internal/masking"
+	"github.com/trevorswanson/composecd/internal/sops"
 )
 
 // Prepared is an Application ready to render.
@@ -34,6 +37,8 @@ type Prepared struct {
 	Env []string
 	// Revision is the commit the chart was read from ("" for an oci:// chart).
 	Revision string
+	// Secrets are decrypted leaf values used for output masking, never persisted.
+	Secrets []string `json:"-"`
 }
 
 // Lookup backs the env and expandenv template functions with Env only, so a
@@ -54,7 +59,7 @@ var depLocks sync.Map
 // Prepare resolves app's source. checkout is the root of the app's repository at
 // revision, and is ignored for an oci:// chart. If the chart has a Chart.lock,
 // its dependencies are vendored into the checkout first.
-func Prepare(ctx context.Context, app *config.Application, host *config.Host, checkout, revision string, reg *registry.Client) (*Prepared, error) {
+func Prepare(ctx context.Context, app *config.Application, host *config.Host, checkout, revision string, reg *registry.Client, ageKeyFile string) (*Prepared, error) {
 	s := app.Spec.Source
 	p := &Prepared{Env: mergeEnv(host.Spec.Env, s.Env)}
 	vals := map[string]interface{}{}
@@ -72,16 +77,34 @@ func Prepare(ctx context.Context, app *config.Application, host *config.Host, ch
 		if _, err := os.Stat(filepath.Join(dir, "Chart.yaml")); err != nil {
 			return nil, fmt.Errorf("path %q at %s is not a chart: no Chart.yaml", s.Path, short(revision))
 		}
-		var files []string
 		for _, vf := range s.ValueFiles {
 			f, err := inside(root, filepath.Join(dir, filepath.FromSlash(vf)))
 			if err != nil {
 				return nil, fmt.Errorf("valueFiles %q: %w", vf, err)
 			}
-			files = append(files, f)
-		}
-		if vals, err = (values.Options{ValueFiles: files}).MergeValues(); err != nil {
-			return nil, relativeErr(err, root)
+
+			data, err := os.ReadFile(f)
+			if err != nil {
+				return nil, relativeErr(err, root)
+			}
+			encrypted, err := sops.Encrypted(vf, data)
+			if err != nil {
+				return nil, err
+			}
+			if encrypted {
+				data, err = sops.Decrypt(ctx, f, ageKeyFile)
+				if err != nil {
+					return nil, fmt.Errorf("valueFiles %q: %w", vf, err)
+				}
+			}
+			cur := map[string]interface{}{}
+			if err := yaml.Unmarshal(data, &cur); err != nil {
+				return nil, fmt.Errorf("valueFiles %q: invalid values YAML", vf)
+			}
+			if encrypted {
+				p.Secrets = append(p.Secrets, masking.Leaves(cur)...)
+			}
+			vals = values.Merge(vals, cur)
 		}
 		if err := vendor(ctx, dir, reg); err != nil {
 			return nil, err

@@ -319,3 +319,19 @@ func TestAccountsCLI(t *testing.T) {
 func (b *fakeBackend) Logs(context.Context, *hosts.Host, string, int, bool, io.Writer) error {
 	return nil
 }
+
+func TestValidateRejectsPlainSOPSFile(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "values.sops.yaml"), []byte("password: accidentally-plain\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := cliIn(t, "", "validate", dir); err == nil || !strings.Contains(err.Error(), "no SOPS metadata") {
+		t.Fatalf("%v %s", err, out)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "values.sops.yaml"), []byte("password: ENC[data]\nsops: {age: []}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := cliIn(t, "", "validate", dir); err != nil {
+		t.Fatalf("%v %s", err, out)
+	}
+}

@@ -12,6 +12,8 @@ extraVolumes: []
 
 # composecd.yaml. dataDir and listen are set by the chart.
 config:
+  # Mount the identity via extraVolumes before enabling encrypted valueFiles.
+  # sopsAgeKeyFile: /run/secrets/sops-age-key
   refreshInterval: 3m
   root:
     repoURL: https://git.example.lan/me/homelab.git

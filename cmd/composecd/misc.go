@@ -10,6 +10,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/trevorswanson/composecd/internal/config"
+	"github.com/trevorswanson/composecd/internal/source"
 )
 
 func newHostCmd(cf *clientFlags) *cobra.Command {
@@ -194,12 +195,16 @@ func newValidateCmd() *cobra.Command {
 		Use:   "validate DIR",
 		Short: "Check the Host, Application and SyncWindow objects in a directory",
 		Long: `Read every composecd object under DIR, as the server reads its root, and report
-every problem. Useful in the GitOps repository's CI. It doesn't render charts or
-contact hosts.`,
+every problem. Also checks encrypted values filenames for SOPS metadata, without
+decrypting them. Useful in the GitOps repository's CI. It doesn't render charts
+or contact hosts.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			objs, err := config.LoadDir(args[0])
 			if err != nil {
+				return err
+			}
+			if err := source.ValidateSecrets(args[0], objs); err != nil {
 				return err
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "%s: %d %s, %d %s and %d sync %s are valid.\n", args[0],

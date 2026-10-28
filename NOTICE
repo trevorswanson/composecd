@@ -34,3 +34,10 @@ extension 2.2.4 (https://github.com/bigskysoftware/htmx-extensions), both under
 the Zero-Clause BSD (0BSD) license. The upstream license texts are included in
 internal/web/static/HTMX-LICENSE and internal/web/static/SSE-LICENSE. Browser
 assets are served locally; see internal/web/static/README.md for pinned sources.
+
+The container image includes the standalone SOPS 3.13.3 executable
+(https://github.com/getsops/sops/releases/tag/v3.13.3), licensed under the
+Mozilla Public License 2.0. Corresponding source and the license are available
+at https://github.com/getsops/sops/tree/v3.13.3. SOPS is invoked as a subprocess;
+its Go modules are not linked into composecd. The license is included at
+third_party/sops/LICENSE and /usr/share/licenses/sops/LICENSE in the image.
