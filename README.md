@@ -156,6 +156,8 @@ spec:
     # ...or an OCI chart:
     # chart: oci://ghcr.io/me/charts/media
     # version: ^1.2
+    # valuesFrom: {}              # OCI only: values from the root repository
+    # valueFiles: [values/media.yaml]  # relative to valuesFrom's repository root
     values:                       # applied last
       apps: {jellyfin: {enabled: true}}
     env: {PUID: "1000"}           # over the host's env
@@ -358,6 +360,44 @@ For a reverse proxy, allow long-lived SSE responses and disable response bufferi
 endpoints (`X-Accel-Buffering: no` is sent). Stream connections recheck credentials periodically so revoked
 sessions stop receiving updates.
 
+## OCI charts with values from Git
+
+Keep a chart in an OCI registry and its per-host values in Git:
+
+```yaml
+apiVersion: composecd/v1alpha1
+kind: Application
+metadata: {name: media}
+spec:
+  source:
+    chart: oci://ghcr.io/me/charts/media
+    version: ^1.2
+    valuesFrom: {}                  # the root Git repository at its root revision
+    valueFiles: [values/media.yaml, secrets/media.sops.yaml]
+    values: {replicas: 1}            # inline overrides are applied last
+  destination: {host: nas}
+  syncPolicy: {automated: {}}
+```
+
+`valuesFrom` is required when an OCI chart uses `valueFiles`; it only applies to OCI charts. Its `repoURL`
+defaults to the root repository. An empty `targetRevision` uses the root's revision for that repository,
+or `HEAD` for another repository. Set either field explicitly to select another values repository or pin
+a branch, tag or commit. File paths are relative to the values repository root, and symlinks/paths cannot
+escape it. SOPS files use the same mounted age identity and masking described below.
+
+Refreshes and push webhooks include the values repository. Sync and app refresh fetch it immediately;
+each preparation reads files from its resolved commit. The chart is pinned to a digest before rendering
+and deployment, so a moving OCI tag cannot change it midway through a sync.
+
+The API/UI and `composecd app get NAME` show the desired chart digest and desired/deployed values commits.
+Host releases record the chart in `release.Chart.Ref` and values commit in the `composecd/values-revision`
+label. The values commit and chart digest both participate in desired-state identity: a values-only commit
+can auto-sync even when its changed fields aren't used in the rendered YAML. Unchanged revisions don't
+continually resync. Rollbacks retain the selected revision's values label and pause automated sync as usual.
+
+[The optional OCI example](examples/oci-values/README.md) shows a root-repository values file without
+adding a registry dependency to the default GitOps applications.
+
 ## Encrypted values with SOPS
 
 Set `sopsAgeKeyFile` in the server's `composecd.yaml` and mount your age identity read-only:
@@ -412,7 +452,7 @@ file, and an optional demo Application. Use your own identity for real secrets.
 **Webhooks.** Set `webhook.secretFile` in `composecd.yaml`, then add a push webhook in your Git server that
 points at `https://<composecd>/api/v1/webhook`, using the same secret and the JSON content type. Gitea,
 Forgejo and GitHub sign the payload with it; GitLab sends it as its token. A push to the root, or to any
-Application's repository, triggers a refresh right away.
+Application's chart or values repository, triggers a refresh right away.
 
 **Notifications** are configured in `composecd.yaml`, where their URLs and tokens can be read from files:
 
@@ -482,7 +522,8 @@ The events are `sync-succeeded`, `sync-failed` (which also covers failed rollbac
 | — | Host maintenance mode; reconciles on Docker events |
 | Encrypted values | SOPS + age via a mounted identity; plaintext stays out of the checkout and composecd output |
 | Web UI, roles, local sign-in and SSO | Embedded htmx UI with SSE, local users, API tokens and OIDC |
-| ApplicationSets, multi-source apps, adoption, image updater | Planned; see [docs/PLAN.md](docs/PLAN.md) |
+| OCI chart with Git values | `valuesFrom` repository, independent chart/values revisions, SOPS and automatic sync |
+| ApplicationSets, adoption, image updater | Planned; see [docs/PLAN.md](docs/PLAN.md) |
 
 ## Development
 

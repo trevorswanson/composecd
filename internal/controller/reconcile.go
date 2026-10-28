@@ -16,6 +16,7 @@ import (
 	"github.com/trevorswanson/composetpl/pkg/diff"
 	"github.com/trevorswanson/composetpl/pkg/hooks"
 	"github.com/trevorswanson/composetpl/pkg/output"
+	"github.com/trevorswanson/composetpl/pkg/registry"
 	"github.com/trevorswanson/composetpl/pkg/release"
 	"github.com/trevorswanson/composetpl/pkg/storage"
 
@@ -90,7 +91,7 @@ func (c *Controller) assess(ctx context.Context, app *config.Application, fetchE
 	}
 	var warnings []string
 	if fetchErr != nil {
-		warnings = append(warnings, "fetching "+app.Spec.Source.RepoURL+": "+fetchErr.Error())
+		warnings = append(warnings, "fetching "+sourceRepo(app)+": "+fetchErr.Error())
 	}
 	fail := func(err error) (*AppStatus, *plan) {
 		st.Error = strings.Join(append(warnings, err.Error()), "; ")
@@ -116,6 +117,10 @@ func (c *Controller) assess(ctx context.Context, app *config.Application, fetchE
 		return fail(err)
 	}
 	st.Sync.Revision = p.prep.Revision
+	st.Sync.ValuesRevision = p.prep.ValuesRevision
+	if app.Spec.Source.IsOCI() {
+		st.Sync.ChartRef = p.prep.ChartRef
+	}
 	var deployed, latest *release.Release
 	if len(hist) > 0 {
 		latest = hist[len(hist)-1]
@@ -138,12 +143,22 @@ func (c *Controller) assess(ctx context.Context, app *config.Application, fetchE
 	}
 	projectDir := h.ProjectDir(name)
 	p.key = desiredKey(manifest, hks, projectDir)
+	if app.Spec.Source.IsOCI() {
+		p.key = desiredKey(manifest, hks, projectDir, p.prep.ChartRef, p.prep.ValuesRevision)
+	}
 
 	var reasons []string
 	if deployed == nil {
 		reasons = append(reasons, "not deployed")
 	} else {
 		st.Sync.DeployedRevision = deployed.Labels[LabelSourceRevision]
+		st.Sync.DeployedValuesRevision = deployed.Labels[LabelValuesRevision]
+		if st.Sync.ValuesRevision != st.Sync.DeployedValuesRevision {
+			reasons = append(reasons, "values revision differs from Git")
+		}
+		if app.Spec.Source.IsOCI() && deployed.Chart.Ref != p.prep.ChartRef {
+			reasons = append(reasons, "chart reference differs from the desired OCI digest")
+		}
 		changes, err := diff.Manifests(deployed.Manifest, manifest)
 		if err != nil {
 			p.done()
@@ -211,13 +226,14 @@ func (c *Controller) prepare(ctx context.Context, app *config.Application, h *ho
 	s := app.Spec.Source
 	p := &plan{app: app, host: h}
 	var checkout, sha string
-	if !s.IsOCI() {
+	url, revision := s.GitRepository()
+	if url != "" {
 		var err error
-		if sha, err = c.Git.Resolve(ctx, s.RepoURL, s.TargetRevision); err != nil {
+		if sha, err = c.Git.Resolve(ctx, url, revision); err != nil {
 			return nil, err
 		}
-		p.release = c.useCheckout(s.RepoURL, sha)
-		if checkout, err = c.Git.Checkout(ctx, s.RepoURL, sha); err != nil {
+		p.release = c.useCheckout(url, sha)
+		if checkout, err = c.Git.Checkout(ctx, url, sha); err != nil {
 			p.done()
 			return nil, err
 		}
@@ -226,6 +242,21 @@ func (c *Controller) prepare(ctx context.Context, app *config.Application, h *ho
 	if err != nil {
 		p.done()
 		return nil, err
+	}
+	if s.IsOCI() {
+		_, ref, err := action.LoadChart(ctx, c.Registry, s.Chart, s.Version)
+		if err != nil {
+			p.done()
+			return nil, fmt.Errorf("resolving OCI chart: %w", err)
+		}
+		// Normalize to the same digest-only form composetpl records after
+		// loading a reference containing both a tag and a digest.
+		pinned, err := registry.ParseReference(ref)
+		if err != nil {
+			p.done()
+			return nil, err
+		}
+		prep.ChartRef, prep.Version = pinned.String(), ""
 	}
 	c.remember(app.Metadata.Name, prep.Secrets)
 	p.prep = prep
@@ -283,10 +314,14 @@ func capabilities(ctx context.Context, cfg *action.Configuration, h *hosts.Host)
 	return map[string]interface{}{"ComposeVersion": cv, "DockerVersion": dv}, nil
 }
 
-func desiredKey(manifest string, hks []*release.Hook, projectDir string) string {
+func desiredKey(manifest string, hks []*release.Hook, projectDir string, revisions ...string) string {
 	h := sha256.New()
 	hj, _ := json.Marshal(hks)
-	for _, part := range [][]byte{[]byte(manifest), hj, []byte(projectDir)} {
+	parts := [][]byte{[]byte(manifest), hj, []byte(projectDir)}
+	for _, r := range revisions {
+		parts = append(parts, []byte(r))
+	}
+	for _, part := range parts {
 		h.Write(part)
 		h.Write([]byte{0})
 	}
@@ -325,7 +360,7 @@ func releaseInfo(r *release.Release) *Release {
 	}
 	return &Release{
 		Revision: r.Revision, Status: string(r.Status), Description: r.Description,
-		Chart: r.Chart.String(), AppVersion: r.Chart.AppVersion, LastDeployed: r.LastDeployed, Labels: labels,
+		Chart: r.Chart.String(), ChartRef: r.Chart.Ref, AppVersion: r.Chart.AppVersion, LastDeployed: r.LastDeployed, Labels: labels,
 	}
 }
 

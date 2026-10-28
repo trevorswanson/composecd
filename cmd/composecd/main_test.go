@@ -335,3 +335,17 @@ func TestValidateRejectsPlainSOPSFile(t *testing.T) {
 		t.Fatalf("%v %s", err, out)
 	}
 }
+
+func TestOCIValuesRevisionsPrinted(t *testing.T) {
+	a := controller.AppStatus{Source: config.AppSource{Chart: "oci://registry.lan/charts/app", ValuesFrom: &config.GitSource{RepoURL: "https://git.lan/values.git", TargetRevision: "prod"}}, Sync: controller.SyncStatus{ChartRef: "oci://registry.lan/charts/app:1.0.0@sha256:abc", ValuesRevision: "abcdef0123456789", DeployedValuesRevision: "123456789abcdef"}}
+	var out bytes.Buffer
+	printApp(&out, &a)
+	for _, want := range []string{a.Sync.ChartRef, "Values:", "https://git.lan/values.git @ prod", "Values rev:", "abcdef0", "1234567"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("missing %s: %s", want, &out)
+		}
+	}
+	if !strings.Contains(revision(a), "values abcdef0") {
+		t.Fatal(revision(a))
+	}
+}

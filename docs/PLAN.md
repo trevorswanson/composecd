@@ -50,7 +50,7 @@ Keep everything consistent with the existing tests (`internal/action/action_test
 | Notifications | High | shoutrrr: ntfy, Gotify, Discord, Telegram, Pushover, Slack, SMTP, webhook. Triggers: sync succeeded/failed, degraded, out-of-sync, host down, image update | 2 |
 | App-of-apps / declarative setup | High | Git root path holds every composecd object; composecd can manage itself | 1 |
 | ApplicationSet | High ("every dir in `stacks/`", "node-exporter on every host") | Generators: list, git directories, git files, **hosts (by label)**, matrix | 3 |
-| Multi-source apps | Medium-high | OCI chart + values files from a Git repo (`sources:` + `$values` ref) | 3 |
+| Multi-source apps | Medium-high | OCI chart + values files from a `valuesFrom` Git repository (delivered in 3d) | 3 |
 | Secrets (SOPS plugin, Vault) | High (repo may be on GitHub) | Native SOPS+age decryption of values files (`*.sops.yaml`) in memory, masked in the UI | 3 |
 | Web UI | High | App tiles, tree (app → services → containers), diff, history, logs, events, sync dialog | 3 |
 | SSO/RBAC, projects | Medium | Local admin + API tokens; OIDC (Authentik/Authelia/Keycloak/Pocket ID); trusted forward-auth header; roles admin/readonly. AppProjects simplified to "allowed hosts/repos". | 3 |
@@ -164,7 +164,7 @@ Triggers: poll timer, Git webhook, Docker `events` stream per host (`die`, `dest
   *Done. Self-management is not yet safe: composecd recreating its own container interrupts the upgrade, so install it with composetpl for now.*
 - **Phase 2: Reconciliation quality.** Docker events, self-heal (Repair), prune, sync windows, host maintenance mode, `dependsOn`, retry/backoff, webhooks, notifications, `sync-fail`, Prometheus metrics.
   *Done, except `sync-fail`, which needs the new hook event in composetpl first. Notifications are native (ntfy, Gotify, Discord, Slack, webhook) rather than shoutrrr, and live in `composecd.yaml` because their URLs are secrets. Maintenance mode is toggled at runtime (`host maintenance`), not in Git.*
-- **Phase 3: UI and scale-out.** **3a delivered:** local users, roles, named tokens, browser sessions, CSRF and OIDC. **3b delivered:** embedded Go templates and htmx, live panels and container logs via SSE, filters, diff, history/rollback, maintenance and account management. **3c delivered:** SOPS/age values via the CLI, in-memory decryption, output masking and a pinned image dependency. Remaining: ApplicationSets, multi-source and adopting unmanaged projects; see [PHASE3.md](PHASE3.md).
+- **Phase 3: UI and scale-out.** **3a delivered:** local users, roles, named tokens, browser sessions, CSRF and OIDC. **3b delivered:** embedded Go templates and htmx, live panels and container logs via SSE, filters, diff, history/rollback, maintenance and account management. **3c delivered:** SOPS/age values via the CLI, in-memory decryption, output masking and a pinned image dependency. **3d delivered:** OCI charts with Git values, independent revisions, commit-aware auto-sync and values webhooks. Remaining: ApplicationSets and adopting unmanaged projects; see [PHASE3.md](PHASE3.md).
 - **Phase 4: Extras.** Image updater (write-back to Git and digest pinning), ignoreDifferences, GPG verification, the outbound agent, host housekeeping.
 
 ---

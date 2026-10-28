@@ -1,12 +1,15 @@
 {{define "apps"}}<div class="card"><table><thead><tr><th>Name</th><th>Host</th><th>Sync</th><th>Health</th><th>Revision</th><th>Last operation</th></tr></thead><tbody>
 {{range .Apps}}<tr><td><a href="/apps/{{path .Name}}"><strong>{{.Name}}</strong></a>{{if .Automated}} <span class="muted">auto</span>{{end}}{{if .Paused}} <span class="badge suspended" title="{{.PausedReason}}">paused</span>{{end}}{{with .Error}}<div class="error">{{.}}</div>{{end}}</td>
 <td>{{.Host}}</td><td><span class="badge {{lower .Sync.Status}}">{{.Sync.Status}}</span>{{range .Sync.Reasons}}<div class="muted">{{.}}</div>{{end}}{{with .Blocked}}<div class="muted">waiting: {{.}}</div>{{end}}</td>
-<td><span class="badge {{lower .Health.Status}}">{{.Health.Status}}</span>{{with .Health.Message}}<div class="muted">{{.}}</div>{{end}}</td><td><code>{{short .Sync.Revision}}</code>{{with .Release}}<div>release rev {{.Revision}} · {{.Chart}}</div>{{end}}</td><td>{{with .Operation}}<span class="badge {{lower .Phase}}">{{.Phase}}</span> {{.Kind}} ({{.Trigger}}){{else}}none{{end}}</td></tr>
+<td><span class="badge {{lower .Health.Status}}">{{.Health.Status}}</span>{{with .Health.Message}}<div class="muted">{{.}}</div>{{end}}</td><td><code>{{if .Sync.ChartRef}}{{.Sync.ChartRef}}{{else if .Source.Chart}}{{.Source.Chart}}{{else}}{{short .Sync.Revision}}{{end}}</code>{{with .Sync.ValuesRevision}}<div>values <code>{{short .}}</code></div>{{end}}{{with .Release}}<div>release rev {{.Revision}} · {{.Chart}}</div>{{end}}</td><td>{{with .Operation}}<span class="badge {{lower .Phase}}">{{.Phase}}</span> {{.Kind}} ({{.Trigger}}){{else}}none{{end}}</td></tr>
 {{else}}<tr><td colspan="6">No applications match these filters.</td></tr>{{end}}</tbody></table></div>{{end}}
 
 {{define "detail"}}
 {{if eq .Tab "summary"}}<div class="card"><dl>
 <dt>Host</dt><dd>{{.App.Host}}</dd><dt>Source</dt><dd><code>{{.App.Source.RepoURL}} {{.App.Source.Path}} {{.App.Source.Chart}} {{.App.Source.Version}}</code> @ {{.App.Source.TargetRevision}}</dd>
+{{with .App.Sync.ChartRef}}<dt>Chart ref</dt><dd><code>{{.}}</code></dd>{{end}}
+{{with .App.Source.ValuesFrom}}<dt>Values source</dt><dd>{{.RepoURL}} @ {{.TargetRevision}}</dd>{{end}}
+{{with .App.Sync.ValuesRevision}}<dt>Values revision</dt><dd>{{.}}</dd><dt>Deployed values revision</dt><dd>{{$.App.Sync.DeployedValuesRevision}}</dd>{{end}}
 <dt>Definition</dt><dd>{{.App.Origin}}</dd><dt>Desired revision</dt><dd>{{.App.Sync.Revision}}</dd><dt>Deployed revision</dt><dd>{{.App.Sync.DeployedRevision}}</dd>
 <dt>Sync</dt><dd>{{.App.Sync.Status}}{{range .App.Sync.Reasons}}<p>{{.}}</p>{{end}}</dd><dt>Health</dt><dd>{{.App.Health.Status}} {{.App.Health.Message}}</dd>
 <dt>Automation</dt><dd>{{if .App.Automated}}enabled{{else}}manual{{end}}{{if .App.Paused}} · paused: {{.App.PausedReason}}{{end}}{{with .App.Blocked}} · waiting: {{.}}{{end}}</dd>

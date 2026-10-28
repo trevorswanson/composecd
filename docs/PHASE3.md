@@ -170,7 +170,7 @@ in with a local user, OIDC, or the admin token entered as a password.
 - masking of diffs and logs;
 - the not-encrypted and wrong-key errors.
 
-### 3d. Values from Git for OCI charts
+### 3d. Values from Git for OCI charts (delivered)
 ```yaml
 source:
   chart: oci://ghcr.io/me/charts/media
