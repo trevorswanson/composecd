@@ -14,16 +14,19 @@ document.addEventListener('htmx:responseError', function (event) {
   box.append(body);
   result.replaceChildren(box);
 });
-// Show whether the page's live updates are connected.
-function setLive(state, text) {
-  var live = document.getElementById('live');
-  if (live) { live.dataset.state = state; live.textContent = text; }
-}
+// Show in the sidebar's root state when the page's live updates disconnect.
+// Updates only arrive while connected, and each re-renders the root state, so
+// a reconnect restores it.
 document.addEventListener('htmx:sseOpen', function (event) {
-  if (event.target.id === 'events') { setLive('open', 'Live'); }
+  var root = document.getElementById('root-status');
+  if (event.target.id === 'events' && root) { root.removeAttribute('data-conn'); }
 });
 document.addEventListener('htmx:sseError', function (event) {
-  if (event.target.id === 'events') { setLive('closed', 'Reconnecting'); }
+  var root = document.getElementById('root-status');
+  if (event.target.id !== 'events' || !root) { return; }
+  root.dataset.conn = 'lost';
+  var what = root.querySelector('.what');
+  if (what) { what.textContent = 'Reconnecting'; }
 });
 // Keep a long-running tail bounded while allowing someone to scroll back.
 document.addEventListener('htmx:sseMessage', function (event) {
@@ -41,3 +44,24 @@ document.addEventListener('click', function (event) {
   toggle.setAttribute('aria-expanded', String(open));
   toggle.setAttribute('aria-label', open ? 'Close menu' : 'Menu');
 });
+// Links and cards with data-dialog open their URL's fragment in the page's
+// dialog; without script they are ordinary links to the same fragment.
+document.addEventListener('click', function (event) {
+  var opener = event.target.closest('[data-dialog]');
+  var dialog = document.getElementById('dialog');
+  if (!opener || !dialog || event.defaultPrevented || event.metaKey || event.ctrlKey) { return; }
+  event.preventDefault();
+  htmx.ajax('GET', opener.dataset.dialog, { target: '#dialog-body', swap: 'innerHTML' }).then(function () {
+    if (!dialog.open) { dialog.showModal(); }
+  });
+});
+document.addEventListener('click', function (event) {
+  var dialog = document.getElementById('dialog');
+  if (!dialog || !dialog.open) { return; }
+  // The backdrop is the dialog element itself; its content sits in children.
+  if (event.target.closest('[data-close]') || event.target === dialog) { dialog.close(); }
+});
+// Closing the dialog drops its content, which ends any output it was following.
+document.addEventListener('close', function (event) {
+  if (event.target.id === 'dialog') { document.getElementById('dialog-body').replaceChildren(); }
+}, true);

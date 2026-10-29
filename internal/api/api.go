@@ -120,6 +120,11 @@ func New(c Controller, o Options) http.Handler {
 		h, err := c.History(r.PathValue("name"))
 		return http.StatusOK, h, err
 	})
+	read("GET /api/v1/apps/{name}/objects/{section}/{object}", func(r *http.Request, p *auth.Principal) (int, interface{}, error) {
+		id := r.PathValue("section") + "/" + r.PathValue("object")
+		live, err := c.LiveObject(r.Context(), r.PathValue("name"), id, r.URL.Query().Get("all") == "true", p.Role != auth.RoleAdmin)
+		return http.StatusOK, live, err
+	})
 	read("GET /api/v1/apps/{name}/operations", func(r *http.Request, _ *auth.Principal) (int, interface{}, error) {
 		limit, err := intParam(r, "limit")
 		if err != nil {

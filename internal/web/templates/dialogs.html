@@ -1,0 +1,41 @@
+{{/* Dialog bodies, fetched into #dialog-body when a [data-dialog] link is clicked. */}}
+{{define "app-details"}}<div class="dialog-title"><h2>{{.App.Name}}</h2><span class="muted">details</span></div>
+<dl class="props">
+<dt>Source</dt><dd><code>{{.App.Source.RepoURL}} {{.App.Source.Path}} {{.App.Source.Chart}} {{.App.Source.Version}}</code>{{with .App.Source.TargetRevision}}<span class="reason">@ {{.}}</span>{{end}}</dd>
+{{with .App.Source.ValuesFrom}}<dt>Values source</dt><dd><code>{{.RepoURL}}</code><span class="reason">@ {{.TargetRevision}}</span></dd>{{end}}
+<dt>Definition</dt><dd>{{with .App.Origin}}<code>{{.}}</code>{{else}}<span class="none">Unknown</span>{{end}}</dd>
+<dt>Desired revision</dt><dd>{{with .App.Sync.Revision}}<code>{{.}}</code>{{else}}<span class="none">Not rendered</span>{{end}}</dd>
+<dt>Deployed revision</dt><dd>{{with .App.Sync.DeployedRevision}}<code>{{.}}</code>{{else}}<span class="none">Not deployed</span>{{end}}{{with .App.Release}}<span class="reason">release rev {{.Revision}} · {{.Status}} · <time datetime="{{iso .LastDeployed}}" title="{{iso .LastDeployed}}">{{ago .LastDeployed}}</time></span>{{end}}</dd>
+{{with .App.Sync.ChartRef}}<dt>Chart ref</dt><dd><code>{{.}}</code></dd>{{end}}
+{{with .App.Sync.ValuesRevision}}<dt>Values revision</dt><dd><code>{{.}}</code></dd><dt>Deployed values</dt><dd>{{with $.App.Sync.DeployedValuesRevision}}<code>{{.}}</code>{{else}}<span class="none">Not deployed</span>{{end}}</dd>{{end}}
+{{with .App.Sync.Reasons}}<dt>Out of sync because</dt><dd>{{range .}}<span>{{.}}</span>{{end}}</dd>{{end}}
+<dt>Policy</dt><dd>{{if .App.Automated}}Automated{{else}}Manual{{end}}{{if .App.Paused}}<span class="pill plain paused">Paused: {{.App.PausedReason}}</span>{{end}}{{with .App.Blocked}}<span class="pill plain held">{{.}}</span>{{end}}</dd>
+<dt>Depends on</dt><dd>{{with .App.DependsOn}}<span class="links">{{range .}}<a href="/apps/{{path .}}">{{.}}</a>{{end}}</span>{{else}}<span class="none">Nothing</span>{{end}}</dd>
+<dt>Retry</dt><dd>{{with .App.Retry}}{{.Failures}} failed of {{.Limit}} retries<span class="reason">{{if .NextAt.IsZero}}No retry scheduled{{else}}Next <time datetime="{{iso .NextAt}}" title="{{iso .NextAt}}">{{ago .NextAt}}</time>{{end}}</span>{{else}}<span class="none">No retry policy</span>{{end}}</dd>
+<dt>Reconciled</dt><dd>{{if .App.ReconciledAt.IsZero}}<span class="none">Not yet</span>{{else}}<time datetime="{{iso .App.ReconciledAt}}" title="{{iso .App.ReconciledAt}}">{{ago .App.ReconciledAt}}</time>{{end}}</dd>
+</dl>{{end}}
+
+{{define "op-output"}}{{with .Op}}<div class="dialog-title"><span class="pill {{lower .Phase}}">{{.Phase}}</span><h2>{{.Kind}} #{{.ID}}</h2><span class="muted">{{.Trigger}}{{with .User}} by {{.}}{{end}} · <time datetime="{{iso .StartedAt}}" title="{{iso .StartedAt}}">{{ago .StartedAt}}</time></span></div>
+{{with .Message}}<p class="dialog-text">{{.}}</p>{{end}}{{template "oplog" .}}{{end}}{{end}}
+
+{{define "object"}}{{with .Object}}<div class="dialog-title"><span class="gicon k-{{.Kind}}" aria-hidden="true"></span><h2>{{.Name}}</h2><span class="tag">{{.Kind}}</span><span class="pill {{lower .Sync}}">{{.Sync}}</span>{{with .Health}}<span class="pill {{lower .}}">{{.}}</span>{{end}}</div>
+{{with .Message}}<p class="dialog-text">{{.}}</p>{{end}}
+<nav class="seg" aria-label="Object views">{{range $v := objectViews .}}<a href="/ui/apps/{{path $.Name}}/objects/{{$.Object.ID}}?view={{$v}}" data-dialog="/ui/apps/{{path $.Name}}/objects/{{$.Object.ID}}?view={{$v}}" {{if eq $.View $v}}aria-current="true"{{end}}>{{$v}}</a>{{end}}</nav>
+{{if eq $.View "summary"}}<dl class="props">
+{{with .LiveName}}<dt>Name on the host</dt><dd><code>{{.}}</code></dd>{{end}}
+{{with .Image}}<dt>Image</dt><dd><code>{{.}}</code></dd>{{end}}
+{{with .Parent}}<dt>Service</dt><dd><a href="#" data-dialog="/ui/apps/{{path $.Name}}/objects/{{.}}">{{.}}</a></dd>{{end}}
+{{if .External}}<dt>External</dt><dd>Created outside this project; composecd only uses it.</dd>{{end}}
+{{with .Uses}}<dt>Uses</dt><dd><span class="links">{{range .}}<a href="#" data-dialog="/ui/apps/{{path $.Name}}/objects/{{.}}">{{.}}</a>{{end}}</span></dd>{{end}}
+{{with .DependsOn}}<dt>Depends on</dt><dd><span class="links">{{range .}}<a href="#" data-dialog="/ui/apps/{{path $.Name}}/objects/{{.}}">{{.}}</a>{{end}}</span></dd>{{end}}
+{{with children $.App.Objects .ID}}<dt>Containers</dt><dd><span class="links">{{range .}}<a href="#" data-dialog="/ui/apps/{{path $.Name}}/objects/{{.ID}}">{{.Name}}</a>{{end}}</span></dd>{{end}}
+{{if eq .Kind "container"}}<dt>Logs</dt><dd><a href="/apps/{{path $.Name}}?tab=containers&amp;container={{.Name}}">Follow logs</a></dd>{{end}}
+</dl>{{end}}
+{{if eq $.View "live"}}{{with $.Live}}{{with .Note}}<p class="dialog-text">{{.}}</p>{{end}}{{range .Inspect}}<section class="live-object">{{if gt (len $.Live.Inspect) 1}}<h3><code>{{.Name}}</code></h3>{{end}}<pre class="output yaml">{{.YAML}}</pre>{{range .Folded}}<details class="fold"><summary>{{.Path}} <span class="muted">{{.Fields}} field{{if ne .Fields 1}}s{{end}}</span></summary><pre class="output yaml">{{.YAML}}</pre></details>{{end}}</section>{{end}}{{end}}{{end}}
+{{if eq $.View "diff"}}{{with $.Live}}<div class="diff-bar"><span class="muted">live → desired, for what composecd can read back from the engine</span><a href="/ui/apps/{{path $.Name}}/objects/{{$.Object.ID}}?view=diff{{if not $.All}}&amp;all=1{{end}}" data-dialog="/ui/apps/{{path $.Name}}/objects/{{$.Object.ID}}?view=diff{{if not $.All}}&amp;all=1{{end}}">{{if $.All}}Hide live-only fields{{else}}Show live-only fields{{end}}</a></div>{{template "livediff" .}}{{end}}{{end}}
+{{if eq $.View "desired"}}{{with .Desired}}<pre class="output yaml">{{.}}</pre>{{else}}<div class="empty"><strong>Not in Git</strong><span>{{if eq .Sync "Prune"}}Git no longer has this object; a sync with prune removes it.{{else}}This object has no compose definition of its own.{{end}}</span></div>{{end}}{{end}}
+{{if eq $.View "deployed"}}{{with .Deployed}}<pre class="output yaml">{{.}}</pre>{{else}}<div class="empty"><strong>Not in the deployed release</strong><span>A sync creates it.</span></div>{{end}}{{end}}
+{{end}}{{end}}
+
+{{/* livediff is an object's live state diffed against Git. */}}
+{{define "livediff"}}{{if .Diff}}<pre class="diff">{{range lines .Diff}}<span class="{{lineClass .}}">{{.}}</span>{{end}}</pre>{{else if .Note}}<p class="dialog-text">{{.Note}}</p>{{else}}<div class="empty"><strong>Live matches Git</strong><span>Every key Git sets has the same value on the host.</span></div>{{end}}{{end}}

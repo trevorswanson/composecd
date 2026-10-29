@@ -1,4 +1,4 @@
-{{define "hosts"}}<div class="page-head"><div class="title"><div class="title-row"><h1>Hosts</h1>{{template "live" .}}</div><p class="subtitle">The Docker engines composecd deploys to, and what else runs on them.</p></div></div>
+{{define "hosts"}}<div class="page-head"><div class="title"><div class="title-row"><h1>Hosts</h1></div><p class="subtitle">The Docker engines composecd deploys to, and what else runs on them.</p></div></div>
 <div class="card"><div class="table-wrap"><table class="wide"><thead><tr><th scope="col">Host</th><th scope="col">Engine</th><th scope="col">State</th><th scope="col">Versions</th><th scope="col" class="num">Apps</th><th scope="col">Unmanaged</th>{{if .Admin}}<th scope="col"><span class="sr-only">Maintenance</span></th>{{end}}</tr></thead><tbody>
 {{range .Hosts}}<tr><td><div class="cell">{{if .Retired}}<strong>{{.Name}}</strong><span class="reason">Removed from Git; kept until its releases are pruned</span>{{else}}<a class="name" href="/hosts/{{path .Name}}"><strong>{{.Name}}</strong></a>{{end}}</div></td>
 <td data-label="Engine"><code>{{template "engine" .}}</code></td>
@@ -18,7 +18,7 @@
 
 {{define "host"}}{{$inv := index .Inventory .Name}}<nav class="crumbs" aria-label="Breadcrumb"><a href="/hosts">Hosts</a><span aria-hidden="true">/</span><span aria-current="page">{{.Name}}</span></nav>
 <div class="page-head"><div class="title">
-<div class="title-row"><h1>{{.Host.Name}}</h1>{{template "pill" .Host.State}}{{if .Host.Maintenance}}<span class="pill maintenance">Maintenance</span>{{end}}{{if .Host.Retired}}<span class="tag">retired</span>{{end}}{{template "live" .}}</div>
+<div class="title-row"><h1>{{.Host.Name}}</h1>{{template "pill" .Host.State}}{{if .Host.Maintenance}}<span class="pill maintenance">Maintenance</span>{{end}}{{if .Host.Retired}}<span class="tag">retired</span>{{end}}</div>
 <div class="meta"><span class="chip">{{template "engine" .Host}}</span>{{if .Host.DockerVersion}}<span class="chip">Docker {{.Host.DockerVersion}} · Compose {{.Host.ComposeVersion}}</span>{{end}}<a class="chip i-apps" href="/apps?host={{.Host.Name}}">{{.Host.Apps}} app{{if ne .Host.Apps 1}}s{{end}}</a></div>
 </div>
 {{if and .Admin (not .Host.Retired)}}<div class="actions">
@@ -37,7 +37,7 @@
 <div class="table-wrap"><table class="compact"><thead><tr><th scope="col">Project</th><th scope="col">Status</th><th scope="col">Config files</th></tr></thead><tbody>{{range .Projects}}<tr><td><strong>{{.Name}}</strong></td><td data-label="Status"><span class="pill plain c-{{state .Status}}">{{.Status}}</span></td><td data-label="Config files"><div class="cell">{{range .ConfigFiles}}<code>{{.}}</code>{{else}}<span class="muted">Unavailable</span>{{end}}</div></td></tr>{{else}}<tr><td colspan="3" class="empty-row">No plain Compose projects.</td></tr>{{end}}</tbody></table></div></section>
 {{else if not .Error}}<div class="empty"><strong>Scanning {{$.Name}}…</strong><span>Listing releases and Compose projects. This page fills in when the scan finishes.</span></div>{{end}}{{end}}{{end}}{{end}}
 
-{{define "windows"}}<div class="page-head"><div class="title"><div class="title-row"><h1>Sync windows</h1>{{template "live" .}}</div><p class="subtitle">Schedules that allow or deny automatic syncs, self-heal and prune.</p></div></div>
+{{define "windows"}}<div class="page-head"><div class="title"><div class="title-row"><h1>Sync windows</h1></div><p class="subtitle">Schedules that allow or deny automatic syncs, self-heal and prune.</p></div></div>
 <div class="card"><div class="table-wrap"><table class="wide"><thead><tr><th scope="col">Window</th><th scope="col">State</th><th scope="col">Schedule</th><th scope="col">Next change</th><th scope="col">Applications</th></tr></thead><tbody>{{range .Windows}}<tr>
 <td><div class="name-row"><strong>{{.Name}}</strong><span class="tag{{if eq .Kind "deny"}} changed{{end}}">{{.Kind}}</span></div></td>
 <td data-label="State">{{if .Open}}<span class="pill open">In effect</span>{{else}}<span class="pill closed">Not in effect</span>{{end}}</td>
@@ -48,5 +48,5 @@
 
 {{define "operations"}}{{range .Operations}}<article class="card"><div class="card-head"><div class="op-title"><span class="pill {{lower .Phase}}">{{.Phase}}</span><h2><a href="/apps/{{path .App}}?tab=operations">{{.App}}</a> · {{.Kind}}</h2><span class="muted mono">#{{.ID}}</span></div><time class="muted" datetime="{{iso .StartedAt}}" title="{{iso .StartedAt}}">{{ago .StartedAt}}</time></div>
 <div class="card-body"><p class="reason">{{.Trigger}}{{with .User}} by {{.}}{{end}}{{with .SourceRevision}} · <code title="{{.}}">{{short .}}</code>{{end}}{{with .ReleaseRevision}} · release rev {{.}}{{end}}</p>{{with .Message}}<p>{{.}}</p>{{end}}</div>
-{{with .Log}}<details><summary>Output</summary><pre class="output">{{.}}</pre></details>{{end}}</article>
+{{if eq .Phase "Running"}}<details id="oplive-{{.ID}}" hx-preserve="true" open><summary>Output</summary>{{template "oplog" .}}</details>{{else}}{{with .Log}}<details><summary>Output</summary><pre class="output">{{.}}</pre></details>{{end}}{{end}}</article>
 {{else}}<div class="empty"><strong>No operations yet</strong><span>Syncs, rollbacks and repairs show up here as they run.</span></div>{{end}}{{end}}

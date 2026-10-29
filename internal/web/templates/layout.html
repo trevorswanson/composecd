@@ -4,7 +4,7 @@
 <title>composecd · {{if .User}}{{if eq .Page "detail"}}{{.Name}}{{else}}{{.Page}}{{end}}{{else}}Sign in{{end}}</title>
 <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="/static/style.css">
-<script defer src="/static/htmx-2.0.11.min.js"></script><script defer src="/static/sse-2.2.4.js"></script><script defer src="/static/ui.js"></script>
+<script defer src="/static/htmx-2.0.11.min.js"></script><script defer src="/static/sse-2.2.4.js"></script><script defer src="/static/ui.js"></script>{{if eq .Page "detail"}}<script defer src="/static/dagre-1.1.4.min.js"></script><script defer src="/static/graph.js"></script>{{end}}
 <noscript><style>.sidebar-menu { display: flex !important; } .nav-toggle { display: none !important; }</style></noscript>
 </head><body {{with .User}}hx-headers="{{headers .}}"{{end}}>
 {{if not .User}}
@@ -49,6 +49,7 @@
 <div hx-ext="sse" sse-connect="/api/v1/apps/{{path $.Name}}/containers/{{path .}}/logs?follow=1&amp;tail=200" sse-close="end"><pre class="log" sse-swap="log" hx-swap="beforeend"></pre><p class="error card-body" sse-swap="error" role="alert"></p></div>
 <noscript><p class="card-body"><a href="/api/v1/apps/{{path $.Name}}/containers/{{path .}}/logs?tail=200">Read the log stream</a></p></noscript></section>{{end}}{{end}}
 </main></div></div>
+<dialog id="dialog" class="dialog" aria-labelledby="dialog-body"><button type="button" class="btn btn-ghost btn-sm btn-icon dialog-close i-close" aria-label="Close" data-close></button><div id="dialog-body"></div></dialog>
 {{end}}</body></html>{{end}}
 
 {{define "logo"}}<svg class="logo" viewBox="0 0 40 40" aria-hidden="true"><rect class="logo-bg" width="40" height="40" rx="10"/><rect class="logo-line" x="10" y="10.5" width="20" height="7.5" rx="2"/><rect class="logo-fill" x="10" y="22" width="20" height="7.5" rx="2"/></svg>{{end}}
@@ -62,13 +63,15 @@
 {{if .Admin}}<form method="post" action="/ui/root/refresh" hx-post="/ui/root/refresh" hx-target="#action-result">{{template "csrf" .}}<button type="submit" class="btn btn-ghost btn-sm btn-icon i-refresh" aria-label="Fetch the root repository now" title="Fetch now"></button></form>{{end}}
 </div>{{end}}
 
-{{/* live shows whether SSE updates are connected. hx-preserve keeps it, and the
-state ui.js gave it, across live re-renders of the page head. */}}
-{{define "live"}}{{if live .}}<span class="live" id="live" role="status" hx-preserve="true">Connecting</span>{{end}}{{end}}
-
 {{define "pill"}}<span class="pill {{lower .}}">{{.}}</span>{{end}}
 
-{{define "result"}}<div class="callout ok"><div><strong>{{.Message}}</strong>{{if .Token}}<p>Copy this token now. It won't be shown again.</p><code class="secret">{{.Token}}</code>{{end}}</div></div>{{end}}
+{{define "result"}}<div class="callout ok"><div><strong>{{.Message}}</strong>{{if .Token}}<p>Copy this token now. It won't be shown again.</p><code class="secret">{{.Token}}</code>{{end}}{{with .Op}}<details class="op-live" open><summary>Output</summary>{{template "oplog" .}}</details>{{end}}</div></div>{{end}}
+
+{{/* oplog follows an operation's output; it ends when the operation does. */}}
+{{define "oplog"}}<div hx-ext="sse" sse-connect="/api/v1/apps/{{path .App}}/operations/{{.ID}}/log" sse-close="end"><pre class="log" sse-swap="log" hx-swap="beforeend"></pre><p class="error" sse-swap="error" role="alert"></p></div>{{end}}
+
+{{/* syncbtn is an app's Sync button, or what it is busy with while an operation runs. */}}
+{{define "syncbtn"}}{{$d := index . 0}}{{$a := index . 1}}{{$sm := index . 2}}{{if and $a.Operation (eq $a.Operation.Phase "Running")}}<button type="button" class="btn{{if $sm}} btn-sm{{end}} btn-primary is-busy" disabled aria-busy="true">{{busy $a.Operation.Kind}}</button>{{else}}<form method="post" action="/ui/apps/{{path $a.Name}}/sync" hx-post="/ui/apps/{{path $a.Name}}/sync" hx-target="#action-result" hx-disabled-elt="find button">{{template "csrf" $d}}<button type="submit" class="btn{{if $sm}} btn-sm{{if eq $a.Sync.Status "OutOfSync"}} btn-primary{{end}}{{else}} btn-primary i-sync{{end}}">Sync</button></form>{{end}}{{end}}
 
 {{define "csrf"}}<input type="hidden" name="csrf" value="{{.User.CSRF}}">{{end}}
 
@@ -79,7 +82,7 @@ state ui.js gave it, across live re-renders of the page head. */}}
 {{if eq .Page "hosts"}}{{template "hosts" .}}{{end}}
 {{if eq .Page "host"}}{{template "host" .}}{{end}}
 {{if eq .Page "windows"}}{{template "windows" .}}{{end}}
-{{if eq .Page "operations"}}<div class="page-head"><div class="title"><div class="title-row"><h1>Operations</h1>{{template "live" .}}</div><p class="subtitle">Every sync, rollback and repair, newest first.</p></div></div>{{template "operations" .}}{{end}}
+{{if eq .Page "operations"}}<div class="page-head"><div class="title"><div class="title-row"><h1>Operations</h1></div><p class="subtitle">Every sync, rollback and repair, newest first.</p></div></div>{{template "operations" .}}{{end}}
 {{if eq .Page "settings"}}{{template "settings" .}}{{end}}
 {{if eq .Page "adopt"}}{{template "adopt" .}}{{end}}
 </section>{{end}}

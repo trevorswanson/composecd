@@ -14,6 +14,8 @@ import (
 	"io/fs"
 	"net/http"
 	"net/url"
+	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -36,6 +38,7 @@ type Controller interface {
 	History(string) ([]controller.Release, error)
 	Operations(string, int) ([]*store.Operation, error)
 	Operation(int64) (*store.Operation, error)
+	FollowOperation(context.Context, int64, io.Writer) error
 	HostStatuses() []controller.HostStatus
 	Unmanaged(context.Context, string) (*controller.Unmanaged, error)
 	Adopt(context.Context, string, string) (*controller.Adoption, error)
@@ -51,6 +54,7 @@ type Controller interface {
 	Subscribe() (<-chan controller.Update, func())
 	Logs(context.Context, string, string, int, bool, io.Writer) error
 	Mask(string, string) string
+	LiveObject(ctx context.Context, app, id string, all, redact bool) (*controller.Live, error)
 }
 
 type Server struct {
@@ -187,14 +191,28 @@ type Data struct {
 	Tokens                                                     []*store.Token
 	Inventory                                                  map[string]Inventory
 	Adoption                                                   *controller.Adoption
-	Filters                                                    url.Values
+	// Op is the operation an action started, whose output the result follows.
+	Op *store.Operation
+	// Object is the object a dialog shows, in View.
+	Object *controller.Object
+	View   string
+	// Live is Object's state on its host, for its live and diff views; All
+	// includes live keys Git doesn't set (or, on the diff tab, synced objects).
+	Live *controller.Live
+	All  bool
+	// Mode is the diff tab's: "" compares the compose file, "objects" each
+	// object's live state.
+	Mode    string
+	Objects []ObjectDiff
+	Filters url.Values
 }
 
 var templates = template.Must(template.New("web").Funcs(template.FuncMap{
 	"lower": func(v interface{}) string { return strings.ToLower(fmt.Sprint(v)) },
+	// short is a commit hash's first 7 characters, as Git abbreviates it.
 	"short": func(s string) string {
-		if len(s) > 12 {
-			return s[:12]
+		if len(s) > 7 {
+			return s[:7]
 		}
 		return s
 	},
@@ -211,7 +229,29 @@ var templates = template.Must(template.New("web").Funcs(template.FuncMap{
 		}
 		return ""
 	},
-	"diffstat":       diffstat,
+	"diffstat":  diffstat,
+	"graphData": graphData,
+	// objectCount counts objects in sync state.
+	"objectCount": func(objs []controller.Object, state string) int {
+		n := 0
+		for _, o := range objs {
+			if string(o.Sync) == state {
+				n++
+			}
+		}
+		return n
+	},
+	"objectViews": objectViews,
+	// children are the containers of the service id.
+	"children": func(objs []controller.Object, id string) []controller.Object {
+		var out []controller.Object
+		for _, o := range objs {
+			if o.Parent == id {
+				out = append(out, o)
+			}
+		}
+		return out
+	},
 	"existingAction": controller.ExistingAction,
 	"tally":          tally,
 	"ago":            ago,
@@ -247,6 +287,19 @@ var templates = template.Must(template.New("web").Funcs(template.FuncMap{
 	// live reports whether the page takes SSE updates.
 	"live": func(d *Data) bool { return d.Page != "settings" && d.Page != "adopt" },
 	"pair": func(a, b interface{}) []interface{} { return []interface{}{a, b} },
+	"list": func(v ...interface{}) []interface{} { return v },
+	// busy is what a button says while an operation of kind runs.
+	"busy": func(kind string) string {
+		switch kind {
+		case store.KindRollback:
+			return "Rolling back…"
+		case store.KindHeal:
+			return "Healing…"
+		case store.KindPrune:
+			return "Pruning…"
+		}
+		return "Syncing…"
+	},
 	// state is a Compose project status's state, "running" in "running(3)".
 	"state": func(s string) string {
 		state, _, _ := strings.Cut(s, "(")
@@ -366,6 +419,10 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /ui/settings/{action}", s.Action)
 	mux.HandleFunc("GET /events", s.Events)
 	mux.HandleFunc("GET /api/v1/apps/{name}/containers/{container}/logs", s.Logs)
+	mux.HandleFunc("GET /api/v1/apps/{name}/operations/{id}/log", s.OperationLog)
+	mux.HandleFunc("GET /ui/apps/{name}/details", s.Dialog)
+	mux.HandleFunc("GET /ui/apps/{name}/operations/{id}", s.Dialog)
+	mux.HandleFunc("GET /ui/apps/{name}/objects/{section}/{object}", s.Dialog)
 }
 
 func (s *Server) identify(w http.ResponseWriter, r *http.Request, need auth.Role) *auth.Principal {
@@ -406,8 +463,8 @@ func (s *Server) data(r *http.Request, p *auth.Principal) (*Data, error) {
 		d.Page = "apps"
 	}
 	d.Tab = r.URL.Query().Get("tab")
-	if d.Tab == "" {
-		d.Tab = "summary"
+	if d.Tab == "" || d.Tab == "summary" {
+		d.Tab = "graph"
 	}
 	switch d.Page {
 	case "apps":
@@ -425,7 +482,15 @@ func (s *Server) data(r *http.Request, p *auth.Principal) (*Data, error) {
 		}
 		d.App = a
 		switch d.Tab {
-		case "summary", "containers", "diff":
+		case "graph", "containers":
+		case "diff":
+			d.Mode = r.URL.Query().Get("mode")
+			if d.Mode == "objects" {
+				d.All = r.URL.Query().Get("synced") == "1"
+				d.Objects = s.objectDiffs(r.Context(), a, d.All, !d.Admin)
+			} else {
+				d.Mode = ""
+			}
 		case "history":
 			d.History, err = s.C.History(d.Name)
 		case "operations":
@@ -593,16 +658,17 @@ func (s *Server) Action(w http.ResponseWriter, r *http.Request) {
 	var err error
 	target := "/apps/" + url.PathEscape(name)
 	message, token := "Action requested", ""
+	var op *store.Operation
 	switch {
 	case strings.HasPrefix(r.URL.Path, "/ui/apps/"):
 		switch action {
 		case "sync":
-			_, err = s.C.Sync(name, p.Name)
+			op, err = s.C.Sync(name, p.Name)
 		case "rollback":
 			var rev int
 			rev, err = strconv.Atoi(r.FormValue("revision"))
 			if err == nil && rev > 0 {
-				_, err = s.C.Rollback(name, rev, p.Name)
+				op, err = s.C.Rollback(name, rev, p.Name)
 			} else {
 				err = invalidRequest("invalid revision")
 			}
@@ -672,8 +738,11 @@ func (s *Server) Action(w http.ResponseWriter, r *http.Request) {
 		pageError(w, err)
 		return
 	}
+	if op != nil {
+		message = fmt.Sprintf("%s #%d started", map[string]string{"sync": "Sync", "rollback": "Rollback"}[action], op.ID)
+	}
 	if r.Header.Get("HX-Request") == "true" {
-		render(w, 200, "result", &Data{Message: message, Token: token})
+		render(w, 200, "result", &Data{Message: message, Token: token, Op: op})
 		return
 	}
 	if token != "" {
@@ -689,6 +758,134 @@ func (s *Server) Action(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.Redirect(w, r, target, http.StatusSeeOther)
+}
+
+// Dialog renders the body of a dialog about an app: its details, an
+// operation's output, or one of its objects.
+func (s *Server) Dialog(w http.ResponseWriter, r *http.Request) {
+	p := s.identify(w, r, auth.RoleReadonly)
+	if p == nil {
+		return
+	}
+	d := &Data{User: p, Admin: p.Role == auth.RoleAdmin, Name: r.PathValue("name"), Page: "dialog"}
+	app, err := s.C.App(d.Name)
+	if err != nil {
+		pageError(w, err)
+		return
+	}
+	d.App = app
+	name := "app-details"
+	switch {
+	case r.PathValue("id") != "":
+		name = "op-output"
+		id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+		if err != nil {
+			pageError(w, invalidRequest("invalid operation id"))
+			return
+		}
+		if d.Op, err = s.C.Operation(id); err == nil && d.Op.App != d.Name {
+			err = fmt.Errorf("operation %d: %w", id, controller.ErrNotFound)
+		}
+		if err != nil {
+			pageError(w, err)
+			return
+		}
+	case r.PathValue("section") != "":
+		name = "object"
+		id := r.PathValue("section") + "/" + r.PathValue("object")
+		for i := range app.Objects {
+			if app.Objects[i].ID == id {
+				d.Object = &app.Objects[i]
+			}
+		}
+		if d.Object == nil {
+			pageError(w, fmt.Errorf("object %q: %w", id, controller.ErrNotFound))
+			return
+		}
+		d.View = r.URL.Query().Get("view")
+		if !slices.Contains(objectViews(*d.Object), d.View) {
+			d.View = "summary"
+		}
+		if d.View == "live" || d.View == "diff" {
+			d.All = r.URL.Query().Get("all") == "1"
+			if d.Live, err = s.C.LiveObject(r.Context(), d.Name, id, d.All, !d.Admin); err != nil {
+				pageError(w, err)
+				return
+			}
+		}
+	}
+	render(w, 200, name, d)
+}
+
+// objectViews are the views an object's dialog offers.
+func objectViews(o controller.Object) []string {
+	views := []string{"summary"}
+	switch {
+	case o.Kind == controller.KindContainer, o.ID == "networks/default":
+		views = append(views, "live")
+	case o.Kind == controller.KindConfig, o.Kind == controller.KindSecret:
+		views = append(views, "desired", "deployed")
+	default:
+		views = append(views, "live", "diff", "desired", "deployed")
+	}
+	return views
+}
+
+// ObjectDiff is one object's live state against Git, on the diff tab.
+type ObjectDiff struct {
+	Object controller.Object
+	Live   *controller.Live
+	Error  string
+}
+
+// objectDiffs compares each object that isn't synced (or every one, with
+// all) with its live state. Containers are covered by their services.
+func (s *Server) objectDiffs(ctx context.Context, a controller.AppStatus, all, redact bool) []ObjectDiff {
+	order := map[controller.ObjectSync]int{controller.ObjectMissing: 0, controller.ObjectOutOfSync: 1, controller.ObjectPrune: 2, controller.ObjectSynced: 3}
+	var out []ObjectDiff
+	for _, o := range a.Objects {
+		if o.Kind == controller.KindContainer || (!all && o.Sync == controller.ObjectSynced) {
+			continue
+		}
+		d := ObjectDiff{Object: o}
+		live, err := s.C.LiveObject(ctx, a.Name, o.ID, false, redact)
+		if err != nil {
+			d.Error = err.Error()
+		}
+		d.Live = live
+		out = append(out, d)
+	}
+	sort.SliceStable(out, func(i, j int) bool { return order[out[i].Object.Sync] < order[out[j].Object.Sync] })
+	return out
+}
+
+// graphNode is an object as graph.js draws it, without its YAML.
+type graphNode struct {
+	ID        string   `json:"id"`
+	Kind      string   `json:"kind"`
+	Name      string   `json:"name"`
+	Sub       string   `json:"sub,omitempty"`
+	Parent    string   `json:"parent,omitempty"`
+	Sync      string   `json:"sync"`
+	Health    string   `json:"health,omitempty"`
+	Message   string   `json:"message,omitempty"`
+	Uses      []string `json:"uses,omitempty"`
+	DependsOn []string `json:"dependsOn,omitempty"`
+}
+
+// graphData is what graph.js lays out: the app's objects and the URL their
+// dialogs start with.
+func graphData(a controller.AppStatus) interface{} {
+	nodes := make([]graphNode, 0, len(a.Objects))
+	for _, o := range a.Objects {
+		n := graphNode{ID: o.ID, Kind: o.Kind, Name: o.Name, Sub: o.Image, Parent: o.Parent, Sync: string(o.Sync),
+			Health: string(o.Health), Message: o.Message, Uses: o.Uses, DependsOn: o.DependsOn}
+		if n.Sub == "" && o.Kind != controller.KindContainer && o.LiveName != "" {
+			n.Sub = o.LiveName
+		}
+		nodes = append(nodes, n)
+	}
+	return map[string]interface{}{"app": a.Name, "base": "/ui/apps/" + url.PathEscape(a.Name) + "/objects/", "nodes": nodes}
 }
 
 // invalidRequest identifies client input errors separately from server failures.

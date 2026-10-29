@@ -96,6 +96,7 @@ func (c *Controller) assess(ctx context.Context, app *config.Application, fetchE
 	}
 	fail := func(err error) (*AppStatus, *plan) {
 		st.Error = strings.Join(append(warnings, err.Error()), "; ")
+		c.staleDesired(st)
 		return st, nil
 	}
 
@@ -169,6 +170,7 @@ func (c *Controller) assess(ctx context.Context, app *config.Application, fetchE
 	for _, ch := range changes {
 		st.Sync.Changes = append(st.Sync.Changes, toChange(name, ch))
 	}
+	st.Sync.RenderedAt = time.Now()
 	if deployed == nil {
 		reasons = append(reasons, "not deployed")
 	} else {
@@ -190,7 +192,7 @@ func (c *Controller) assess(ctx context.Context, app *config.Application, fetchE
 			reasons = append(reasons, "chart reference differs from the desired OCI digest")
 		}
 		if len(changes) > 0 {
-			reasons = append(reasons, fmt.Sprintf("%d %s differ from Git", len(changes), plural(len(changes), "resource", "resources")))
+			reasons = append(reasons, fmt.Sprintf("%d %s from Git", len(changes), plural(len(changes), "resource differs", "resources differ")))
 		}
 		if !sameHooks(deployed.Hooks, hks) {
 			reasons = append(reasons, "hooks differ from Git")
@@ -204,12 +206,12 @@ func (c *Controller) assess(ctx context.Context, app *config.Application, fetchE
 	}
 	p.gitChanged = len(reasons) > 0
 
-	containers, err := cfg.Compose.PS(ctx, name)
-	if err != nil {
-		warnings = append(warnings, "reading containers: "+err.Error())
+	containers, psErr := cfg.Compose.PS(ctx, name)
+	if psErr != nil {
+		warnings = append(warnings, "reading containers: "+psErr.Error())
 	}
 	st.Health.Containers = containers
-	if err == nil {
+	if psErr == nil {
 		st.Health.Status, st.Health.Message = health.Assess(deployed != nil, containers)
 	}
 	if deployed == nil && len(containers) > 0 {
@@ -253,6 +255,43 @@ func (c *Controller) assess(ctx context.Context, app *config.Application, fetchE
 		}
 	}
 
+	objs, err := objectsFor(ctx, cfg, objectInput{project: name, desired: manifest, deployed: base, changes: st.Sync.Changes,
+		containers: containers, drift: st.Sync.Drift, live: psErr == nil})
+	if err != nil {
+		warnings = append(warnings, "listing objects: "+err.Error())
+	}
+	st.Objects = objs
+	if deployed != nil {
+		// Health judges the containers that exist; a service with none is missing.
+		var none []string
+		for _, o := range objs {
+			if o.Kind == KindService && o.Sync == ObjectMissing {
+				none = append(none, o.Name)
+			}
+		}
+		if len(none) > 0 && st.Health.Status == health.Healthy {
+			st.Health.Status, st.Health.Message = health.Missing, "no containers for "+strings.Join(none, ", ")
+		}
+		// What the release has but the host doesn't run shows in full.
+		missing := map[string]bool{}
+		var gone []string
+		for _, o := range objs {
+			if o.Sync != ObjectMissing || o.Desired == "" {
+				continue
+			}
+			missing[o.ID] = true
+			if o.Kind != KindService {
+				gone = append(gone, o.ID)
+			}
+		}
+		if len(gone) > 0 {
+			reasons = append(reasons, "missing on the host: "+strings.Join(gone, ", "))
+		}
+		if err := missingChanges(st, name, manifest, missing); err != nil {
+			warnings = append(warnings, err.Error())
+		}
+	}
+
 	st.Sync.Reasons = reasons
 	if len(reasons) > 0 {
 		st.Sync.Status = OutOfSync
@@ -260,7 +299,64 @@ func (c *Controller) assess(ctx context.Context, app *config.Application, fetchE
 		st.Sync.Status = Synced
 	}
 	st.Error = strings.Join(warnings, "; ")
+	c.rememberDesired(st)
 	return st, p
+}
+
+// missingChanges shows each deployed service the host no longer runs as
+// missing, diffed against nothing, so the diff shows its whole desired state
+// rather than only how Git moved on from the release.
+func missingChanges(st *AppStatus, name, manifest string, missing map[string]bool) error {
+	if len(missing) == 0 {
+		return nil
+	}
+	desired, err := diff.Manifests("", manifest)
+	if err != nil {
+		return err
+	}
+	out := st.Sync.Changes[:0:0]
+	for _, ch := range st.Sync.Changes {
+		if !missing[ch.Resource] || ch.Op == string(diff.Removed) {
+			out = append(out, ch)
+		}
+	}
+	for _, d := range desired {
+		if missing[d.Resource] {
+			d.Op = OpMissing
+			out = append(out, toChange(name, d))
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Resource < out[j].Resource })
+	st.Sync.Changes = out
+	return nil
+}
+
+// rememberDesired keeps st's rendered desired state for a later failed reconcile.
+func (c *Controller) rememberDesired(st *AppStatus) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	s, ok := c.apps[st.Name]
+	if !ok {
+		s = &appState{}
+		c.apps[st.Name] = s
+	}
+	desired := st.Sync
+	s.desired, s.objects = &desired, st.Objects
+}
+
+// staleDesired shows the last rendered desired state on st, which failed
+// before rendering Git.
+func (c *Controller) staleDesired(st *AppStatus) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	s, ok := c.apps[st.Name]
+	if !ok || s.desired == nil {
+		return
+	}
+	d := s.desired
+	st.Sync.Revision, st.Sync.ValuesRevision, st.Sync.ChartRef = d.Revision, d.ValuesRevision, d.ChartRef
+	st.Sync.Changes, st.Sync.RenderedAt, st.Sync.Stale = d.Changes, d.RenderedAt, true
+	st.Objects = s.objects
 }
 
 // existingDrift compares containers that predate app's first release with the

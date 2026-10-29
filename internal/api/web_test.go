@@ -31,6 +31,12 @@ func (s *webStub) App(name string) (controller.AppStatus, error) {
 	a.Health.Containers = []compose.Container{{Name: "media-web-1", Image: "nginx:1", State: "running", Health: "healthy"}}
 	a.Sync.Changes = []controller.Change{{Resource: "services/web", Op: "changed", Diff: "-password: secret-value\n+password: <script>\n"}}
 	a.Sync.Drift = []action.ServiceDrift{{Service: "cache", Reason: action.DriftOrphaned, Containers: []string{"media-cache-1"}}}
+	a.Sync.RenderedAt = time.Now()
+	a.Objects = []controller.Object{
+		{ID: "services/web", Kind: controller.KindService, Name: "web", Image: "nginx:1", Sync: controller.ObjectOutOfSync, Desired: "image: nginx:1\n", Uses: []string{"networks/default"}},
+		{ID: "networks/default", Kind: controller.KindNetwork, Name: "default", Sync: controller.ObjectSynced},
+		{ID: "containers/media-web-1", Kind: controller.KindContainer, Name: "media-web-1", Parent: "services/web", Sync: controller.ObjectSynced},
+	}
 	return a, err
 }
 func (s *webStub) Subscribe() (<-chan controller.Update, func()) { return s.updates, func() {} }
@@ -52,7 +58,11 @@ func TestWebPagesAndActions(t *testing.T) {
 		"/": "Applications", "/apps?host=nas&sync=Synced&health=Healthy": "<strong>media</strong>",
 		"/apps?label=missing": "No applications match", "/hosts": "Start maintenance", "/hosts/nas": "composetpl releases", "/windows": "nightly",
 		"/operations": "operator", "/settings": "Create token",
-		"/apps/media": "Desired revision", "/apps/media?tab=containers": "media-web-1",
+		"/apps/media": "Sync status", "/ui/apps/media/details": "Desired revision", "/apps/media?tab=containers": "media-web-1",
+		"/apps/media?tab=graph": `class="graph-data"`, "/ui/apps/media/objects/services/web": "nginx:1", "/ui/apps/media/objects/services/web?view=desired": "image: nginx:1",
+		"/ui/apps/media/operations/7":                   `sse-connect="/api/v1/apps/media/operations/7/log"`,
+		"/ui/apps/media/objects/services/web?view=live": "GraphDriver", "/ui/apps/media/objects/services/web?view=diff": `<span class="removed">-image: nginx:0</span>`,
+		"/apps/media?tab=diff&mode=objects": "services/web", "/apps/media?tab=diff&mode=objects&synced=1": "networks/default",
 		"/apps/media?tab=diff": "services/web", "/apps/media?tab=diff&existing": "<strong>cache</strong>: not in Git, would be removed", "/apps/media?tab=history": "Roll back",
 		"/apps/media?tab=operations": "Output",
 	}
@@ -76,9 +86,16 @@ func TestWebPagesAndActions(t *testing.T) {
 	if code, _, _ := b.do("POST", "/ui/apps/media/sync", "", nil); code != 403 {
 		t.Fatalf("CSRF: %d", code)
 	}
-	for path, form := range map[string]string{"/ui/apps/media/sync": "", "/ui/apps/media/rollback": "revision=1", "/ui/apps/media/pause": "", "/ui/apps/media/resume": "", "/ui/apps/media/refresh": "", "/ui/hosts/nas/maintenance": "enabled=true"} {
-		code, _, body := b.do("POST", path, form, map[string]string{"Content-Type": "application/x-www-form-urlencoded", auth.CSRFHeader: b.csrf, "HX-Request": "true"})
-		if code != 200 || !strings.Contains(body, "Action requested") {
+	for path, form := range map[string][2]string{
+		"/ui/apps/media/sync":       {"", `Sync #7 started`},
+		"/ui/apps/media/rollback":   {"revision=1", `sse-connect="/api/v1/apps/media/operations/8/log"`},
+		"/ui/apps/media/pause":      {"", "Action requested"},
+		"/ui/apps/media/resume":     {"", "Action requested"},
+		"/ui/apps/media/refresh":    {"", "Action requested"},
+		"/ui/hosts/nas/maintenance": {"enabled=true", "Action requested"},
+	} {
+		code, _, body := b.do("POST", path, form[0], map[string]string{"Content-Type": "application/x-www-form-urlencoded", auth.CSRFHeader: b.csrf, "HX-Request": "true"})
+		if code != 200 || !strings.Contains(body, form[1]) {
 			t.Errorf("%s: %d %s", path, code, body)
 		}
 	}
@@ -236,6 +253,24 @@ func (s *followingStub) Logs(ctx context.Context, _ string, _ string, _ int, _ b
 	return ctx.Err()
 }
 
+func TestOperationLogEndpoint(t *testing.T) {
+	srv, _ := newServer(t, Options{})
+	code, body := do(t, srv, "GET", "/api/v1/apps/media/operations/7/log", "secret", "")
+	if code != 200 || !strings.Contains(body, "event: log\ndata: <span>done") || !strings.Contains(body, "event: end") {
+		t.Fatalf("%d %s", code, body)
+	}
+	for path, want := range map[string]int{
+		"/api/v1/apps/other/operations/7/log": 404, "/api/v1/apps/media/operations/9/log": 404, "/api/v1/apps/media/operations/x/log": 400,
+	} {
+		if code, _ := do(t, srv, "GET", path, "secret", ""); code != want {
+			t.Errorf("%s: %d", path, code)
+		}
+	}
+	if code, _ := do(t, srv, "GET", "/api/v1/apps/media/operations/7/log", "", ""); code != 401 {
+		t.Fatal(code)
+	}
+}
+
 func TestReadonlyLogFollowCancellation(t *testing.T) {
 	a := newAuthn(t, "secret")
 	token, err := a.CreateToken("reader", auth.RoleReadonly, "admin")
@@ -279,7 +314,7 @@ func TestWebShowsOCIAndValuesRevisions(t *testing.T) {
 	a := newAuthn(t, "secret")
 	srv := httptest.NewServer(New(&ociValuesStub{}, Options{Auth: a}))
 	defer srv.Close()
-	status, body := do(t, srv, "GET", "/apps/media", "secret", "")
+	status, body := do(t, srv, "GET", "/ui/apps/media/details", "secret", "")
 	for _, want := range []string{"oci://registry.lan/charts/app:1.0.0@sha256:abc", "https://git.lan/values.git", "desired-values-commit", "deployed-values-commit"} {
 		if status != 200 || !strings.Contains(body, want) {
 			t.Errorf("%d missing %s: %s", status, want, body)

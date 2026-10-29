@@ -1,9 +1,11 @@
 package controller
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"sync"
@@ -33,8 +35,19 @@ func (c *Controller) startOperation(app, kind, trigger, revision, user string) (
 		return nil, err
 	}
 	c.running[app] = op.ID
+	c.liveLogs[op.ID] = &logBuffer{max: maxLog}
 	c.publish("operation", app)
 	return op, nil
+}
+
+// opLog is the output buffer of running operation op.
+func (c *Controller) opLog(op *store.Operation) *logBuffer {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if b := c.liveLogs[op.ID]; b != nil {
+		return b
+	}
+	return &logBuffer{max: maxLog}
 }
 
 func (c *Controller) finishOperation(app string, op *store.Operation) {
@@ -45,6 +58,10 @@ func (c *Controller) finishOperation(app string, op *store.Operation) {
 	}
 	c.mu.Lock()
 	delete(c.running, app)
+	if b := c.liveLogs[op.ID]; b != nil {
+		delete(c.liveLogs, op.ID)
+		b.finish()
+	}
 	k := metricKey{op.Kind, op.Trigger, op.Phase}
 	m := c.metrics[k]
 	if m == nil {
@@ -103,7 +120,7 @@ func (c *Controller) runSync(ctx context.Context, p *plan, op *store.Operation) 
 	defer p.host.Use()()
 	name := p.app.Metadata.Name
 	o := p.app.Spec.SyncPolicy.Options
-	log := &logBuffer{max: maxLog}
+	log := c.opLog(op)
 	cfg := p.host.Configuration(p.prep.Env, log)
 	cfg.Registry = c.Registry
 
@@ -230,7 +247,7 @@ func (c *Controller) Rollback(name string, revision int, user string) (*store.Op
 		defer c.lockApp(name)()
 		func() {
 			defer h.Use()()
-			log := &logBuffer{max: maxLog}
+			log := c.opLog(op)
 			if _, err := c.releaseHistory(h, name); err != nil {
 				op.Phase, op.Message = store.PhaseFailed, "reading release history: "+err.Error()
 				return
@@ -394,12 +411,62 @@ func (c *Controller) Operation(id int64) (*store.Operation, error) {
 	return &copyOp, nil
 }
 
-// logBuffer keeps the first max bytes written to it, concurrently.
+// FollowOperation writes operation id's output to w, masked line by line. A
+// running operation's output is followed until it finishes or ctx ends.
+func (c *Controller) FollowOperation(ctx context.Context, id int64, w io.Writer) error {
+	c.mu.RLock()
+	b := c.liveLogs[id]
+	c.mu.RUnlock()
+	op, err := c.Store.Operation(id)
+	if errors.Is(err, store.ErrNotFound) {
+		return fmt.Errorf("operation %d: %w", id, ErrNotFound)
+	}
+	if err != nil {
+		return err
+	}
+	if starter, ok := w.(interface{ Start() }); ok {
+		starter.Start()
+	}
+	if b == nil {
+		_, err := io.WriteString(w, c.Mask(op.App, op.Log))
+		return err
+	}
+	var pending []byte
+	for off := 0; ; {
+		data, changed, done := b.since(off)
+		off += len(data)
+		pending = append(pending, data...)
+		if i := bytes.LastIndexByte(pending, '\n'); i >= 0 {
+			if _, err := io.WriteString(w, c.Mask(op.App, string(pending[:i+1]))); err != nil {
+				return err
+			}
+			pending = pending[i+1:]
+		}
+		if done {
+			if len(pending) > 0 {
+				_, err := io.WriteString(w, c.Mask(op.App, string(pending)))
+				return err
+			}
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-changed:
+		}
+	}
+}
+
+// logBuffer keeps the first max bytes written to it, concurrently, and lets
+// readers follow it until finish.
 type logBuffer struct {
 	mu        sync.Mutex
 	max       int
 	buf       []byte
 	truncated bool
+	finished  bool
+	// changed is closed, and replaced, on every write and on finish.
+	changed chan struct{}
 }
 
 func (b *logBuffer) Write(p []byte) (int, error) {
@@ -413,7 +480,38 @@ func (b *logBuffer) Write(p []byte) (int, error) {
 	} else {
 		b.buf = append(b.buf, p...)
 	}
+	b.wakeLocked()
 	return len(p), nil
+}
+
+func (b *logBuffer) wakeLocked() {
+	if b.changed != nil {
+		close(b.changed)
+	}
+	b.changed = make(chan struct{})
+}
+
+// finish tells followers no more output is coming.
+func (b *logBuffer) finish() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.finished = true
+	b.wakeLocked()
+}
+
+// since returns the output after off, a channel closed when there is more,
+// and whether the operation finished.
+func (b *logBuffer) since(off int) ([]byte, <-chan struct{}, bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.changed == nil {
+		b.changed = make(chan struct{})
+	}
+	data := append([]byte(nil), b.buf[min(off, len(b.buf)):]...)
+	if b.finished && b.truncated {
+		data = append(data, "\n[output truncated]\n"...)
+	}
+	return data, b.changed, b.finished
 }
 
 func (b *logBuffer) String() string {

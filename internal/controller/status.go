@@ -15,6 +15,10 @@ import (
 // SyncState says whether the live state matches Git.
 type SyncState string
 
+// OpMissing marks a Change for a resource the release has but the host doesn't
+// run; its diff is against nothing.
+const OpMissing = "missing"
+
 const (
 	Synced    SyncState = "Synced"
 	OutOfSync SyncState = "OutOfSync"
@@ -35,7 +39,10 @@ type AppStatus struct {
 	PausedReason string       `json:"pausedReason,omitempty"`
 	Sync         SyncStatus   `json:"sync"`
 	Health       HealthStatus `json:"health"`
-	Release      *Release     `json:"release,omitempty"`
+	// Objects are the app's compose objects and containers, each compared
+	// with Git; the UI draws them as a graph.
+	Objects []Object `json:"objects,omitempty"`
+	Release *Release `json:"release,omitempty"`
 	// DependsOn are the apps that must be Synced and Healthy first.
 	DependsOn []string `json:"dependsOn,omitempty"`
 	// Blocked says why automation is holding off: a sync window, a dependency,
@@ -69,13 +76,20 @@ type SyncStatus struct {
 	// Drift is how the live containers differ from the deployed manifest or,
 	// before the first sync, from Git: what that sync would recreate or remove.
 	Drift []action.ServiceDrift `json:"drift,omitempty"`
+	// RenderedAt is when Git was last rendered for this app.
+	RenderedAt time.Time `json:"renderedAt,omitzero"`
+	// Stale is true when the latest reconcile failed, and Revision, Changes
+	// and RenderedAt are from the last one that rendered.
+	Stale bool `json:"stale,omitempty"`
 }
 
 // Change is one compose resource (services/web, networks/proxy, ...) that
 // differs from Git.
 type Change struct {
 	Resource string `json:"resource"`
-	Op       string `json:"op"`
+	// Op is added, removed or changed (from the deployed manifest), or
+	// missing: deployed, but not running on the host.
+	Op string `json:"op"`
 	// Diff is a unified diff from the deployed to the desired YAML.
 	Diff string `json:"diff"`
 }

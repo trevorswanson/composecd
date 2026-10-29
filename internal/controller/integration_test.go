@@ -393,3 +393,50 @@ func waitFor(t *testing.T, what string, timeout time.Duration, cond func() bool)
 		}
 	}
 }
+
+func TestIntegrationObjectsAndLiveState(t *testing.T) {
+	e, name := newDockerEnv(t, config.StorageLocal)
+	e.apps(itApp(name, "box", "null"))
+	e.refresh()
+	if _, err := e.c.Sync(name, "it"); err != nil {
+		t.Fatal(err)
+	}
+	e.c.ops.Wait()
+	sync := func(id string) ObjectSync {
+		for _, o := range e.app(name).Objects {
+			if o.ID == id {
+				return o.Sync
+			}
+		}
+		return ""
+	}
+	for _, id := range []string{"services/box", "volumes/data", "configs/greeting", "networks/default", "containers/" + name + "-box-1"} {
+		if got := sync(id); got != ObjectSynced {
+			t.Errorf("%s: %q after sync, objects %+v", id, got, e.app(name).Objects)
+		}
+	}
+	live, err := e.c.LiveObject(context.Background(), name, "services/box", false, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if live.Diff != "" || len(live.Inspect) != 1 || !strings.Contains(live.Projected, "message: hello") {
+		t.Errorf("live after sync: diff %q projected %q", live.Diff, live.Projected)
+	}
+
+	// The stack goes away by hand: the release is still recorded.
+	removeProject(name)
+	e.refresh()
+	st := e.app(name)
+	if sync("services/box") != ObjectMissing || sync("volumes/data") != ObjectMissing || st.Sync.Status != OutOfSync {
+		t.Errorf("after removal: %+v %+v", st.Sync, st.Objects)
+	}
+	missing := map[string]bool{}
+	for _, ch := range st.Sync.Changes {
+		if ch.Op == OpMissing {
+			missing[ch.Resource] = true
+		}
+	}
+	if !missing["services/box"] || !missing["volumes/data"] {
+		t.Errorf("changes = %+v", st.Sync.Changes)
+	}
+}
