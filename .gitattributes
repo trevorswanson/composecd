@@ -1,3 +1,4 @@
 # Keep LF everywhere so golden files and templates match on Windows checkouts.
 * text=auto eol=lf
 *.tgz binary
+*.woff2 binary

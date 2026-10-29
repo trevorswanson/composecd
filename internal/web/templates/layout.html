@@ -1,48 +1,88 @@
 {{define "page"}}<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 {{with .User}}<meta name="csrf-token" content="{{.CSRF}}">{{end}}
-<title>composecd · {{if .User}}{{.Page}}{{else}}Sign in{{end}}</title>
+<title>composecd · {{if .User}}{{if eq .Page "detail"}}{{.Name}}{{else}}{{.Page}}{{end}}{{else}}Sign in{{end}}</title>
+<link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="/static/style.css">
 <script defer src="/static/htmx-2.0.11.min.js"></script><script defer src="/static/sse-2.2.4.js"></script><script defer src="/static/ui.js"></script>
-</head><body {{with .User}}hx-headers="{{headers .}}"{{end}}><main>
+</head><body {{with .User}}hx-headers="{{headers .}}"{{end}}>
 {{if not .User}}
-<form class="login card" method="post" action="/login"><h1>composecd</h1>
-{{with .Error}}<p class="error" role="alert">{{.}}</p>{{end}}
-{{if .OIDC}}<a href="/auth/oidc" class="button">Sign in with your identity provider</a>{{end}}
-<label for="user">User name</label><input id="user" name="user" autocomplete="username" autofocus>
-<label for="password">Password</label><input id="password" name="password" type="password" autocomplete="current-password" required>
-<p class="muted">To use an API token, leave the user name empty and paste the token as the password.</p><button type="submit">Sign in</button></form>
+<main class="login-wrap"><form class="login" method="post" action="/login">
+<div class="brand">{{template "logo"}}<span>composecd</span></div>
+<h1>Sign in</h1>
+{{with .Error}}<div class="callout bad" role="alert"><div><p>{{.}}</p></div></div>{{end}}
+{{if .OIDC}}<a href="/auth/oidc" class="btn btn-primary">Sign in with your identity provider</a><div class="or">or</div>{{end}}
+<div class="field"><label for="user">User name</label><input id="user" name="user" autocomplete="username" autofocus></div>
+<div class="field"><label for="password">Password</label><input id="password" name="password" type="password" autocomplete="current-password" required>
+<span class="hint">To use an API token, leave the user name empty and paste the token as the password.</span></div>
+<button type="submit" class="btn{{if not .OIDC}} btn-primary{{end}}">Sign in</button></form></main>
 {{else}}
-<header><h1>composecd <span class="muted">{{.Version}}</span></h1><div>{{.User.Name}} <span class="badge">{{.User.Role}}</span>
-{{if .User.Session}}<form method="post" action="/logout"><input type="hidden" name="csrf" value="{{.User.CSRF}}"><button type="submit">Sign out</button></form>{{end}}</div></header>
-<nav aria-label="Main"><a href="/apps">Applications</a><a href="/applicationsets">ApplicationSets</a><a href="/hosts">Hosts</a><a href="/windows">Sync windows</a><a href="/operations">Operations</a><a href="/settings">Settings</a></nav>
-<p class="muted">Root <code>{{.Root.RepoURL}}</code> {{.Root.Path}} @ {{.Root.TargetRevision}} = <code>{{short .Root.Revision}}</code></p>
-{{with .Root.Error}}<p class="error" role="alert">{{.}}</p>{{end}}
-{{if eq .Page "apps"}}<h2>Applications</h2><form class="filters" method="get" action="/apps">
-<label>Host <input name="host" value="{{.Filters.Get "host"}}" list="host-options"></label><datalist id="host-options">{{range .Hosts}}<option value="{{.Name}}">{{end}}</datalist>
-<label>Sync <select name="sync">{{range $v := lines "\nSynced\nOutOfSync\nUnknown"}}<option value="{{$v}}" {{if eq ($.Filters.Get "sync") $v}}selected{{end}}>{{if $v}}{{$v}}{{else}}All{{end}}</option>{{end}}</select></label>
-<label>Health <select name="health">{{range $v := lines "\nHealthy\nProgressing\nDegraded\nMissing\nUnknown"}}<option value="{{$v}}" {{if eq ($.Filters.Get "health") $v}}selected{{end}}>{{if $v}}{{$v}}{{else}}All{{end}}</option>{{end}}</select></label>
-<label>Label <input name="label" placeholder="key=value" value="{{.Filters.Get "label"}}"></label><button type="submit">Filter</button><a href="/apps">Clear</a></form>{{end}}
-{{if eq .Page "detail"}}<h2>{{.App.Name}}</h2>
-<nav aria-label="Application tabs">{{range $tab := lines "summary\ncontainers\ndiff\nhistory\noperations"}}<a href="/apps/{{path $.Name}}?tab={{$tab}}" {{if eq $.Tab $tab}}aria-current="page"{{end}}>{{$tab}}</a>{{end}}</nav>
-{{if .Admin}}<div class="actions">{{range $action := lines "sync\npause\nresume\nrefresh"}}<form method="post" action="/ui/apps/{{path $.Name}}/{{$action}}" hx-post="/ui/apps/{{path $.Name}}/{{$action}}" hx-target="#action-result"><input type="hidden" name="csrf" value="{{$.User.CSRF}}"><button type="submit">{{$action}}</button></form>{{end}}</div>{{end}}{{end}}
+<div class="shell">
+<aside class="sidebar">
+<a class="brand" href="/apps">{{template "logo"}}<span>composecd</span>{{with .Version}}<span class="version">{{.}}</span>{{end}}</a>
+<nav class="nav" aria-label="Main">
+<a class="i-apps" href="/apps" {{if or (eq .Page "apps") (eq .Page "detail")}}aria-current="page"{{end}}>Applications</a>
+<a class="i-appsets" href="/applicationsets" {{if eq .Page "applicationsets"}}aria-current="page"{{end}}>ApplicationSets</a>
+<a class="i-host" href="/hosts" {{if or (eq .Page "hosts") (eq .Page "host") (eq .Page "adopt")}}aria-current="page"{{end}}>Hosts</a>
+<a class="i-windows" href="/windows" {{if eq .Page "windows"}}aria-current="page"{{end}}>Sync windows</a>
+<a class="i-operations" href="/operations" {{if eq .Page "operations"}}aria-current="page"{{end}}>Operations</a>
+<a class="i-settings" href="/settings" {{if eq .Page "settings"}}aria-current="page"{{end}}>Settings</a>
+</nav>
+{{template "root" .}}
+<div class="account"><span class="avatar" aria-hidden="true">{{initial .User.Name}}</span>
+<div class="who"><strong>{{.User.Name}}</strong><span>{{.User.Role}}{{with .User.Via}} · {{.}}{{end}}</span></div>
+{{if .User.Session}}<form method="post" action="/logout"><input type="hidden" name="csrf" value="{{.User.CSRF}}"><button type="submit" class="btn btn-ghost btn-sm btn-icon i-signout" aria-label="Sign out" title="Sign out"></button></form>{{end}}</div>
+</aside>
+<div class="main">
+<main class="content">
+{{with .Root.Error}}<div class="callout bad" role="alert"><div><strong>Couldn't read the root repository</strong><code>{{.}}</code></div></div>{{end}}
+{{if eq .Page "apps"}}{{template "apps-head" .}}{{end}}
+{{if eq .Page "detail"}}{{template "detail-head" .}}{{end}}
 <div id="action-result" role="status" aria-live="polite">{{if .Token}}{{template "result" .}}{{end}}</div>
-{{if and (ne .Page "settings") (ne .Page "adopt")}}<div hx-ext="sse" sse-connect="{{.EventsURL}}" sse-swap="app,host,operation" hx-swap="none" aria-hidden="true"></div>{{end}}
+{{if live .}}<div hx-ext="sse" sse-connect="{{.EventsURL}}" sse-swap="app,host,operation" hx-swap="none" aria-hidden="true" id="events"></div>{{end}}
 {{template "panel" .}}
-{{if and (eq .Page "detail") (eq .Tab "containers")}}{{with .Filters.Get "container"}}<h2>Logs · {{.}}</h2><div hx-ext="sse" sse-connect="/api/v1/apps/{{path $.Name}}/containers/{{path .}}/logs?follow=1&amp;tail=200" sse-close="end"><pre class="card log" sse-swap="log" hx-swap="beforeend"></pre><p sse-swap="error" role="alert"></p></div><noscript><a href="/api/v1/apps/{{path $.Name}}/containers/{{path .}}/logs?tail=200">Read log stream</a></noscript>{{end}}{{end}}
-{{end}}</main></body></html>{{end}}
+{{if and (eq .Page "detail") (eq .Tab "containers")}}{{with .Filters.Get "container"}}<section class="card"><div class="card-head"><h2 class="i-logs">Logs <code>{{.}}</code></h2><span class="muted">last 200 lines, following</span></div>
+<div hx-ext="sse" sse-connect="/api/v1/apps/{{path $.Name}}/containers/{{path .}}/logs?follow=1&amp;tail=200" sse-close="end"><pre class="log" sse-swap="log" hx-swap="beforeend"></pre><p class="error card-body" sse-swap="error" role="alert"></p></div>
+<noscript><p class="card-body"><a href="/api/v1/apps/{{path $.Name}}/containers/{{path .}}/logs?tail=200">Read the log stream</a></p></noscript></section>{{end}}{{end}}
+</main></div></div>
+{{end}}</body></html>{{end}}
 
-{{define "result"}}<div class="result">{{.Message}}{{if .Token}}<p>Copy this token now. It will not be shown again.</p><code>{{.Token}}</code>{{end}} <a href="">Reload</a></div>{{end}}
+{{define "logo"}}<svg class="logo" viewBox="0 0 40 40" aria-hidden="true"><rect class="logo-bg" width="40" height="40" rx="10"/><rect class="logo-line" x="10" y="10.5" width="20" height="7.5" rx="2"/><rect class="logo-fill" x="10" y="22" width="20" height="7.5" rx="2"/></svg>{{end}}
 
-{{define "panel"}}<section id="content" class="panel" {{if .OOB}}hx-swap-oob="outerHTML"{{end}}>
+{{/* root is the Git root's state in the sidebar; its details are in a tooltip. */}}
+{{define "root"}}<div class="root-status" id="root-status" {{if .OOB}}hx-swap-oob="outerHTML"{{end}}>
+<div class="tip-anchor" tabindex="0" aria-describedby="root-tip"><span class="dot{{if .Root.Error}} bad{{else if .Root.RefreshedAt.IsZero}} idle{{end}}" aria-hidden="true"></span>
+<span class="what">{{if .Root.Error}}Config fetch failed{{else if .Root.RefreshedAt.IsZero}}Config not fetched yet{{else}}Config fetched <time datetime="{{iso .Root.RefreshedAt}}">{{ago .Root.RefreshedAt}}</time>{{end}}</span>
+<div class="tip" role="tooltip" id="root-tip"><span class="label">Root repository</span>{{with repoWeb .Root.RepoURL}}<a class="repo" href="{{.}}" target="_blank" rel="noopener noreferrer">{{$.Root.RepoURL}}</a>{{else}}<code class="repo">{{.Root.RepoURL}}</code>{{end}}
+<dl>{{with .Root.Path}}<dt>Path</dt><dd><code>{{.}}</code></dd>{{end}}{{with .Root.TargetRevision}}<dt>Tracking</dt><dd><code>{{.}}</code></dd>{{end}}{{with .Root.Revision}}<dt>Commit</dt><dd><code title="{{.}}">{{short .}}</code></dd>{{end}}</dl></div></div>
+{{if .Admin}}<form method="post" action="/ui/root/refresh" hx-post="/ui/root/refresh" hx-target="#action-result">{{template "csrf" .}}<button type="submit" class="btn btn-ghost btn-sm btn-icon i-refresh" aria-label="Fetch the root repository now" title="Fetch now"></button></form>{{end}}
+</div>{{end}}
+
+{{/* live shows whether SSE updates are connected. hx-preserve keeps it, and the
+state ui.js gave it, across live re-renders of the page head. */}}
+{{define "live"}}{{if live .}}<span class="live" id="live" role="status" hx-preserve="true">Connecting</span>{{end}}{{end}}
+
+{{define "pill"}}<span class="pill {{lower .}}">{{.}}</span>{{end}}
+
+{{define "result"}}<div class="callout ok"><div><strong>{{.Message}}</strong>{{if .Token}}<p>Copy this token now. It won't be shown again.</p><code class="secret">{{.Token}}</code>{{end}}</div></div>{{end}}
+
+{{define "csrf"}}<input type="hidden" name="csrf" value="{{.User.CSRF}}">{{end}}
+
+{{define "panel"}}{{if .OOB}}{{template "root" .}}{{end}}{{if and .OOB (eq .Page "detail")}}{{template "detail-head" .}}{{end}}<section id="content" class="panel" {{if .OOB}}hx-swap-oob="outerHTML"{{end}}>
 {{if eq .Page "apps"}}{{template "apps" .}}{{end}}
 {{if eq .Page "detail"}}{{template "detail" .}}{{end}}
 {{if eq .Page "applicationsets"}}{{template "appsets" .}}{{end}}
-{{if eq .Page "hosts"}}<h2>Hosts</h2>{{template "hosts" .}}{{end}}
-{{if eq .Page "windows"}}<h2>Sync windows</h2>{{template "windows" .}}{{end}}
-{{if eq .Page "operations"}}<h2>Operations</h2>{{template "operations" .}}{{end}}
+{{if eq .Page "hosts"}}{{template "hosts" .}}{{end}}
+{{if eq .Page "host"}}{{template "host" .}}{{end}}
+{{if eq .Page "windows"}}{{template "windows" .}}{{end}}
+{{if eq .Page "operations"}}<div class="page-head"><div class="title"><div class="title-row"><h1>Operations</h1>{{template "live" .}}</div><p class="subtitle">Every sync, rollback and repair, newest first.</p></div></div>{{template "operations" .}}{{end}}
 {{if eq .Page "settings"}}{{template "settings" .}}{{end}}
-{{if eq .Page "adopt"}}<h2>Adopt an existing release</h2>{{with .Adoption}}
-<p>This export changes neither Git nor the running release. Review the YAML, commit it to the root repository, run <code>composecd app diff NAME</code>, then sync explicitly.</p>
-{{range .Warnings}}<p class="error">{{.}}</p>{{end}}<pre class="card">{{.YAML}}</pre>{{end}}<a href="/hosts">Back to hosts</a>{{end}}
+{{if eq .Page "adopt"}}{{template "adopt" .}}{{end}}
 </section>{{end}}
+
+{{define "adopt"}}<nav class="crumbs" aria-label="Breadcrumb"><a href="/hosts">Hosts</a><span aria-hidden="true">/</span><a href="/hosts/{{path .Name}}">{{.Name}}</a><span aria-hidden="true">/</span><span aria-current="page">Adopt</span></nav>
+<div class="page-head"><div class="title"><h1>Adopt an existing release</h1></div></div>
+{{with .Adoption}}<div class="callout"><div><strong>Nothing has changed yet</strong><p>This export changes neither Git nor the running release. Review the YAML, commit it to the root repository, run <code>composecd app diff NAME</code>, then sync explicitly.</p></div></div>
+{{range .Warnings}}<div class="callout warn"><div><p>{{.}}</p></div></div>{{end}}
+<section class="card"><div class="card-head"><h2>Application YAML</h2><span class="muted">contains saved values</span></div><pre class="output">{{.YAML}}</pre></section>{{end}}
+<p><a href="/hosts/{{path .Name}}">Back to {{.Name}}</a></p>{{end}}

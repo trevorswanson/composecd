@@ -50,19 +50,24 @@ func (s *Server) Events(w http.ResponseWriter, r *http.Request) {
 	if page == "" {
 		page = "/apps"
 	}
-	if page != "/" && page != "/apps" && page != "/hosts" && page != "/windows" && page != "/operations" && page != "/applicationsets" && !strings.HasPrefix(page, "/apps/") {
+	if page != "/" && page != "/apps" && page != "/hosts" && page != "/windows" && page != "/operations" && page != "/applicationsets" && !strings.HasPrefix(page, "/apps/") && !strings.HasPrefix(page, "/hosts/") {
 		http.Error(w, "Invalid event page", 400)
 		return
 	}
 	view := r.Clone(context.WithValue(r.Context(), liveKey{}, true))
 	view.URL.Path = page
-	if strings.HasPrefix(page, "/apps/") {
+	if strings.HasPrefix(page, "/apps/") || strings.HasPrefix(page, "/hosts/") {
 		name, err := urlPathName(page)
 		if err != nil {
 			pageError(w, err)
 			return
 		}
 		view.SetPathValue("name", name)
+	}
+	// Host pages also refresh when a background discovery scan starts or finishes.
+	var scans <-chan struct{}
+	if strings.HasPrefix(page, "/hosts") {
+		scans = s.scans()
 	}
 	changes, cancel := s.C.Subscribe()
 	defer cancel()
@@ -105,6 +110,11 @@ func (s *Server) Events(w http.ResponseWriter, r *http.Request) {
 			if err := send(change.Kind); err != nil {
 				return
 			}
+		case <-scans:
+			scans = s.scans()
+			if err := send("host"); err != nil {
+				return
+			}
 		case <-tick.C:
 			// Window state changes with the clock even without a reconcile.
 			if err := send("app"); err != nil {
@@ -115,9 +125,9 @@ func (s *Server) Events(w http.ResponseWriter, r *http.Request) {
 }
 
 func urlPathName(page string) (string, error) {
-	name := strings.TrimPrefix(page, "/apps/")
+	_, name, _ := strings.Cut(strings.TrimPrefix(page, "/"), "/")
 	if name == "" || strings.Contains(name, "/") {
-		return "", invalidRequest("invalid application path")
+		return "", invalidRequest("invalid page path")
 	}
 	return name, nil
 }

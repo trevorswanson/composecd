@@ -21,6 +21,7 @@ import (
 
 	"github.com/trevorswanson/composecd/internal/auth"
 	"github.com/trevorswanson/composecd/internal/controller"
+	"github.com/trevorswanson/composecd/internal/health"
 	"github.com/trevorswanson/composecd/internal/store"
 	"github.com/trevorswanson/composecd/internal/windows"
 )
@@ -39,6 +40,7 @@ type Controller interface {
 	Unmanaged(context.Context, string) (*controller.Unmanaged, error)
 	Adopt(context.Context, string, string) (*controller.Adoption, error)
 	Root() controller.RootStatus
+	Refresh()
 	Windows() []windows.Status
 	Sync(string, string) (*store.Operation, error)
 	Rollback(string, int, string) (*store.Operation, error)
@@ -57,40 +59,115 @@ type Server struct {
 	Version string
 
 	inventoryMu sync.Mutex
-	inventory   map[string]inventory
+	inventory   map[string]*inventory
+	// scanned is closed, and replaced, whenever a discovery scan starts or finishes.
+	scanned chan struct{}
 }
 
 type inventory struct {
 	at  time.Time
 	out *controller.Unmanaged
 	err error
+	// running is closed when the scan in progress finishes; nil when idle.
+	running chan struct{}
 }
 
-// inventoryTTL bounds how stale live hosts-page updates may show discovery.
-// Discovery lists releases and runs compose ls and ps on every host, too much
-// to repeat on each controller change for each open browser tab.
+// Inventory is a host's cached discovery as the templates show it.
+type Inventory struct {
+	*controller.Unmanaged
+	Error    string
+	At       time.Time
+	Scanning bool
+}
+
+// inventoryTTL is how old discovery may get before a view rescans it in the
+// background. Discovery lists releases and runs compose ls and ps on the host,
+// slow over SSH and too much to repeat for each render of each open tab.
 const inventoryTTL = time.Minute
+
+// inventoryWait is how long a page load waits on a host with nothing cached
+// before rendering it as scanning; the scan's result arrives over SSE.
+var inventoryWait = 2 * time.Second
 
 // liveKey marks a render for an SSE update rather than a page load.
 type liveKey struct{}
 
-// unmanaged runs discovery on page loads, and reuses a recent result for live
-// updates.
-func (s *Server) unmanaged(r *http.Request, host string) (*controller.Unmanaged, error) {
+// inventories returns each host's cached discovery, starting a background scan
+// for any that is missing or stale (or every one, with force). A page load
+// waits briefly on hosts with nothing cached so quick hosts render complete.
+func (s *Server) inventories(hosts []string, force, wait bool) map[string]Inventory {
 	s.inventoryMu.Lock()
-	cached, ok := s.inventory[host]
-	s.inventoryMu.Unlock()
-	if ok && r.Context().Value(liveKey{}) != nil && time.Since(cached.at) < inventoryTTL {
-		return cached.out, cached.err
+	if s.inventory == nil {
+		s.inventory = map[string]*inventory{}
 	}
-	out, err := s.C.Unmanaged(r.Context(), host)
+	var pending []chan struct{}
+	for _, host := range hosts {
+		inv := s.inventory[host]
+		if inv == nil {
+			inv = &inventory{}
+			s.inventory[host] = inv
+		}
+		if inv.running == nil && (force || time.Since(inv.at) >= inventoryTTL) {
+			inv.running = make(chan struct{})
+			go s.scan(host, inv.running)
+			s.wakeLocked()
+		}
+		if wait && inv.at.IsZero() && inv.running != nil {
+			pending = append(pending, inv.running)
+		}
+	}
+	s.inventoryMu.Unlock()
+	deadline := time.NewTimer(inventoryWait)
+	defer deadline.Stop()
+wait:
+	for _, done := range pending {
+		select {
+		case <-done:
+		case <-deadline.C:
+			break wait
+		}
+	}
+	out := map[string]Inventory{}
 	s.inventoryMu.Lock()
 	defer s.inventoryMu.Unlock()
-	if s.inventory == nil {
-		s.inventory = map[string]inventory{}
+	for _, host := range hosts {
+		inv := s.inventory[host]
+		view := Inventory{Unmanaged: inv.out, At: inv.at, Scanning: inv.running != nil}
+		if inv.err != nil {
+			view.Error = inv.err.Error()
+		}
+		out[host] = view
 	}
-	s.inventory[host] = inventory{at: time.Now(), out: out, err: err}
-	return out, err
+	return out
+}
+
+// scan runs discovery apart from any request, so closing the page that
+// started it doesn't cancel it, and wakes live views when it finishes.
+func (s *Server) scan(host string, done chan struct{}) {
+	out, err := s.C.Unmanaged(context.Background(), host)
+	s.inventoryMu.Lock()
+	defer s.inventoryMu.Unlock()
+	s.inventory[host] = &inventory{at: time.Now(), out: out, err: err}
+	close(done)
+	s.wakeLocked()
+}
+
+// wakeLocked tells live host views that a scan started or finished.
+func (s *Server) wakeLocked() {
+	if s.scanned != nil {
+		close(s.scanned)
+	}
+	s.scanned = make(chan struct{})
+}
+
+// scans returns a channel closed when a discovery scan next starts or finishes.
+func (s *Server) scans() <-chan struct{} {
+	s.inventoryMu.Lock()
+	defer s.inventoryMu.Unlock()
+	if s.scanned == nil {
+		s.scanned = make(chan struct{})
+	}
+	return s.scanned
 }
 
 type Data struct {
@@ -101,14 +178,14 @@ type Data struct {
 	Apps                                                       []controller.AppStatus
 	ApplicationSets                                            []controller.ApplicationSetStatus
 	App                                                        controller.AppStatus
+	Host                                                       controller.HostStatus
 	Hosts                                                      []controller.HostStatus
 	Windows                                                    []windows.Status
 	Operations                                                 []*store.Operation
 	History                                                    []controller.Release
 	Users                                                      []*store.User
 	Tokens                                                     []*store.Token
-	Unmanaged                                                  map[string]*controller.Unmanaged
-	DiscoveryErrors                                            map[string]string
+	Inventory                                                  map[string]Inventory
 	Adoption                                                   *controller.Adoption
 	Filters                                                    url.Values
 }
@@ -123,30 +200,156 @@ var templates = template.Must(template.New("web").Funcs(template.FuncMap{
 	},
 	"lines": func(s string) []string { return strings.Split(s, "\n") },
 	"lineClass": func(s string) string {
-		if strings.HasPrefix(s, "+") {
+		switch {
+		case strings.HasPrefix(s, "@@"):
+			return "hunk"
+		case strings.HasPrefix(s, "+"):
 			return "added"
-		}
-		if strings.HasPrefix(s, "-") {
+		case strings.HasPrefix(s, "-"):
 			return "removed"
 		}
 		return ""
 	},
+	"diffstat": diffstat,
+	"tally":    tally,
+	"ago":      ago,
+	"iso": func(v interface{}) string {
+		if t := toTime(v); !t.IsZero() {
+			return t.Format(time.RFC3339)
+		}
+		return ""
+	},
+	"initial": func(s string) string {
+		for _, r := range s {
+			return strings.ToUpper(string(r))
+		}
+		return "?"
+	},
+	// query is the filter query string with key set to v (or removed when v is "").
+	"query": func(q url.Values, key, v string) string {
+		out := url.Values{}
+		for k, vs := range q {
+			out[k] = vs
+		}
+		if v == "" {
+			out.Del(key)
+		} else {
+			out.Set(key, v)
+		}
+		if len(out) == 0 {
+			return ""
+		}
+		return "?" + out.Encode()
+	},
 	"path": url.PathEscape,
+	// live reports whether the page takes SSE updates.
+	"live": func(d *Data) bool { return d.Page != "settings" && d.Page != "adopt" },
+	"pair": func(a, b interface{}) []interface{} { return []interface{}{a, b} },
+	// state is a Compose project status's state, "running" in "running(3)".
+	"state": func(s string) string {
+		state, _, _ := strings.Cut(s, "(")
+		return strings.ToLower(state)
+	},
+	// repoWeb is a repository URL a browser can open, or "" for SSH remotes.
+	"repoWeb": func(u string) string {
+		if !strings.HasPrefix(u, "https://") && !strings.HasPrefix(u, "http://") {
+			return ""
+		}
+		return strings.TrimSuffix(strings.TrimSuffix(u, "/"), ".git")
+	},
 	"headers": func(p *auth.Principal) string {
 		b, _ := json.Marshal(map[string]string{auth.CSRFHeader: p.CSRF})
 		return string(b)
 	},
 }).ParseFS(files, "templates/*.html"))
 
+// Stat counts the lines a unified diff adds and removes.
+type Stat struct{ Add, Del int }
+
+func diffstat(diff string) Stat {
+	var s Stat
+	for _, l := range strings.Split(diff, "\n") {
+		switch {
+		case strings.HasPrefix(l, "+"):
+			s.Add++
+		case strings.HasPrefix(l, "-"):
+			s.Del++
+		}
+	}
+	return s
+}
+
+// Tally counts the states worth calling out above the applications table.
+type Tally struct{ Total, OutOfSync, Degraded, Progressing, Missing int }
+
+func tally(apps []controller.AppStatus) Tally {
+	t := Tally{Total: len(apps)}
+	for _, a := range apps {
+		if a.Sync.Status == controller.OutOfSync {
+			t.OutOfSync++
+		}
+		switch a.Health.Status {
+		case health.Degraded:
+			t.Degraded++
+		case health.Progressing:
+			t.Progressing++
+		case health.Missing:
+			t.Missing++
+		}
+	}
+	return t
+}
+
+// ago renders t relative to now ("3 min ago", "in 2 h"), falling back to a
+// date past a week. Live updates re-render it, so it stays current.
+func ago(v interface{}) string {
+	t := toTime(v)
+	if t.IsZero() {
+		return "never"
+	}
+	d := time.Since(t)
+	suffix, prefix := " ago", ""
+	if d < 0 {
+		d, suffix, prefix = -d, "", "in "
+	}
+	switch {
+	case d < 10*time.Second && suffix != "":
+		return "just now"
+	case d < time.Minute:
+		return fmt.Sprintf("%s%d s%s", prefix, int(d.Seconds()), suffix)
+	case d < time.Hour:
+		return fmt.Sprintf("%s%d min%s", prefix, int(d.Minutes()), suffix)
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%s%d h%s", prefix, int(d.Hours()), suffix)
+	case d < 7*24*time.Hour:
+		return fmt.Sprintf("%s%d d%s", prefix, int(d.Hours()/24), suffix)
+	}
+	return t.Local().Format("Jan 2, 2006 15:04")
+}
+
+// toTime accepts the time.Time and optional *time.Time fields templates pass.
+func toTime(v interface{}) time.Time {
+	switch x := v.(type) {
+	case time.Time:
+		return x
+	case *time.Time:
+		if x != nil {
+			return *x
+		}
+	}
+	return time.Time{}
+}
+
 func (s *Server) Register(mux *http.ServeMux) {
 	static, _ := fs.Sub(files, "static")
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(http.FS(static))))
-	for _, route := range []string{"/{$}", "/apps", "/apps/{name}", "/hosts", "/windows", "/operations", "/settings", "/applicationsets"} {
+	for _, route := range []string{"/{$}", "/apps", "/apps/{name}", "/hosts", "/hosts/{name}", "/windows", "/operations", "/settings", "/applicationsets"} {
 		mux.HandleFunc("GET "+route, s.Page)
 	}
 	mux.HandleFunc("GET /hosts/{name}/adopt/{release}", s.Adopt)
 	mux.HandleFunc("POST /ui/apps/{name}/{action}", s.Action)
-	mux.HandleFunc("POST /ui/hosts/{name}/maintenance", s.Action)
+	mux.HandleFunc("POST /ui/hosts/{name}/{action}", s.Action)
+	mux.HandleFunc("POST /ui/root/{action}", s.Action)
 	mux.HandleFunc("POST /ui/settings/{action}", s.Action)
 	mux.HandleFunc("GET /events", s.Events)
 	mux.HandleFunc("GET /api/v1/apps/{name}/containers/{container}/logs", s.Logs)
@@ -180,7 +383,10 @@ func (s *Server) data(r *http.Request, p *auth.Principal) (*Data, error) {
 	d := &Data{User: p, Auth: !s.Auth.Disabled, OIDC: s.Auth.OIDC != nil, Admin: p.Role == auth.RoleAdmin, Version: s.Version, Filters: r.URL.Query(), Root: s.C.Root()}
 	d.Page = strings.Trim(r.URL.Path, "/")
 	d.Name = r.PathValue("name")
-	if d.Name != "" {
+	switch {
+	case d.Name != "" && strings.HasPrefix(r.URL.Path, "/hosts/"):
+		d.Page = "host"
+	case d.Name != "":
 		d.Page = "detail"
 	}
 	if d.Page == "" {
@@ -223,21 +429,23 @@ func (s *Server) data(r *http.Request, p *auth.Principal) (*Data, error) {
 		}
 	case "applicationsets":
 		d.ApplicationSets = s.C.ApplicationSets()
-	case "hosts":
-		d.Hosts = s.C.HostStatuses()
-		d.Unmanaged = map[string]*controller.Unmanaged{}
-		d.DiscoveryErrors = map[string]string{}
-		for _, h := range d.Hosts {
-			if h.Retired {
+	case "hosts", "host":
+		live := r.Context().Value(liveKey{}) != nil
+		var scan []string
+		for _, h := range s.C.HostStatuses() {
+			if d.Page == "host" && h.Name != d.Name {
 				continue
 			}
-			inventory, err := s.unmanaged(r, h.Name)
-			if err != nil {
-				d.DiscoveryErrors[h.Name] = err.Error()
-			} else {
-				d.Unmanaged[h.Name] = inventory
+			d.Host = h
+			d.Hosts = append(d.Hosts, h)
+			if !h.Retired {
+				scan = append(scan, h.Name)
 			}
 		}
+		if d.Page == "host" && len(d.Hosts) == 0 {
+			return nil, fmt.Errorf("host %q: %w", d.Name, controller.ErrNotFound)
+		}
+		d.Inventory = s.inventories(scan, false, !live)
 	case "windows":
 		d.Windows = s.C.Windows()
 	case "operations":
@@ -265,6 +473,15 @@ func (s *Server) data(r *http.Request, p *auth.Principal) (*Data, error) {
 	q.Set("page", r.URL.Path)
 	d.EventsURL = "/events?" + q.Encode()
 	return d, nil
+}
+
+func (s *Server) hostStatus(name string) (controller.HostStatus, bool) {
+	for _, h := range s.C.HostStatuses() {
+		if h.Name == name {
+			return h, true
+		}
+	}
+	return controller.HostStatus{}, false
 }
 
 func matches(a controller.AppStatus, q url.Values) bool {
@@ -386,8 +603,29 @@ func (s *Server) Action(w http.ResponseWriter, r *http.Request) {
 			err = controller.ErrNotFound
 		}
 	case strings.HasPrefix(r.URL.Path, "/ui/hosts/"):
-		target = "/hosts"
-		err = s.C.SetMaintenance(name, r.FormValue("enabled") == "true", "maintenance (by "+p.Name+")")
+		target = "/hosts/" + url.PathEscape(name)
+		switch action {
+		case "maintenance":
+			target = "/hosts"
+			err = s.C.SetMaintenance(name, r.FormValue("enabled") == "true", "maintenance (by "+p.Name+")")
+		case "rescan":
+			if h, ok := s.hostStatus(name); !ok || h.Retired {
+				err = fmt.Errorf("host %q: %w", name, controller.ErrNotFound)
+				break
+			}
+			s.inventories([]string{name}, true, false)
+			message = "Rescan started"
+		default:
+			err = controller.ErrNotFound
+		}
+	case strings.HasPrefix(r.URL.Path, "/ui/root/"):
+		target = "/apps"
+		if action != "refresh" {
+			err = controller.ErrNotFound
+			break
+		}
+		s.C.Refresh()
+		message = "Fetching the root repository"
 	case strings.HasPrefix(r.URL.Path, "/ui/settings/"):
 		target = "/settings"
 		if s.Auth.Store == nil {
@@ -456,5 +694,5 @@ func (s *Server) Adopt(w http.ResponseWriter, r *http.Request) {
 		pageError(w, err)
 		return
 	}
-	render(w, 200, "page", &Data{User: p, Admin: true, Page: "adopt", Root: s.C.Root(), Version: s.Version, Adoption: adoption})
+	render(w, 200, "page", &Data{User: p, Admin: true, Page: "adopt", Name: r.PathValue("name"), Root: s.C.Root(), Version: s.Version, Adoption: adoption})
 }
