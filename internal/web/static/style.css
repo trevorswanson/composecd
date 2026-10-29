@@ -26,6 +26,7 @@ code { font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; }
 .degraded, .missing, .down, .failed { color: var(--bad); }
 .unknown { color: var(--muted); }
 .error { color: var(--bad); font-size: 12px; margin-top: 4px; }
+.warning { color: var(--warn); font-size: 12px; margin-top: 4px; }
 form.login { max-width: 360px; margin: 80px auto; display: grid; gap: 10px; }
 a.button { display: block; text-align: center; text-decoration: none; padding: 8px 10px; border-radius: 6px;
   border: 1px solid var(--line); background: var(--card); color: var(--fg); }

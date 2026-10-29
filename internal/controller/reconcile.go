@@ -141,7 +141,7 @@ func (c *Controller) assess(ctx context.Context, app *config.Application, fetchE
 	manifest, hks, err := c.render(ctx, cfg, h, app, p.prep, revision)
 	if err != nil {
 		p.done()
-		return fail(err)
+		return fail(p.prep.RelativeErr(err))
 	}
 	projectDir := h.ProjectDir(name)
 	var revisions []string

@@ -435,6 +435,8 @@ spec:
 
 `gitDirectories` uses Go `path.Match` globs: `*` matches one path segment, and `**` has no recursive-glob
 meaning. Matching directories need a regular `Chart.yaml`; hidden and symlinked directories are skipped.
+A matched directory without a `Chart.yaml` (a `Chart.yml`, say) generates nothing, and the set lists it
+in a warning, as it does a set that generates no applications at all.
 Overlapping include globs within one generator generate each directory once. Repository and revision
 defaults follow the Git root, or `HEAD` for another repository. Generated Git sources with no explicit
 repository inherit their Git generator's repository/revision.
@@ -474,6 +476,9 @@ Git still applies. A set dropping from N apps to zero reports `generated: 0, was
 protects existing releases. Release ownership labels restore that protection after restart; protected releases may appear
 as host orphans until generation recovers. To intentionally retire the entire set, remove the set object
 while retaining a valid nonempty root, as with the existing whole-root prune guard.
+
+Generated apps whose charts fail to render (a template error, invalid `Chart.yaml` or values) report the
+error on the app, and the ApplicationSets page marks their set as failing and lists each app's error.
 
 A Host removed from Git is retained as a retired connection for pending prune/retries during the current
 process. Its last connection is not persisted, so keep Host definitions until pruning completes if a

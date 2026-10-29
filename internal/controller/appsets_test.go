@@ -313,3 +313,61 @@ func TestApplicationSetErrorIsIsolated(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// A generated app whose chart doesn't render must not leave its set looking
+// healthy: the set reports the app's error, named by repository path.
+func TestApplicationSetReportsAppRenderErrors(t *testing.T) {
+	e := newEnv(t)
+	generatedFixture(e)
+	if sets := e.c.ApplicationSets(); len(sets[0].AppErrors) != 0 || len(sets[0].Warnings) != 0 {
+		t.Fatalf("%+v", sets)
+	}
+	e.commit(map[string]string{"charts/app-b/Chart.yaml": "name: [oops\n"})
+	e.refresh()
+	sets := e.c.ApplicationSets()
+	got := sets[0].AppErrors["gen-app-b"]
+	if !sets[0].Ready || len(sets[0].AppErrors) != 1 || !strings.Contains(got, "rendering: ") || !strings.Contains(got, "charts/app-b/Chart.yaml") {
+		t.Fatalf("%+v", sets)
+	}
+	if strings.Contains(got, "checkouts") || strings.Contains(e.app("gen-app-b").Error, "checkouts") {
+		t.Fatalf("error leaks the controller's checkout path: %s", got)
+	}
+	e.commit(map[string]string{"charts/app-b/Chart.yaml": "name: app-b\nversion: 0.1.0\n"})
+	e.refresh()
+	if sets := e.c.ApplicationSets(); len(sets[0].AppErrors) != 0 {
+		t.Fatalf("%+v", sets)
+	}
+}
+
+// Directories that match but hold no chart, and sets that generate nothing,
+// are reported instead of silently producing no applications.
+func TestApplicationSetWarnsAboutSkippedDirectories(t *testing.T) {
+	e := newEnv(t)
+	e.commit(map[string]string{
+		"composecd/sets.yaml":             directorySet("stacks", "charts/app-*"),
+		"charts/app-a/Chart.yml":          "name: app-a\nversion: 0.1.0\n",
+		"charts/app-a/templates/web.yaml": webTemplate,
+	})
+	e.refresh()
+	st := e.c.ApplicationSets()[0]
+	if !st.Ready || st.Generated != 0 || strings.Join(st.Warnings, "|") != "generated no applications|skipped 1 matched directory without a Chart.yaml: charts/app-a" {
+		t.Fatalf("%+v", st)
+	}
+	e.git("mv", "charts/app-a/Chart.yml", "charts/app-a/Chart.yaml")
+	e.commit(map[string]string{"charts/app-a/values.yaml": "tag: '1'\n"})
+	e.refresh()
+	if st := e.c.ApplicationSets()[0]; st.Generated != 1 || len(st.Warnings) != 0 {
+		t.Fatalf("%+v", st)
+	}
+}
+
+func TestSetWarningsBoundsListedDirectories(t *testing.T) {
+	var skipped []string
+	for i := 0; i < maxSkippedListed+2; i++ {
+		skipped = append(skipped, fmt.Sprintf("d%02d", i))
+	}
+	w := setWarnings(1, skipped)
+	if len(w) != 1 || !strings.HasPrefix(w[0], "skipped 12 matched directories") || !strings.HasSuffix(w[0], "d09, and 2 more") {
+		t.Fatal(w)
+	}
+}
