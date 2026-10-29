@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/trevorswanson/composetpl/pkg/action"
+	"github.com/trevorswanson/composetpl/pkg/compose"
 	"github.com/trevorswanson/composetpl/pkg/diff"
 	"github.com/trevorswanson/composetpl/pkg/hooks"
 	"github.com/trevorswanson/composetpl/pkg/output"
@@ -156,6 +157,18 @@ func (c *Controller) assess(ctx context.Context, app *config.Application, fetchE
 	p.key = desiredKey(manifest, hks, projectDir, revisions...)
 
 	var reasons []string
+	base := ""
+	if deployed != nil {
+		base = deployed.Manifest
+	}
+	changes, err := diff.Manifests(base, manifest)
+	if err != nil {
+		p.done()
+		return fail(err)
+	}
+	for _, ch := range changes {
+		st.Sync.Changes = append(st.Sync.Changes, toChange(name, ch))
+	}
 	if deployed == nil {
 		reasons = append(reasons, "not deployed")
 	} else {
@@ -175,14 +188,6 @@ func (c *Controller) assess(ctx context.Context, app *config.Application, fetchE
 		}
 		if app.Spec.Source.IsOCI() && deployed.Chart.Ref != p.prep.ChartRef {
 			reasons = append(reasons, "chart reference differs from the desired OCI digest")
-		}
-		changes, err := diff.Manifests(deployed.Manifest, manifest)
-		if err != nil {
-			p.done()
-			return fail(err)
-		}
-		for _, ch := range changes {
-			st.Sync.Changes = append(st.Sync.Changes, toChange(name, ch))
 		}
 		if len(changes) > 0 {
 			reasons = append(reasons, fmt.Sprintf("%d %s differ from Git", len(changes), plural(len(changes), "resource", "resources")))
@@ -206,6 +211,26 @@ func (c *Controller) assess(ctx context.Context, app *config.Application, fetchE
 	st.Health.Containers = containers
 	if err == nil {
 		st.Health.Status, st.Health.Message = health.Assess(deployed != nil, containers)
+	}
+	if deployed == nil && len(containers) > 0 {
+		// Containers already in the project (a stack started by hand, say) are
+		// what the first sync's `compose up` recreates or removes.
+		drift, err := existingDrift(ctx, cfg, compose.Project{Name: name, Manifest: []byte(manifest), Dir: projectDir}, hks, containers)
+		switch {
+		case err != nil:
+			warnings = append(warnings, "checking existing containers: "+err.Error())
+		case len(drift) > 0:
+			st.Sync.Drift = drift
+			var parts []string
+			for _, d := range drift {
+				if d.Reason != action.DriftStopped {
+					parts = append(parts, d.Service+" "+d.Reason)
+				}
+			}
+			if len(parts) > 0 {
+				reasons = append(reasons, "existing containers differ from Git: "+strings.Join(parts, ", "))
+			}
+		}
 	}
 	if deployed != nil {
 		drift, err := action.NewRepair(cfg).Drift(ctx, name)
@@ -236,6 +261,68 @@ func (c *Controller) assess(ctx context.Context, app *config.Application, fetchE
 	}
 	st.Error = strings.Join(warnings, "; ")
 	return st, p
+}
+
+// existingDrift compares containers that predate app's first release with the
+// desired project, the way composetpl's repair compares them with a deployed
+// release: by the config hash compose records on each container. Services the
+// project has but no container runs are left out; Changes already show them as
+// added.
+func existingDrift(ctx context.Context, cfg *action.Configuration, p compose.Project, hks []*release.Hook, containers []compose.Container) ([]action.ServiceDrift, error) {
+	want, err := cfg.Compose.ConfigHash(ctx, p)
+	if err != nil {
+		return nil, err
+	}
+	hookNames := map[string]bool{}
+	for _, h := range hks {
+		hookNames[h.Name] = true
+	}
+	type key struct{ service, reason string }
+	found := map[key][]string{}
+	for _, c := range containers {
+		hash, ok := want[c.Service]
+		var reason string
+		switch {
+		case !ok && !hookNames[c.Service]:
+			reason = action.DriftOrphaned
+		case !ok:
+			continue
+		case c.ConfigHash() != hash:
+			reason = action.DriftChanged
+		case c.State != "running":
+			reason = action.DriftStopped
+		default:
+			continue
+		}
+		k := key{c.Service, reason}
+		found[k] = append(found[k], c.Name)
+	}
+	out := make([]action.ServiceDrift, 0, len(found))
+	for k, names := range found {
+		sort.Strings(names)
+		out = append(out, action.ServiceDrift{Service: k.service, Reason: k.reason, Containers: names})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Service != out[j].Service {
+			return out[i].Service < out[j].Service
+		}
+		return out[i].Reason < out[j].Reason
+	})
+	return out, nil
+}
+
+// ExistingAction says what the first sync does to an existing container
+// existingDrift reported with reason.
+func ExistingAction(reason string) string {
+	switch reason {
+	case action.DriftChanged:
+		return "differs from Git, would be recreated"
+	case action.DriftOrphaned:
+		return "not in Git, would be removed"
+	case action.DriftStopped:
+		return "matches Git, would be started"
+	}
+	return reason
 }
 
 // prepare resolves app's source revision and checkout.

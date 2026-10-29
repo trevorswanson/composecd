@@ -244,7 +244,7 @@ host maintenance, a retry or self-heal backoff, or a failed sync waiting for a c
 | Command | |
 | --- | --- |
 | `app list`, `app get NAME` | Status, reasons, containers and drift. `-o json\|yaml` |
-| `app diff NAME` | Per-resource unified diff from the deployed release to Git. `--exit-code` exits 1 when out of sync. |
+| `app diff NAME` | Per-resource unified diff from the deployed release to Git (from nothing, before the first sync). Before the first sync it also lists containers already in the project that the sync would recreate or remove. `--exit-code` exits 1 when out of sync. |
 | `app sync NAME` | Fetches and deploys now, even if paused. Waits by default; `--logs` prints compose and hook output. |
 | `app rollback NAME [REVISION]` | Redeploys an earlier composetpl revision. Automated apps are then **paused**, so auto-sync doesn't undo the rollback. |
 | `app pause NAME`, `app resume NAME` | Stops or restarts automatic sync. |

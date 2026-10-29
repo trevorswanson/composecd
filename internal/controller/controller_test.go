@@ -242,8 +242,9 @@ func TestManualSyncAndDiff(t *testing.T) {
 	e := newEnv(t)
 	e.refresh()
 	manual := e.app("manual")
-	if len(manual.Sync.Changes) != 0 {
-		t.Errorf("an undeployed app has no per-resource changes: %+v", manual.Sync.Changes)
+	// An undeployed app diffs against nothing: every resource is added.
+	if ch := manual.Sync.Changes; len(ch) != 2 || ch[0].Op != "added" || ch[1].Op != "added" || len(manual.Sync.Drift) != 0 {
+		t.Errorf("undeployed changes = %+v, drift = %+v", ch, manual.Sync.Drift)
 	}
 
 	op, err := e.c.Sync("manual", "trevor")
@@ -410,4 +411,32 @@ func contains(list []string, s string) bool {
 
 func (b *fakeBackend) Logs(context.Context, *hosts.Host, string, int, bool, io.Writer) error {
 	return nil
+}
+
+func TestUndeployedDiff(t *testing.T) {
+	e := newEnv(t)
+	// A stack started by hand under the app's project name, before any sync.
+	e.fake().Containers = map[string][]compose.Container{"manual": {
+		{Name: "manual-web-1", Service: "web", State: "running", Labels: compose.Labels{compose.ConfigHashLabel: "stale"}},
+		{Name: "manual-db-1", Service: "db", State: "running"},
+	}}
+	e.refresh()
+
+	manual := e.app("manual")
+	if len(manual.Sync.Changes) != 2 || manual.Sync.Changes[0].Resource != "name" || manual.Sync.Changes[1].Resource != "services/web" {
+		t.Fatalf("changes = %+v", manual.Sync.Changes)
+	}
+	if ch := manual.Sync.Changes[1]; ch.Op != "added" || !strings.Contains(ch.Diff, "+image: nginx:1") {
+		t.Errorf("web change = %+v", ch)
+	}
+	drift := manual.Sync.Drift
+	if len(drift) != 2 || drift[0].Service != "db" || drift[0].Reason != "orphaned" || drift[1].Service != "web" || drift[1].Reason != "changed" {
+		t.Errorf("drift = %+v", drift)
+	}
+	if got := strings.Join(manual.Sync.Reasons, ";"); got != "not deployed;existing containers differ from Git: db orphaned, web changed" {
+		t.Errorf("reasons = %q", got)
+	}
+	if manual.Error != "" {
+		t.Errorf("error = %q", manual.Error)
+	}
 }
