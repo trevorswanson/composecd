@@ -33,3 +33,11 @@ document.addEventListener('htmx:sseMessage', function (event) {
   while (log.children.length > 2000) { log.firstElementChild.remove(); }
   if (follow) { log.scrollTop = log.scrollHeight; }
 });
+// Open and close the main menu on narrow screens, where it folds behind a button.
+document.addEventListener('click', function (event) {
+  var toggle = event.target.closest('.nav-toggle');
+  if (!toggle) { return; }
+  var open = toggle.getAttribute('aria-expanded') !== 'true';
+  toggle.setAttribute('aria-expanded', String(open));
+  toggle.setAttribute('aria-label', open ? 'Close menu' : 'Menu');
+});

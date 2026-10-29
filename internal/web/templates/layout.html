@@ -5,6 +5,7 @@
 <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="/static/style.css">
 <script defer src="/static/htmx-2.0.11.min.js"></script><script defer src="/static/sse-2.2.4.js"></script><script defer src="/static/ui.js"></script>
+<noscript><style>.sidebar-menu { display: flex !important; } .nav-toggle { display: none !important; }</style></noscript>
 </head><body {{with .User}}hx-headers="{{headers .}}"{{end}}>
 {{if not .User}}
 <main class="login-wrap"><form class="login" method="post" action="/login">
@@ -19,7 +20,9 @@
 {{else}}
 <div class="shell">
 <aside class="sidebar">
-<a class="brand" href="/apps">{{template "logo"}}<span>composecd</span>{{with .Version}}<span class="version">{{.}}</span>{{end}}</a>
+<a class="brand" href="/apps">{{template "logo"}}<span class="brand-text"><span>composecd</span>{{with .Version}}<span class="version" title="composecd {{.}}">{{shortVersion .}}</span>{{end}}</span></a>
+<button type="button" class="btn btn-ghost btn-icon nav-toggle" aria-expanded="false" aria-controls="sidebar-menu" aria-label="Menu"></button>
+<div class="sidebar-menu" id="sidebar-menu">
 <nav class="nav" aria-label="Main">
 <a class="i-apps" href="/apps" {{if or (eq .Page "apps") (eq .Page "detail")}}aria-current="page"{{end}}>Applications</a>
 <a class="i-appsets" href="/applicationsets" {{if eq .Page "applicationsets"}}aria-current="page"{{end}}>ApplicationSets</a>
@@ -32,6 +35,7 @@
 <div class="account"><span class="avatar" aria-hidden="true">{{initial .User.Name}}</span>
 <div class="who"><strong>{{.User.Name}}</strong><span>{{.User.Role}}{{with .User.Via}} · {{.}}{{end}}</span></div>
 {{if .User.Session}}<form method="post" action="/logout"><input type="hidden" name="csrf" value="{{.User.CSRF}}"><button type="submit" class="btn btn-ghost btn-sm btn-icon i-signout" aria-label="Sign out" title="Sign out"></button></form>{{end}}</div>
+</div>
 </aside>
 <div class="main">
 <main class="content">
