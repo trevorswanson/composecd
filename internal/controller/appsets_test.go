@@ -3,6 +3,7 @@ package controller
 import (
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -325,7 +326,8 @@ func TestApplicationSetReportsAppRenderErrors(t *testing.T) {
 	e.commit(map[string]string{"charts/app-b/Chart.yaml": "name: [oops\n"})
 	e.refresh()
 	sets := e.c.ApplicationSets()
-	got := sets[0].AppErrors["gen-app-b"]
+	// composetpl joins the chart directory with OS separators.
+	got := filepath.ToSlash(sets[0].AppErrors["gen-app-b"])
 	if !sets[0].Ready || len(sets[0].AppErrors) != 1 || !strings.Contains(got, "rendering: ") || !strings.Contains(got, "charts/app-b/Chart.yaml") {
 		t.Fatalf("%+v", sets)
 	}
