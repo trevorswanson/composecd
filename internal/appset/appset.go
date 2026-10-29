@@ -28,6 +28,12 @@ type Status struct {
 	Applications []string `json:"applications"`
 	Ready        bool     `json:"ready"`
 	Error        string   `json:"error,omitempty"`
+	// Warnings explain output that is suspicious but not an error, such as
+	// matched directories without a Chart.yaml or no applications at all.
+	Warnings []string `json:"warnings,omitempty"`
+	// AppErrors are the generated applications that can't be reconciled (a
+	// chart that doesn't render, say), keyed by application name.
+	AppErrors map[string]string `json:"appErrors,omitempty"`
 }
 
 // Checkout provides a protected, resolved checkout and its release function.
@@ -35,25 +41,27 @@ type Checkout func(context.Context, string, string) (string, func(), error)
 
 // Generate expands each generator separately. Any failure discards this set's
 // entire output, preventing partial results from deleting previously known apps.
-func Generate(ctx context.Context, set *config.ApplicationSet, hosts []*config.Host, checkout Checkout) ([]*config.Application, error) {
-	var apps []*config.Application
+// skipped are the directories a gitDirectories generator matched that hold no
+// Chart.yaml, so generated no application.
+func Generate(ctx context.Context, set *config.ApplicationSet, hosts []*config.Host, checkout Checkout) (apps []*config.Application, skipped []string, err error) {
 	for _, g := range set.Spec.Generators {
 		if err := ctx.Err(); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		switch {
 		case g.GitDirectories != nil && g.Hosts == nil:
 			d := g.GitDirectories
 			dir, done, err := checkout(ctx, d.RepoURL, d.TargetRevision)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			generated, err := func() ([]*config.Application, error) {
 				defer done()
-				dirs, err := directories(ctx, dir, d)
+				dirs, noChart, err := directories(ctx, dir, d)
 				if err != nil {
 					return nil, err
 				}
+				skipped = append(skipped, noChart...)
 				var out []*config.Application
 				for _, p := range dirs {
 					params := map[string]interface{}{"path": map[string]interface{}{"path": p, "basename": path.Base(p), "segments": strings.Split(p, "/")}}
@@ -72,7 +80,7 @@ func Generate(ctx context.Context, set *config.ApplicationSet, hosts []*config.H
 				return out, nil
 			}()
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			apps = append(apps, generated...)
 		case g.Hosts != nil && g.GitDirectories == nil:
@@ -91,21 +99,23 @@ func Generate(ctx context.Context, set *config.ApplicationSet, hosts []*config.H
 				params := map[string]interface{}{"host": map[string]interface{}{"name": h.Metadata.Name, "labels": h.Metadata.Labels}}
 				a, err := render(set, params, "host "+h.Metadata.Name)
 				if err != nil {
-					return nil, err
+					return nil, nil, err
 				}
 				apps = append(apps, a)
 			}
 		default:
-			return nil, fmt.Errorf("choose exactly one supported generator")
+			return nil, nil, fmt.Errorf("choose exactly one supported generator")
 		}
 	}
 	sort.SliceStable(apps, func(i, j int) bool { return apps[i].Metadata.Name < apps[j].Metadata.Name })
-	return apps, nil
+	sort.Strings(skipped)
+	return apps, skipped, nil
 }
 
-func directories(ctx context.Context, root string, g *config.GitDirectories) ([]string, error) {
-	var dirs []string
-	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+// directories returns the directories under root that g matches and that hold
+// a chart, and those it matches that don't.
+func directories(ctx context.Context, root string, g *config.GitDirectories) (dirs, noChart []string, err error) {
+	err = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -128,6 +138,7 @@ func directories(ctx context.Context, root string, g *config.GitDirectories) ([]
 		}
 		st, err := os.Lstat(filepath.Join(p, "Chart.yaml"))
 		if os.IsNotExist(err) {
+			noChart = append(noChart, rel)
 			return nil
 		}
 		if err != nil {
@@ -140,7 +151,8 @@ func directories(ctx context.Context, root string, g *config.GitDirectories) ([]
 		return nil
 	})
 	sort.Strings(dirs)
-	return dirs, err
+	sort.Strings(noChart)
+	return dirs, noChart, err
 }
 func matches(globs []string, s string) bool {
 	for _, g := range globs {

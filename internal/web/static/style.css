@@ -94,6 +94,7 @@ code, pre, kbd { font-family: var(--mf-mono); font-size: 12px; }
 .muted { color: var(--mf-text-3); }
 .mono { font-family: var(--mf-mono); }
 .error { color: var(--mf-bad); font-size: 13px; line-height: 18px; overflow-wrap: anywhere; }
+.warning { color: var(--mf-warn); font-size: 13px; line-height: 18px; overflow-wrap: anywhere; }
 .reason { color: var(--mf-text-3); font-size: 13px; line-height: 18px; overflow-wrap: anywhere; }
 .t-ok { color: var(--mf-ok); } .t-warn { color: var(--mf-warn); } .t-prog { color: var(--mf-prog); } .t-bad { color: var(--mf-bad); }
 
@@ -304,6 +305,7 @@ a.name:hover { color: var(--mf-accent); }
 .pill.progressing, .pill.running, .pill.h-starting, .pill.c-restarting, .pill.r-pending-install,
 .pill.r-pending-upgrade, .pill.r-pending-rollback, .pill.r-uninstalling { --tone: var(--mf-prog); --tone-soft: var(--mf-prog-soft); --g: var(--g-arc); }
 .pill.open { --tone: var(--mf-prog); --tone-soft: var(--mf-prog-soft); --g: var(--g-clock); }
+.pill.warning { --tone: var(--mf-warn); --tone-soft: var(--mf-warn-soft); --g: var(--g-triangle); }
 .pill.degraded, .pill.h-unhealthy { --tone: var(--mf-bad); --tone-soft: var(--mf-bad-soft); --g: var(--g-triangle); }
 .pill.failed, .pill.down, .pill.notapplied, .pill.r-failed, .pill.c-exited, .pill.c-dead { --tone: var(--mf-bad); --tone-soft: var(--mf-bad-soft); --g: var(--g-x); }
 .pill.suspended, .pill.paused, .pill.maintenance, .pill.c-paused { --g: var(--g-pause); }

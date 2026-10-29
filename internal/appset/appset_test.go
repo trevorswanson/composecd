@@ -35,7 +35,7 @@ func TestGitDirectoryParametersAndStringRendering(t *testing.T) {
 	set.Spec.Template.Metadata.Labels = map[string]string{"segment": "{{ index .path.segments 0 }}", "composecd/applicationset": "cannot-override"}
 	set.Spec.Template.Spec.Source.Values = map[string]interface{}{"{{ .path.basename }}": []interface{}{"{{ .path.path | upper }}", true, float64(42)}, "quoted": "a \"quote\"\n{{ .path.basename }}"}
 	released := 0
-	apps, err := Generate(context.Background(), set, nil, func(_ context.Context, url, revision string) (string, func(), error) {
+	apps, skipped, err := Generate(context.Background(), set, nil, func(_ context.Context, url, revision string) (string, func(), error) {
 		if url != "https://git.lan/charts.git" || revision != "prod" {
 			t.Fatal(url, revision)
 		}
@@ -43,6 +43,10 @@ func TestGitDirectoryParametersAndStringRendering(t *testing.T) {
 	})
 	if err != nil || len(apps) != 2 || released != 1 {
 		t.Fatalf("%v %v %d", apps, err, released)
+	}
+	// Matched directories without a Chart.yaml are reported, not silently dropped.
+	if !reflect.DeepEqual(skipped, []string{"charts/nested", "charts/not-a-chart"}) {
+		t.Fatal(skipped)
 	}
 	if apps[0].Metadata.Name != "db" || apps[1].Metadata.Name != "web" {
 		t.Fatal(apps)
@@ -69,7 +73,7 @@ func TestHostsSelectorsAndIndependentGenerators(t *testing.T) {
 	set.Spec.Template.Spec.Destination.Host = "{{ .host.name }}"
 	set.Spec.Template.Spec.Source.Env = map[string]string{"ROLE": "{{ .host.labels.role | upper }}"}
 	set.Spec.Generators = []config.Generator{{Hosts: &config.HostsGenerator{Selector: map[string]string{"role": "server"}}}, {Hosts: &config.HostsGenerator{Selector: map[string]string{"role": "edge"}}}}
-	apps, err := Generate(context.Background(), set, hosts, nil)
+	apps, _, err := Generate(context.Background(), set, hosts, nil)
 	if err != nil || len(apps) != 2 {
 		t.Fatalf("%v %v", apps, err)
 	}
@@ -77,7 +81,7 @@ func TestHostsSelectorsAndIndependentGenerators(t *testing.T) {
 		t.Fatal(apps)
 	}
 	set.Spec.Generators = []config.Generator{{Hosts: &config.HostsGenerator{Selector: map[string]string{"missing": ""}}}}
-	if apps, err := Generate(context.Background(), set, hosts, nil); err != nil || len(apps) != 0 {
+	if apps, _, err := Generate(context.Background(), set, hosts, nil); err != nil || len(apps) != 0 {
 		t.Fatalf("missing label matched: %v %v", apps, err)
 	}
 }
@@ -86,13 +90,13 @@ func TestTemplateErrorsAndUnavailableHelpers(t *testing.T) {
 	set.Spec.Generators = []config.Generator{{Hosts: &config.HostsGenerator{}}}
 	for _, text := range []string{"{{ .path.basename }}", "{{ env \"HOME\" }}", "{{ expandenv \"$HOME\" }}", "{{ getHostByName \"localhost\" }}", "{{ randAlpha 5 }}", "{{ now }}", "{{", "{{ .host.labels.missing }}"} {
 		set.Spec.Template.Metadata.Name = text
-		if apps, err := Generate(context.Background(), set, []*config.Host{{Metadata: config.Metadata{Name: "nas"}}}, nil); err == nil || apps != nil {
+		if apps, _, err := Generate(context.Background(), set, []*config.Host{{Metadata: config.Metadata{Name: "nas"}}}, nil); err == nil || apps != nil {
 			t.Fatalf("%q: %v %v", text, apps, err)
 		}
 	}
 	set.Spec.Template.Metadata.Name = "{{ .host.name }}"
 	set.Spec.Template.Metadata.Labels = map[string]string{"{{ .host.name }}": "a", "nas": "b"}
-	if _, err := Generate(context.Background(), set, []*config.Host{{Metadata: config.Metadata{Name: "nas"}}}, nil); err == nil || !strings.Contains(err.Error(), "duplicate rendered map key") {
+	if _, _, err := Generate(context.Background(), set, []*config.Host{{Metadata: config.Metadata{Name: "nas"}}}, nil); err == nil || !strings.Contains(err.Error(), "duplicate rendered map key") {
 		t.Fatal(err)
 	}
 }

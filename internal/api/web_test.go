@@ -290,6 +290,34 @@ type appsetErrorStub struct{ stub }
 func (s *appsetErrorStub) ApplicationSets() []controller.ApplicationSetStatus {
 	return []controller.ApplicationSetStatus{{Name: "stacks", Generated: 0, Previous: 2, Applications: []string{"media"}, Error: "template error <script>"}}
 }
+
+type appsetAppErrorStub struct{ stub }
+
+func (s *appsetAppErrorStub) ApplicationSets() []controller.ApplicationSetStatus {
+	return []controller.ApplicationSetStatus{{Name: "stacks", Generated: 2, Ready: true, Applications: []string{"media", "web"},
+		Warnings:  []string{"skipped 1 matched directory without a Chart.yaml: charts/<x>"},
+		AppErrors: map[string]string{"web": "rendering: charts/web/templates/a.yaml:3: <bad>"}}}
+}
+
+func TestApplicationSetsPageShowsAppErrorsAndWarnings(t *testing.T) {
+	a := newAuthn(t, "secret")
+	srv := httptest.NewServer(New(&appsetAppErrorStub{}, Options{Auth: a}))
+	defer srv.Close()
+	code, body := do(t, srv, "GET", "/api/v1/applicationsets", "secret", "")
+	if code != 200 || !strings.Contains(body, `"appErrors"`) || !strings.Contains(body, `"warnings"`) {
+		t.Fatalf("%d %s", code, body)
+	}
+	code, body = do(t, srv, "GET", "/applicationsets", "secret", "")
+	for _, want := range []string{"1 failing", `<a href="/apps/web">web</a>: rendering: charts/web/templates/a.yaml:3: &lt;bad&gt;`, "charts/&lt;x&gt;"} {
+		if code != 200 || !strings.Contains(body, want) {
+			t.Errorf("%d missing %s: %s", code, want, body)
+		}
+	}
+	if strings.Contains(body, "pill ready") {
+		t.Error("a set with failing applications is shown as ready")
+	}
+}
+
 func TestApplicationSetsAPIAndPage(t *testing.T) {
 	a := newAuthn(t, "secret")
 	token, err := a.CreateToken("reader", auth.RoleReadonly, "admin")

@@ -39,6 +39,8 @@ type Prepared struct {
 	Revision string
 	// ValuesRevision is the Git commit supplying an OCI chart's user values.
 	ValuesRevision string
+	// Root is the checkout the chart and values were read from, if any.
+	Root string `json:"-"`
 	// Secrets are decrypted leaf values used for output masking, never persisted.
 	Secrets []string `json:"-"`
 	// SecretPaths locate the encrypted keys in user values. They come from the
@@ -101,6 +103,7 @@ func Prepare(ctx context.Context, app *config.Application, host *config.Host, ch
 		}
 		p.ChartRef, p.Revision = dir, revision
 	}
+	p.Root = root
 	// After a decryption failure, keep reading the remaining files' SOPS key
 	// paths: the caller masks older values at those keys from release history.
 	var decryptErr error
@@ -224,6 +227,15 @@ func mergeEnv(host, app map[string]string) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// RelativeErr shortens checkout paths in err (from rendering, say) to
+// repository-relative ones, so errors name files as they are in Git.
+func (p *Prepared) RelativeErr(err error) error {
+	if err == nil || p.Root == "" {
+		return err
+	}
+	return relativeErr(err, p.Root)
 }
 
 // relativeErr shortens checkout paths in err to repository-relative ones.

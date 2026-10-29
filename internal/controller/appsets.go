@@ -18,13 +18,31 @@ import (
 // ApplicationSetStatus describes generator output without exposing templates.
 type ApplicationSetStatus = appset.Status
 
+// ApplicationSets returns each set's generator status, with the errors of the
+// generated applications that can't be reconciled, so a set whose charts don't
+// render doesn't look healthy.
 func (c *Controller) ApplicationSets() []ApplicationSetStatus {
 	c.mu.RLock()
-	defer c.mu.RUnlock()
 	out := make([]ApplicationSetStatus, len(c.appsets))
 	for i, s := range c.appsets {
 		out[i] = s
 		out[i].Applications = append([]string{}, s.Applications...)
+		out[i].Warnings = append([]string(nil), s.Warnings...)
+		out[i].AppErrors = nil
+		for _, name := range s.Applications {
+			if st, ok := c.apps[name]; ok && st.status.Error != "" {
+				if out[i].AppErrors == nil {
+					out[i].AppErrors = map[string]string{}
+				}
+				out[i].AppErrors[name] = st.status.Error
+			}
+		}
+	}
+	c.mu.RUnlock()
+	for i := range out {
+		for name, err := range out[i].AppErrors {
+			out[i].AppErrors[name] = c.Mask(name, err)
+		}
 	}
 	return out
 }
@@ -68,11 +86,14 @@ func (c *Controller) expand(ctx context.Context, objs *config.Objects) (*config.
 	expanded.Applications = append([]*config.Application{}, objs.Applications...)
 	statuses := make([]ApplicationSetStatus, 0, len(objs.ApplicationSets))
 	for _, set := range objs.ApplicationSets {
-		apps, err := appset.Generate(ctx, set, objs.Hosts, checkout)
+		apps, skipped, err := appset.Generate(ctx, set, objs.Hosts, checkout)
 		kept := previous[set.Metadata.Name]
 		st := ApplicationSetStatus{Name: set.Metadata.Name, Origin: set.Origin, Generated: len(apps), Previous: len(kept), Applications: []string{}}
 		if err == nil && len(apps) == 0 && st.Previous > 0 {
 			err = fmt.Errorf("generated: 0, was: %d; keeping the applications it generated before", st.Previous)
+		}
+		if err == nil {
+			st.Warnings = setWarnings(len(apps), skipped)
 		}
 		if err != nil {
 			m := masking.New(append(masking.Leaves(set.Spec.Template.Spec.Source.Values), masking.Leaves(set.Spec.Template.Spec.Source.Env)...))
@@ -103,6 +124,31 @@ func (c *Controller) expand(ctx context.Context, objs *config.Objects) (*config.
 		statuses[i].Ready = statuses[i].Error == ""
 	}
 	return &expanded, statuses, fetched, nil
+}
+
+// maxSkippedListed bounds the directories a warning names.
+const maxSkippedListed = 10
+
+// setWarnings explains output that is probably not what the author meant: no
+// applications, or matched directories that were skipped for lacking a chart
+// (often a Chart.yaml with another name, or one not yet committed).
+func setWarnings(generated int, skipped []string) []string {
+	var out []string
+	if generated == 0 {
+		out = append(out, "generated no applications")
+	}
+	if n := len(skipped); n > 0 {
+		listed := skipped
+		if n > maxSkippedListed {
+			listed = skipped[:maxSkippedListed]
+		}
+		w := fmt.Sprintf("skipped %d matched %s without a Chart.yaml: %s", n, plural(n, "directory", "directories"), strings.Join(listed, ", "))
+		if n > len(listed) {
+			w += fmt.Sprintf(", and %d more", n-len(listed))
+		}
+		out = append(out, w)
+	}
+	return out
 }
 
 // setErrors reports the sets that failed without failing the snapshot.
