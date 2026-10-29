@@ -161,7 +161,10 @@ func Prepare(ctx context.Context, app *config.Application, host *config.Host, ch
 		if err != nil {
 			return nil, err
 		}
-		cur, paths := nest(is.Into, secrets)
+		cur, paths, err := nest(is.Into, secrets)
+		if err != nil {
+			return nil, err
+		}
 		p.SecretPaths = append(p.SecretPaths, paths...)
 		for _, x := range secrets {
 			p.Secrets = append(p.Secrets, masking.Leaves(x.Value)...)
@@ -181,26 +184,41 @@ func Prepare(ctx context.Context, app *config.Application, host *config.Host, ch
 	return p, nil
 }
 
-// nest places secrets under the dotted path into, and returns the value paths
-// they occupy. A later secret with the same key replaces an earlier one.
-func nest(into string, secrets []infisical.Secret) (map[string]interface{}, [][]string) {
+// nest places secrets under the dotted path into, then under their subfolders,
+// and returns the value paths they occupy. A later secret with the same key and
+// folder replaces an earlier one. A secret and a folder of the same name at one
+// level can't both be values, so that is an error.
+func nest(into string, secrets []infisical.Secret) (map[string]interface{}, [][]string, error) {
 	var prefix []string
 	if into != "" {
 		prefix = strings.Split(into, ".")
 	}
-	leaf := map[string]interface{}{}
+	root := map[string]interface{}{}
 	var paths [][]string
 	for _, x := range secrets {
-		if _, dup := leaf[x.Key]; !dup {
-			paths = append(paths, append(append([]string{}, prefix...), x.Key))
+		full := append(append([]string{}, prefix...), x.Folder...)
+		cur := root
+		for _, seg := range full {
+			switch next := cur[seg].(type) {
+			case nil:
+				m := map[string]interface{}{}
+				cur[seg] = m
+				cur = m
+			case map[string]interface{}:
+				cur = next
+			default:
+				return nil, nil, fmt.Errorf("infisical: folder %q collides with a secret of the same name", strings.Join(full, "/"))
+			}
 		}
-		leaf[x.Key] = x.Value
+		switch cur[x.Key].(type) {
+		case nil:
+			paths = append(paths, append(full, x.Key))
+		case map[string]interface{}:
+			return nil, nil, fmt.Errorf("infisical: secret %q collides with a folder of the same name", x.Key)
+		}
+		cur[x.Key] = x.Value
 	}
-	var out interface{} = leaf
-	for i := len(prefix) - 1; i >= 0; i-- {
-		out = map[string]interface{}{prefix[i]: out}
-	}
-	return out.(map[string]interface{}), paths
+	return root, paths, nil
 }
 
 // inside resolves symlinks in p and checks that it stays under root, so a

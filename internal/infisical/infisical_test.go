@@ -60,7 +60,7 @@ func TestUniversalAuthSecrets(t *testing.T) {
 			t.Fatal(err)
 		}
 		// Imports first so the folder's own secret wins when merged in order.
-		if len(got) != 3 || got[0].Value != "imported" || got[2] != (Secret{"DB", "own"}) {
+		if len(got) != 3 || got[0].Value != "imported" || got[2].Key != "DB" || got[2].Value != "own" || got[2].Folder != nil {
 			t.Fatalf("secrets = %#v", got)
 		}
 	}
@@ -112,5 +112,28 @@ func TestErrorsHideBodies(t *testing.T) {
 func TestNewNil(t *testing.T) {
 	if New(nil) != nil {
 		t.Fatal("expected nil")
+	}
+}
+
+func TestRecursiveFolders(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"secrets":[
+			{"secretKey":"TOP","secretValue":"a","secretPath":"/apps"},
+			{"secretKey":"TOKEN","secretValue":"b","secretPath":"/apps/traefik"},
+			{"secretKey":"DEEP","secretValue":"c","secretPath":"/apps/traefik/acme/"},
+			{"secretKey":"ODD","secretValue":"d","secretPath":"/elsewhere"}]}`))
+	}))
+	defer srv.Close()
+	c := New(&config.Infisical{SiteURL: srv.URL, TokenFile: write(t, "t")})
+	got, err := c.Secrets(context.Background(), &config.InfisicalSource{ProjectID: "p", Environment: "e", Path: "/apps", Recursive: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var folders []string
+	for _, s := range got {
+		folders = append(folders, strings.Join(s.Folder, "/"))
+	}
+	if strings.Join(folders, ",") != ",traefik,traefik/acme," {
+		t.Fatalf("folders = %q", folders)
 	}
 }

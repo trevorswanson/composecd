@@ -622,7 +622,11 @@ spec:
       into: secrets         # optional dotted values path; default is the top level
 ```
 
-Each secret key becomes a value key (`.Values.secrets.DB_PASSWORD` above). Secrets are merged after
+Each secret key becomes a value key (`.Values.secrets.DB_PASSWORD` above). With `recursive: true`,
+secrets in subfolders are nested by folder name: a secret `CF_DNS_API_TOKEN` in the folder `/media/traefik`
+is `.Values.secrets.traefik.CF_DNS_API_TOKEN`, so a template can use
+`{{- range $key, $value := index .Values.secrets "traefik" }}`. A secret and a folder with the same name
+at one level collide, which is an error. Secrets are merged after
 `valueFiles` and before inline `values`, so inline values still win. Secret references and imports are
 resolved by Infisical. Values are fetched on every refresh, so rotating a secret in Infisical shows up as
 a diff on the next refresh and, with automated sync, is deployed.

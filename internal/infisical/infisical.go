@@ -52,8 +52,12 @@ func New(b *config.Infisical) *Client {
 	}
 }
 
-// Secret is one key and its value.
-type Secret struct{ Key, Value string }
+// Secret is one key and its value. Folder is the subfolder it lives in,
+// relative to the requested path (nil for the path itself and for imports).
+type Secret struct {
+	Key, Value string
+	Folder     []string
+}
 
 // Secrets lists the secrets of s, ordered as the server returns them. Infisical
 // imports are resolved by the server.
@@ -74,6 +78,7 @@ func (c *Client) Secrets(ctx context.Context, s *config.InfisicalSource) ([]Secr
 		Secrets []struct {
 			SecretKey   string `json:"secretKey"`
 			SecretValue string `json:"secretValue"`
+			SecretPath  string `json:"secretPath"`
 		} `json:"secrets"`
 		Imports []struct {
 			Secrets []struct {
@@ -89,13 +94,29 @@ func (c *Client) Secrets(ctx context.Context, s *config.InfisicalSource) ([]Secr
 	var res []Secret
 	for _, imp := range out.Imports {
 		for _, x := range imp.Secrets {
-			res = append(res, Secret{x.SecretKey, x.SecretValue})
+			res = append(res, Secret{Key: x.SecretKey, Value: x.SecretValue})
 		}
 	}
 	for _, x := range out.Secrets {
-		res = append(res, Secret{x.SecretKey, x.SecretValue})
+		res = append(res, Secret{Key: x.SecretKey, Value: x.SecretValue, Folder: folder(path, x.SecretPath)})
 	}
 	return res, nil
+}
+
+// folder returns the segments of secretPath below base, or nil when secretPath
+// is base itself, absent, or not under base.
+func folder(base, secretPath string) []string {
+	base, secretPath = strings.Trim(base, "/"), strings.Trim(secretPath, "/")
+	if secretPath == base || secretPath == "" {
+		return nil
+	}
+	if base != "" {
+		if !strings.HasPrefix(secretPath, base+"/") {
+			return nil
+		}
+		secretPath = secretPath[len(base)+1:]
+	}
+	return strings.Split(secretPath, "/")
 }
 
 // do sends an authenticated request. A 401 drops the cached session and
