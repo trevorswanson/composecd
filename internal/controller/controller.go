@@ -108,6 +108,7 @@ type appState struct {
 	// desired is the status of the last reconcile that rendered Git, which a
 	// failed one shows as stale.
 	desired *SyncStatus
+	objects []Object
 }
 
 // infisicalClient returns the shared client for the bootstrap's infisical

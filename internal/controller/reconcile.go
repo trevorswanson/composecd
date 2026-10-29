@@ -206,12 +206,12 @@ func (c *Controller) assess(ctx context.Context, app *config.Application, fetchE
 	}
 	p.gitChanged = len(reasons) > 0
 
-	containers, err := cfg.Compose.PS(ctx, name)
-	if err != nil {
-		warnings = append(warnings, "reading containers: "+err.Error())
+	containers, psErr := cfg.Compose.PS(ctx, name)
+	if psErr != nil {
+		warnings = append(warnings, "reading containers: "+psErr.Error())
 	}
 	st.Health.Containers = containers
-	if err == nil {
+	if psErr == nil {
 		st.Health.Status, st.Health.Message = health.Assess(deployed != nil, containers)
 	}
 	if deployed == nil && len(containers) > 0 {
@@ -252,9 +252,43 @@ func (c *Controller) assess(ctx context.Context, app *config.Application, fetchE
 				reasons = append(reasons, "live containers drifted: "+strings.Join(parts, ", "))
 				p.drifted = true
 			}
-			if err := missingChanges(st, name, manifest, drift); err != nil {
-				warnings = append(warnings, err.Error())
+		}
+	}
+
+	objs, err := objectsFor(ctx, cfg, objectInput{project: name, desired: manifest, deployed: base, changes: st.Sync.Changes,
+		containers: containers, drift: st.Sync.Drift, live: psErr == nil})
+	if err != nil {
+		warnings = append(warnings, "listing objects: "+err.Error())
+	}
+	st.Objects = objs
+	if deployed != nil {
+		// Health judges the containers that exist; a service with none is missing.
+		var none []string
+		for _, o := range objs {
+			if o.Kind == KindService && o.Sync == ObjectMissing {
+				none = append(none, o.Name)
 			}
+		}
+		if len(none) > 0 && st.Health.Status == health.Healthy {
+			st.Health.Status, st.Health.Message = health.Missing, "no containers for "+strings.Join(none, ", ")
+		}
+		// What the release has but the host doesn't run shows in full.
+		missing := map[string]bool{}
+		var gone []string
+		for _, o := range objs {
+			if o.Sync != ObjectMissing || o.Desired == "" {
+				continue
+			}
+			missing[o.ID] = true
+			if o.Kind != KindService {
+				gone = append(gone, o.ID)
+			}
+		}
+		if len(gone) > 0 {
+			reasons = append(reasons, "missing on the host: "+strings.Join(gone, ", "))
+		}
+		if err := missingChanges(st, name, manifest, missing); err != nil {
+			warnings = append(warnings, err.Error())
 		}
 	}
 
@@ -272,13 +306,7 @@ func (c *Controller) assess(ctx context.Context, app *config.Application, fetchE
 // missingChanges shows each deployed service the host no longer runs as
 // missing, diffed against nothing, so the diff shows its whole desired state
 // rather than only how Git moved on from the release.
-func missingChanges(st *AppStatus, name, manifest string, drift []action.ServiceDrift) error {
-	missing := map[string]bool{}
-	for _, d := range drift {
-		if d.Reason == action.DriftMissing {
-			missing["services/"+d.Service] = true
-		}
-	}
+func missingChanges(st *AppStatus, name, manifest string, missing map[string]bool) error {
 	if len(missing) == 0 {
 		return nil
 	}
@@ -313,7 +341,7 @@ func (c *Controller) rememberDesired(st *AppStatus) {
 		c.apps[st.Name] = s
 	}
 	desired := st.Sync
-	s.desired = &desired
+	s.desired, s.objects = &desired, st.Objects
 }
 
 // staleDesired shows the last rendered desired state on st, which failed
@@ -328,6 +356,7 @@ func (c *Controller) staleDesired(st *AppStatus) {
 	d := s.desired
 	st.Sync.Revision, st.Sync.ValuesRevision, st.Sync.ChartRef = d.Revision, d.ValuesRevision, d.ChartRef
 	st.Sync.Changes, st.Sync.RenderedAt, st.Sync.Stale = d.Changes, d.RenderedAt, true
+	st.Objects = s.objects
 }
 
 // existingDrift compares containers that predate app's first release with the

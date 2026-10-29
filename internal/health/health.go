@@ -38,7 +38,7 @@ func Assess(deployed bool, containers []compose.Container) (Status, string) {
 	worst := Healthy
 	reasons := map[Status][]string{}
 	for _, c := range containers {
-		s, why := container(c)
+		s, why := Container(c)
 		if s != Healthy {
 			reasons[s] = append(reasons[s], fmt.Sprintf("%s %s", c.Name, why))
 		}
@@ -51,7 +51,8 @@ func Assess(deployed bool, containers []compose.Container) (Status, string) {
 	return worst, strings.Join(msgs, "; ")
 }
 
-func container(c compose.Container) (Status, string) {
+// Container returns one container's health and, unless it is healthy, why.
+func Container(c compose.Container) (Status, string) {
 	switch c.State {
 	case "running":
 		switch c.Health {

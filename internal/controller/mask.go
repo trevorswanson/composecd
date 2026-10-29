@@ -135,6 +135,14 @@ func (c *Controller) maskStatus(st AppStatus) AppStatus {
 		out.Health.Containers[i].Name = ct.Name
 		out.Health.Containers[i].Service = ct.Service
 	}
+	for i, o := range st.Objects {
+		if i >= len(out.Objects) {
+			break
+		}
+		m := &out.Objects[i]
+		m.ID, m.Kind, m.Name, m.Parent, m.LiveName = o.ID, o.Kind, o.Name, o.Parent, o.LiveName
+		m.Sync, m.Health, m.Uses, m.DependsOn = o.Sync, o.Health, o.Uses, o.DependsOn
+	}
 	if st.Operation != nil && out.Operation != nil {
 		out.Operation.App = st.Operation.App
 		out.Operation.User = st.Operation.User

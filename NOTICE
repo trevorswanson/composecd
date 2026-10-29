@@ -32,7 +32,9 @@ with `go mod download` under $(go env GOMODCACHE).
 The embedded web UI vendors htmx 2.0.11 (https://htmx.org) and the htmx SSE
 extension 2.2.4 (https://github.com/bigskysoftware/htmx-extensions), both under
 the Zero-Clause BSD (0BSD) license. The upstream license texts are included in
-internal/web/static/HTMX-LICENSE and internal/web/static/SSE-LICENSE. It also embeds
+internal/web/static/HTMX-LICENSE and internal/web/static/SSE-LICENSE. It vendors
+dagre 1.1.4 (https://github.com/dagrejs/dagre), Copyright (c) 2012-2014 Chris
+Pettitt, under the MIT license, in internal/web/static/DAGRE-LICENSE. It also embeds
 IBM Plex Sans and IBM Plex Mono (https://github.com/IBM/plex), Copyright IBM Corp.,
 under the SIL Open Font License 1.1; the license texts are in
 internal/web/static/fonts/. Browser assets are served locally; see

@@ -21,52 +21,45 @@
 {{define "detail-head"}}<div id="app-head" class="detail-head" {{if .OOB}}hx-swap-oob="outerHTML"{{end}}>
 <nav class="crumbs" aria-label="Breadcrumb"><a href="/apps">Applications</a><span aria-hidden="true">/</span><span aria-current="page">{{.App.Name}}</span></nav>
 <div class="page-head"><div class="title">
-<div class="title-row"><h1>{{.App.Name}}</h1>{{template "pill" .App.Sync.Status}}{{template "pill" .App.Health.Status}}{{if .App.Paused}}<span class="pill paused">Paused</span>{{end}}{{if .App.Automated}}<span class="tag auto">auto</span>{{else}}<span class="tag">manual</span>{{end}}</div>
+<div class="title-row"><h1>{{.App.Name}}</h1>{{if .App.Paused}}<span class="pill paused">Paused</span>{{end}}{{if .App.Automated}}<span class="tag auto">auto</span>{{else}}<span class="tag">manual</span>{{end}}</div>
 <div class="meta"><span class="chip i-host">{{.App.Host}}</span>{{with .App.Sync.ChartRef}}<span class="chip">{{.}}</span>{{else}}{{with .App.Source.Chart}}<span class="chip">{{.}}{{with $.App.Source.Version}}:{{.}}{{end}}</span>{{else}}{{with .App.Source.Path}}<span class="chip">{{.}}{{with $.App.Source.TargetRevision}} @ {{.}}{{end}}</span>{{end}}{{end}}{{end}}{{range $k, $v := .App.Labels}}<span class="chip selector">{{$k}}={{$v}}</span>{{end}}</div>
 </div>
-{{if .Admin}}<div class="actions">
+<div class="actions">{{if .Admin}}
 {{template "syncbtn" (list . .App false)}}
 <form method="post" action="/ui/apps/{{path .Name}}/refresh" hx-post="/ui/apps/{{path .Name}}/refresh" hx-target="#action-result">{{template "csrf" .}}<button type="submit" class="btn i-refresh">Refresh</button></form>
 {{if .App.Paused}}<form method="post" action="/ui/apps/{{path .Name}}/resume" hx-post="/ui/apps/{{path .Name}}/resume" hx-target="#action-result">{{template "csrf" .}}<button type="submit" class="btn i-resume">Resume</button></form>
 {{else}}<form method="post" action="/ui/apps/{{path .Name}}/pause" hx-post="/ui/apps/{{path .Name}}/pause" hx-target="#action-result">{{template "csrf" .}}<button type="submit" class="btn i-pause">Pause</button></form>{{end}}
-</div>{{end}}</div>
+{{end}}<a class="btn i-info" href="/ui/apps/{{path .Name}}/details" data-dialog="/ui/apps/{{path .Name}}/details">Details</a>
+</div></div>
 {{with .App.Error}}<div class="callout bad" role="alert"><div><strong>Couldn't reconcile {{$.App.Name}}</strong><code>{{.}}</code></div></div>{{end}}
 {{if .App.Paused}}<div class="callout"><div><strong>Automated sync is paused</strong><p>{{.App.PausedReason}}. Resume to let Git drive this app again.</p></div></div>
 {{else}}{{with .App.Blocked}}<div class="callout warn"><div><strong>Automation is waiting</strong><p>{{.}}</p></div></div>{{end}}{{end}}
-<nav class="tabs" aria-label="Application tabs">{{range $tab := lines "summary\ncontainers\ndiff\nhistory\noperations"}}<a href="/apps/{{path $.Name}}?tab={{$tab}}" {{if eq $.Tab $tab}}aria-current="page"{{end}}>{{$tab}}{{if eq $tab "containers"}}<span class="count">{{len $.App.Health.Containers}}</span>{{end}}{{if eq $tab "diff"}}{{with $.App.Sync.Changes}}<span class="count warn">{{len .}}</span>{{end}}{{end}}</a>{{end}}</nav>
+<div class="strip">
+<section class="strip-panel" aria-label="App health"><span class="label">App health</span><div class="strip-main">{{template "pill" .App.Health.Status}}</div>{{with .App.Health.Message}}<p class="reason clamp" title="{{.}}">{{.}}</p>{{end}}</section>
+<section class="strip-panel" aria-label="Sync status"><span class="label">Sync status</span><div class="strip-main">{{template "pill" .App.Sync.Status}}{{with .App.Sync.Revision}}<span class="reason">to <code title="{{.}}">{{short .}}</code></span>{{end}}</div>
+{{if .App.Release}}<p class="reason">deployed {{with .App.Sync.DeployedRevision}}<code title="{{.}}">{{short .}}</code>{{else}}release rev {{$.App.Release.Revision}}{{end}}{{with .App.Sync.ValuesRevision}} · values <code title="{{.}}">{{short .}}</code>{{end}}</p>{{end}}
+{{with .App.Sync.Reasons}}{{if eq (len .) 1}}<p class="reason clamp" title="{{index . 0}}">{{index . 0}}</p>{{else}}<details class="more"><summary>{{index . 0}} <span class="muted">+{{len (slice . 1)}} more</span></summary><ul>{{range slice . 1}}<li>{{.}}</li>{{end}}</ul></details>{{end}}{{end}}</section>
+<section class="strip-panel" aria-label="Last sync result"><span class="label">Last sync result</span>{{with .App.Operation}}<div class="strip-main"><span class="pill {{lower .Phase}}">{{if eq .Phase "Running"}}{{busy .Kind}}{{else}}{{.Phase}}{{end}}</span><span class="reason">{{.Kind}} · {{.Trigger}}{{with .User}} by {{.}}{{end}} · <time datetime="{{iso .StartedAt}}" title="{{iso .StartedAt}}">{{ago .StartedAt}}</time></span></div>
+{{with .Message}}<p class="reason clamp" title="{{.}}">{{.}}</p>{{end}}<a class="strip-link" href="/apps/{{path $.Name}}?tab=operations" data-dialog="/ui/apps/{{path $.Name}}/operations/{{.ID}}">{{if eq .Phase "Running"}}Follow output{{else}}Output{{end}}</a>{{else}}<div class="strip-main"><span class="muted">No operations yet</span></div>{{end}}</section>
+</div>
+<nav class="tabs" aria-label="Application tabs">{{range $tab := lines "graph\ncontainers\ndiff\nhistory\noperations"}}<a href="/apps/{{path $.Name}}?tab={{$tab}}" {{if eq $.Tab $tab}}aria-current="page"{{end}}>{{$tab}}{{if eq $tab "containers"}}<span class="count">{{len $.App.Health.Containers}}</span>{{end}}{{if eq $tab "diff"}}{{with $.App.Sync.Changes}}<span class="count warn">{{len .}}</span>{{end}}{{end}}</a>{{end}}</nav>
 </div>{{end}}
 
+{{define "stale"}}{{if .App.Sync.Stale}}<div class="callout warn"><div><strong>Showing the desired state {{with .App.Sync.Revision}}from <code title="{{.}}">{{short .}}</code> {{end}}rendered <time datetime="{{iso .App.Sync.RenderedAt}}" title="{{iso .App.Sync.RenderedAt}}">{{ago .App.Sync.RenderedAt}}</time></strong><p>The latest reconcile couldn't render Git, so this may be out of date.</p></div></div>{{end}}{{end}}
+
 {{define "detail"}}
-{{if eq .Tab "summary"}}<div class="split"><div>
-<section class="card"><div class="card-head"><h2>Sync</h2>{{template "pill" .App.Sync.Status}}</div><dl class="props">
-<dt>Desired revision</dt><dd>{{with .App.Sync.Revision}}<code>{{.}}</code>{{else}}<span class="none">Not rendered</span>{{end}}</dd>
-<dt>Deployed revision</dt><dd>{{with .App.Sync.DeployedRevision}}<code>{{.}}</code>{{else}}<span class="none">Not deployed</span>{{end}}{{with .App.Release}}<span class="reason">release rev {{.Revision}} · {{.Status}} · <time datetime="{{iso .LastDeployed}}" title="{{iso .LastDeployed}}">{{ago .LastDeployed}}</time></span>{{end}}</dd>
-{{with .App.Sync.ChartRef}}<dt>Chart ref</dt><dd><code>{{.}}</code></dd>{{end}}
-{{with .App.Sync.ValuesRevision}}<dt>Values revision</dt><dd><code>{{.}}</code></dd><dt>Deployed values</dt><dd>{{with $.App.Sync.DeployedValuesRevision}}<code>{{.}}</code>{{else}}<span class="none">Not deployed</span>{{end}}</dd>{{end}}
-{{with .App.Sync.Reasons}}<dt>Why</dt><dd>{{range .}}<span>{{.}}</span>{{end}}</dd>{{end}}
-</dl></section>
-<section class="card"><div class="card-head"><h2>Health</h2>{{template "pill" .App.Health.Status}}</div><dl class="props">
-<dt>Status</dt><dd>{{with .App.Health.Message}}{{.}}{{else}}<span class="none">No message</span>{{end}}</dd>
-<dt>Containers</dt><dd><a href="/apps/{{path .Name}}?tab=containers">{{len .App.Health.Containers}} container{{if ne (len .App.Health.Containers) 1}}s{{end}}</a></dd>
-<dt>Reconciled</dt><dd>{{if .App.ReconciledAt.IsZero}}<span class="none">Not yet</span>{{else}}<time datetime="{{iso .App.ReconciledAt}}" title="{{iso .App.ReconciledAt}}">{{ago .App.ReconciledAt}}</time>{{end}}</dd>
-</dl></section>
-</div><aside>
-<section class="card"><div class="card-head"><h2>Source</h2></div><dl class="props">
-<dt>Source</dt><dd><code>{{.App.Source.RepoURL}} {{.App.Source.Path}} {{.App.Source.Chart}} {{.App.Source.Version}}</code>{{with .App.Source.TargetRevision}}<span class="reason">@ {{.}}</span>{{end}}</dd>
-{{with .App.Source.ValuesFrom}}<dt>Values source</dt><dd><code>{{.RepoURL}}</code><span class="reason">@ {{.TargetRevision}}</span></dd>{{end}}
-<dt>Definition</dt><dd>{{with .App.Origin}}<code>{{.}}</code>{{else}}<span class="none">Unknown</span>{{end}}</dd>
-</dl></section>
-<section class="card"><div class="card-head"><h2>Automation</h2></div><dl class="props">
-<dt>Policy</dt><dd>{{if .App.Automated}}Automated{{else}}Manual{{end}}{{if .App.Paused}}<span class="pill plain paused">Paused: {{.App.PausedReason}}</span>{{end}}{{with .App.Blocked}}<span class="pill plain held">{{.}}</span>{{end}}</dd>
-<dt>Depends on</dt><dd>{{with .App.DependsOn}}<span class="links">{{range .}}<a href="/apps/{{path .}}">{{.}}</a>{{end}}</span>{{else}}<span class="none">Nothing</span>{{end}}</dd>
-<dt>Retry</dt><dd>{{with .App.Retry}}{{.Failures}} failed of {{.Limit}} retries<span class="reason">{{if .NextAt.IsZero}}No retry scheduled{{else}}Next <time datetime="{{iso .NextAt}}" title="{{iso .NextAt}}">{{ago .NextAt}}</time>{{end}}</span>{{else}}<span class="none">No retry policy</span>{{end}}</dd>
-</dl></section>
-</aside></div>{{end}}
+{{if eq .Tab "graph"}}{{template "stale" .}}{{if .App.Objects}}<div class="graph-wrap card" data-app="{{.Name}}">
+<div class="graph-tools"><div class="seg" role="group" aria-label="Show objects">{{range $f := lines "all\nOutOfSync\nMissing\nPrune"}}<button type="button" data-filter="{{$f}}" {{if eq $f "all"}}aria-pressed="true"{{else}}aria-pressed="false"{{end}}>{{if eq $f "all"}}All{{else}}{{$f}}<span class="count">{{objectCount $.App.Objects $f}}</span>{{end}}</button>{{end}}</div>
+<div class="zoom" role="group" aria-label="Zoom"><button type="button" class="btn btn-sm btn-icon" data-zoom="out" aria-label="Zoom out">−</button><button type="button" class="btn btn-sm btn-icon" data-zoom="in" aria-label="Zoom in">+</button><button type="button" class="btn btn-sm" data-zoom="fit">Fit</button></div></div>
+<div class="graph" id="graph" tabindex="0" aria-label="Objects of {{.Name}}"><ul class="graph-list">{{range .App.Objects}}<li><a href="/ui/apps/{{path $.Name}}/objects/{{.ID}}" data-dialog="/ui/apps/{{path $.Name}}/objects/{{.ID}}"><span class="kind">{{.Kind}}</span> <strong>{{.Name}}</strong></a> <span class="pill plain {{lower .Sync}}">{{.Sync}}</span>{{with .Health}} <span class="pill plain {{lower .}}">{{.}}</span>{{end}}</li>{{end}}</ul></div>
+<div class="legend" aria-hidden="true">{{range $k := lines "service\nnetwork\nvolume\nconfig\nsecret\ncontainer"}}<span class="k-{{$k}}">{{$k}}</span>{{end}}</div>
+<script type="application/json" id="graph-data">{{graphData .App}}</script>
+</div>{{else}}<div class="empty"><strong>{{if .App.Error}}Couldn't list the objects{{else}}No objects yet{{end}}</strong><span>{{with .App.Error}}{{.}}{{else}}The app's services, networks and volumes show here after it renders.{{end}}</span></div>{{end}}{{end}}
 {{if eq .Tab "containers"}}<div class="card"><div class="table-wrap"><table><thead><tr><th scope="col">Container</th><th scope="col">State</th><th scope="col">Health</th><th scope="col">Image</th><th scope="col"><span class="sr-only">Logs</span></th></tr></thead><tbody>
 {{range .App.Health.Containers}}<tr><td><div class="cell"><strong>{{.Name}}</strong>{{with .Service}}<span class="reason">{{.}}</span>{{end}}</div></td><td data-label="State"><span class="pill c-{{lower .State}}">{{.State}}</span></td><td data-label="Health">{{with .Health}}<span class="pill h-{{lower .}}">{{.}}</span>{{else}}<span class="muted">No healthcheck</span>{{end}}</td><td data-label="Image"><code>{{.Image}}</code></td><td class="act"><a class="btn btn-sm i-logs" href="/apps/{{path $.Name}}?tab=containers&amp;container={{.Name}}">Logs</a></td></tr>
 {{else}}<tr><td colspan="5" class="empty-row">No containers.</td></tr>{{end}}
 </tbody></table></div></div>{{end}}
-{{if eq .Tab "diff"}}{{if .App.Sync.Stale}}<div class="callout warn"><div><strong>Showing the desired state {{with .App.Sync.Revision}}from <code title="{{.}}">{{short .}}</code> {{end}}rendered <time datetime="{{iso .App.Sync.RenderedAt}}" title="{{iso .App.Sync.RenderedAt}}">{{ago .App.Sync.RenderedAt}}</time></strong><p>The latest reconcile couldn't render Git, so this may be out of date.</p></div></div>{{end}}
+{{if eq .Tab "diff"}}{{template "stale" .}}
 {{if .App.Sync.RenderedAt.IsZero}}<div class="empty"><strong>{{if .App.Error}}Couldn't render the desired state{{else}}Not rendered yet{{end}}</strong><span>{{with .App.Error}}{{.}}{{else}}The desired state shows here after the first reconcile.{{end}}</span></div>
 {{else}}{{range .App.Sync.Changes}}<section class="card"><div class="card-head"><h2><code>{{.Resource}}</code><span class="tag {{lower .Op}}">{{.Op}}</span></h2>{{if eq .Op "missing"}}<span class="muted">deployed, but not running on the host</span>{{else}}{{with diffstat .Diff}}<span class="diffstat"><span class="add">+{{.Add}}</span><span class="del">−{{.Del}}</span></span>{{end}}{{end}}</div><pre class="diff">{{range lines .Diff}}<span class="{{lineClass .}}">{{.}}</span>{{end}}</pre></section>
 {{else}}<div class="empty"><strong>No resource differences</strong><span>{{if .App.Release}}What Git renders matches the deployed release.{{else}}Git renders no resources.{{end}}</span></div>{{end}}{{end}}

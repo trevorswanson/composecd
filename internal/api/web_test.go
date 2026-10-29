@@ -32,6 +32,11 @@ func (s *webStub) App(name string) (controller.AppStatus, error) {
 	a.Sync.Changes = []controller.Change{{Resource: "services/web", Op: "changed", Diff: "-password: secret-value\n+password: <script>\n"}}
 	a.Sync.Drift = []action.ServiceDrift{{Service: "cache", Reason: action.DriftOrphaned, Containers: []string{"media-cache-1"}}}
 	a.Sync.RenderedAt = time.Now()
+	a.Objects = []controller.Object{
+		{ID: "services/web", Kind: controller.KindService, Name: "web", Image: "nginx:1", Sync: controller.ObjectOutOfSync, Desired: "image: nginx:1\n", Uses: []string{"networks/default"}},
+		{ID: "networks/default", Kind: controller.KindNetwork, Name: "default", Sync: controller.ObjectSynced},
+		{ID: "containers/media-web-1", Kind: controller.KindContainer, Name: "media-web-1", Parent: "services/web", Sync: controller.ObjectSynced},
+	}
 	return a, err
 }
 func (s *webStub) Subscribe() (<-chan controller.Update, func()) { return s.updates, func() {} }
@@ -53,8 +58,10 @@ func TestWebPagesAndActions(t *testing.T) {
 		"/": "Applications", "/apps?host=nas&sync=Synced&health=Healthy": "<strong>media</strong>",
 		"/apps?label=missing": "No applications match", "/hosts": "Start maintenance", "/hosts/nas": "composetpl releases", "/windows": "nightly",
 		"/operations": "operator", "/settings": "Create token",
-		"/apps/media": "Desired revision", "/apps/media?tab=containers": "media-web-1",
-		"/apps/media?tab=diff": "services/web", "/apps/media?tab=diff&existing": "<strong>cache</strong>: not in Git, would be removed", "/apps/media?tab=history": "Roll back",
+		"/apps/media": "Sync status", "/ui/apps/media/details": "Desired revision", "/apps/media?tab=containers": "media-web-1",
+		"/apps/media?tab=graph": `id="graph-data"`, "/ui/apps/media/objects/services/web": "nginx:1", "/ui/apps/media/objects/services/web?view=desired": "image: nginx:1",
+		"/ui/apps/media/operations/7": `sse-connect="/api/v1/apps/media/operations/7/log"`,
+		"/apps/media?tab=diff":        "services/web", "/apps/media?tab=diff&existing": "<strong>cache</strong>: not in Git, would be removed", "/apps/media?tab=history": "Roll back",
 		"/apps/media?tab=operations": "Output",
 	}
 	for path, want := range cases {
@@ -305,7 +312,7 @@ func TestWebShowsOCIAndValuesRevisions(t *testing.T) {
 	a := newAuthn(t, "secret")
 	srv := httptest.NewServer(New(&ociValuesStub{}, Options{Auth: a}))
 	defer srv.Close()
-	status, body := do(t, srv, "GET", "/apps/media", "secret", "")
+	status, body := do(t, srv, "GET", "/ui/apps/media/details", "secret", "")
 	for _, want := range []string{"oci://registry.lan/charts/app:1.0.0@sha256:abc", "https://git.lan/values.git", "desired-values-commit", "deployed-values-commit"} {
 		if status != 200 || !strings.Contains(body, want) {
 			t.Errorf("%d missing %s: %s", status, want, body)

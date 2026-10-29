@@ -4,7 +4,7 @@
 <title>composecd · {{if .User}}{{if eq .Page "detail"}}{{.Name}}{{else}}{{.Page}}{{end}}{{else}}Sign in{{end}}</title>
 <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="/static/style.css">
-<script defer src="/static/htmx-2.0.11.min.js"></script><script defer src="/static/sse-2.2.4.js"></script><script defer src="/static/ui.js"></script>
+<script defer src="/static/htmx-2.0.11.min.js"></script><script defer src="/static/sse-2.2.4.js"></script><script defer src="/static/ui.js"></script>{{if eq .Page "detail"}}<script defer src="/static/dagre-1.1.4.min.js"></script><script defer src="/static/graph.js"></script>{{end}}
 <noscript><style>.sidebar-menu { display: flex !important; } .nav-toggle { display: none !important; }</style></noscript>
 </head><body {{with .User}}hx-headers="{{headers .}}"{{end}}>
 {{if not .User}}
@@ -49,6 +49,7 @@
 <div hx-ext="sse" sse-connect="/api/v1/apps/{{path $.Name}}/containers/{{path .}}/logs?follow=1&amp;tail=200" sse-close="end"><pre class="log" sse-swap="log" hx-swap="beforeend"></pre><p class="error card-body" sse-swap="error" role="alert"></p></div>
 <noscript><p class="card-body"><a href="/api/v1/apps/{{path $.Name}}/containers/{{path .}}/logs?tail=200">Read the log stream</a></p></noscript></section>{{end}}{{end}}
 </main></div></div>
+<dialog id="dialog" class="dialog" aria-labelledby="dialog-body"><button type="button" class="btn btn-ghost btn-sm btn-icon dialog-close i-close" aria-label="Close" data-close></button><div id="dialog-body"></div></dialog>
 {{end}}</body></html>{{end}}
 
 {{define "logo"}}<svg class="logo" viewBox="0 0 40 40" aria-hidden="true"><rect class="logo-bg" width="40" height="40" rx="10"/><rect class="logo-line" x="10" y="10.5" width="20" height="7.5" rx="2"/><rect class="logo-fill" x="10" y="22" width="20" height="7.5" rx="2"/></svg>{{end}}

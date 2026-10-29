@@ -452,8 +452,8 @@ func TestMissingStackDiff(t *testing.T) {
 	delete(e.fake().Running, "manual")
 	e.refresh()
 	manual := e.app("manual")
-	if manual.Sync.Status != OutOfSync {
-		t.Errorf("sync = %+v", manual.Sync)
+	if manual.Sync.Status != OutOfSync || manual.Health.Status != health.Missing {
+		t.Errorf("sync = %+v, health = %+v", manual.Sync, manual.Health)
 	}
 	if len(manual.Sync.Changes) != 1 {
 		t.Fatalf("changes = %+v", manual.Sync.Changes)

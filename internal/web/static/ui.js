@@ -44,3 +44,24 @@ document.addEventListener('click', function (event) {
   toggle.setAttribute('aria-expanded', String(open));
   toggle.setAttribute('aria-label', open ? 'Close menu' : 'Menu');
 });
+// Links and cards with data-dialog open their URL's fragment in the page's
+// dialog; without script they are ordinary links to the same fragment.
+document.addEventListener('click', function (event) {
+  var opener = event.target.closest('[data-dialog]');
+  var dialog = document.getElementById('dialog');
+  if (!opener || !dialog || event.defaultPrevented || event.metaKey || event.ctrlKey) { return; }
+  event.preventDefault();
+  htmx.ajax('GET', opener.dataset.dialog, { target: '#dialog-body', swap: 'innerHTML' }).then(function () {
+    if (!dialog.open) { dialog.showModal(); }
+  });
+});
+document.addEventListener('click', function (event) {
+  var dialog = document.getElementById('dialog');
+  if (!dialog || !dialog.open) { return; }
+  // The backdrop is the dialog element itself; its content sits in children.
+  if (event.target.closest('[data-close]') || event.target === dialog) { dialog.close(); }
+});
+// Closing the dialog drops its content, which ends any output it was following.
+document.addEventListener('close', function (event) {
+  if (event.target.id === 'dialog') { document.getElementById('dialog-body').replaceChildren(); }
+}, true);

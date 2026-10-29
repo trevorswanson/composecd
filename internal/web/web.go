@@ -14,6 +14,7 @@ import (
 	"io/fs"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -189,7 +190,10 @@ type Data struct {
 	Inventory                                                  map[string]Inventory
 	Adoption                                                   *controller.Adoption
 	// Op is the operation an action started, whose output the result follows.
-	Op      *store.Operation
+	Op *store.Operation
+	// Object is the object a dialog shows, in View.
+	Object  *controller.Object
+	View    string
 	Filters url.Values
 }
 
@@ -215,7 +219,29 @@ var templates = template.Must(template.New("web").Funcs(template.FuncMap{
 		}
 		return ""
 	},
-	"diffstat":       diffstat,
+	"diffstat":  diffstat,
+	"graphData": graphData,
+	// objectCount counts objects in sync state.
+	"objectCount": func(objs []controller.Object, state string) int {
+		n := 0
+		for _, o := range objs {
+			if string(o.Sync) == state {
+				n++
+			}
+		}
+		return n
+	},
+	"objectViews": objectViews,
+	// children are the containers of the service id.
+	"children": func(objs []controller.Object, id string) []controller.Object {
+		var out []controller.Object
+		for _, o := range objs {
+			if o.Parent == id {
+				out = append(out, o)
+			}
+		}
+		return out
+	},
 	"existingAction": controller.ExistingAction,
 	"tally":          tally,
 	"ago":            ago,
@@ -384,6 +410,9 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /events", s.Events)
 	mux.HandleFunc("GET /api/v1/apps/{name}/containers/{container}/logs", s.Logs)
 	mux.HandleFunc("GET /api/v1/apps/{name}/operations/{id}/log", s.OperationLog)
+	mux.HandleFunc("GET /ui/apps/{name}/details", s.Dialog)
+	mux.HandleFunc("GET /ui/apps/{name}/operations/{id}", s.Dialog)
+	mux.HandleFunc("GET /ui/apps/{name}/objects/{section}/{object}", s.Dialog)
 }
 
 func (s *Server) identify(w http.ResponseWriter, r *http.Request, need auth.Role) *auth.Principal {
@@ -424,8 +453,8 @@ func (s *Server) data(r *http.Request, p *auth.Principal) (*Data, error) {
 		d.Page = "apps"
 	}
 	d.Tab = r.URL.Query().Get("tab")
-	if d.Tab == "" {
-		d.Tab = "summary"
+	if d.Tab == "" || d.Tab == "summary" {
+		d.Tab = "graph"
 	}
 	switch d.Page {
 	case "apps":
@@ -443,7 +472,7 @@ func (s *Server) data(r *http.Request, p *auth.Principal) (*Data, error) {
 		}
 		d.App = a
 		switch d.Tab {
-		case "summary", "containers", "diff":
+		case "graph", "containers", "diff":
 		case "history":
 			d.History, err = s.C.History(d.Name)
 		case "operations":
@@ -711,6 +740,94 @@ func (s *Server) Action(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.Redirect(w, r, target, http.StatusSeeOther)
+}
+
+// Dialog renders the body of a dialog about an app: its details, an
+// operation's output, or one of its objects.
+func (s *Server) Dialog(w http.ResponseWriter, r *http.Request) {
+	p := s.identify(w, r, auth.RoleReadonly)
+	if p == nil {
+		return
+	}
+	d := &Data{User: p, Admin: p.Role == auth.RoleAdmin, Name: r.PathValue("name"), Page: "dialog"}
+	app, err := s.C.App(d.Name)
+	if err != nil {
+		pageError(w, err)
+		return
+	}
+	d.App = app
+	name := "app-details"
+	switch {
+	case r.PathValue("id") != "":
+		name = "op-output"
+		id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+		if err != nil {
+			pageError(w, invalidRequest("invalid operation id"))
+			return
+		}
+		if d.Op, err = s.C.Operation(id); err == nil && d.Op.App != d.Name {
+			err = fmt.Errorf("operation %d: %w", id, controller.ErrNotFound)
+		}
+		if err != nil {
+			pageError(w, err)
+			return
+		}
+	case r.PathValue("section") != "":
+		name = "object"
+		id := r.PathValue("section") + "/" + r.PathValue("object")
+		for i := range app.Objects {
+			if app.Objects[i].ID == id {
+				d.Object = &app.Objects[i]
+			}
+		}
+		if d.Object == nil {
+			pageError(w, fmt.Errorf("object %q: %w", id, controller.ErrNotFound))
+			return
+		}
+		d.View = r.URL.Query().Get("view")
+		if !slices.Contains(objectViews(*d.Object), d.View) {
+			d.View = "summary"
+		}
+	}
+	render(w, 200, name, d)
+}
+
+// objectViews are the views an object's dialog offers.
+func objectViews(o controller.Object) []string {
+	views := []string{"summary"}
+	if o.Kind != controller.KindContainer && o.ID != "networks/default" {
+		views = append(views, "desired", "deployed")
+	}
+	return views
+}
+
+// graphNode is an object as graph.js draws it, without its YAML.
+type graphNode struct {
+	ID        string   `json:"id"`
+	Kind      string   `json:"kind"`
+	Name      string   `json:"name"`
+	Sub       string   `json:"sub,omitempty"`
+	Parent    string   `json:"parent,omitempty"`
+	Sync      string   `json:"sync"`
+	Health    string   `json:"health,omitempty"`
+	Message   string   `json:"message,omitempty"`
+	Uses      []string `json:"uses,omitempty"`
+	DependsOn []string `json:"dependsOn,omitempty"`
+}
+
+// graphData is what graph.js lays out: the app's objects and the URL their
+// dialogs start with.
+func graphData(a controller.AppStatus) interface{} {
+	nodes := make([]graphNode, 0, len(a.Objects))
+	for _, o := range a.Objects {
+		n := graphNode{ID: o.ID, Kind: o.Kind, Name: o.Name, Sub: o.Image, Parent: o.Parent, Sync: string(o.Sync),
+			Health: string(o.Health), Message: o.Message, Uses: o.Uses, DependsOn: o.DependsOn}
+		if n.Sub == "" && o.Kind != controller.KindContainer && o.LiveName != "" {
+			n.Sub = o.LiveName
+		}
+		nodes = append(nodes, n)
+	}
+	return map[string]interface{}{"app": a.Name, "base": "/ui/apps/" + url.PathEscape(a.Name) + "/objects/", "nodes": nodes}
 }
 
 // invalidRequest identifies client input errors separately from server failures.

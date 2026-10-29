@@ -376,12 +376,16 @@ directory (`~/.config` on Linux), readable only by you. `--server`/`--token` and
 
 ## Web UI
 
-Open the server URL to sign in. The UI and its pinned htmx/SSE scripts are embedded in the binary;
-there is no CDN or Node build step.
+Open the server URL to sign in. The UI and its pinned htmx, SSE and dagre scripts are embedded in the
+binary; there is no CDN or Node build step.
 
 - **Applications** (`/apps`): filter by host, sync, health, or a label (`key` or `key=value`).
-- **Application details** (`/apps/NAME`): summary, containers and live log tails, colorized resource diffs,
-  release history with rollback, and operations with their output. Admins can sync, pause, resume and refresh.
+- **Application details** (`/apps/NAME`): a strip with the app's health, sync status (desired and deployed
+  commits) and last operation, then tabs: a **graph** of its services, networks, volumes, configs, secrets and
+  containers, each marked Synced, OutOfSync, Missing or Prune with its health (click one for its details and
+  desired and deployed YAML); containers and live log tails; colorized resource diffs; release history with
+  rollback; and operations with their output. **Details** shows the source, automation policy and retries.
+  Admins can sync, pause, resume and refresh; a running sync disables the button and streams its output.
 - **ApplicationSets** (`/applicationsets`): generated apps, counts and expansion/validation errors.
 - **Hosts** (`/hosts`): connectivity, Docker/Compose versions, orphaned releases and admin maintenance toggles.
   Lists unmanaged composetpl releases and plain Compose projects with config paths. Admins can use **Adopt** to preview Application YAML.
