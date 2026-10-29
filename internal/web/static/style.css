@@ -348,6 +348,7 @@ a.name:hover { color: var(--mf-accent); }
 .tag.added { background: var(--mf-ok-soft); color: var(--mf-ok); }
 .tag.changed { background: var(--mf-warn-soft); color: var(--mf-warn); }
 .tag.removed { background: var(--mf-bad-soft); color: var(--mf-bad); }
+.tag.missing { background: var(--mf-warn-soft); color: var(--mf-warn); }
 
 /* Callouts */
 .callout { --tone: var(--mf-accent); --ci: var(--i-info); display: flex; gap: 12px; align-items: flex-start;

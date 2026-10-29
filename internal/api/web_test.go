@@ -31,6 +31,7 @@ func (s *webStub) App(name string) (controller.AppStatus, error) {
 	a.Health.Containers = []compose.Container{{Name: "media-web-1", Image: "nginx:1", State: "running", Health: "healthy"}}
 	a.Sync.Changes = []controller.Change{{Resource: "services/web", Op: "changed", Diff: "-password: secret-value\n+password: <script>\n"}}
 	a.Sync.Drift = []action.ServiceDrift{{Service: "cache", Reason: action.DriftOrphaned, Containers: []string{"media-cache-1"}}}
+	a.Sync.RenderedAt = time.Now()
 	return a, err
 }
 func (s *webStub) Subscribe() (<-chan controller.Update, func()) { return s.updates, func() {} }

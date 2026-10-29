@@ -96,6 +96,7 @@ func (c *Controller) assess(ctx context.Context, app *config.Application, fetchE
 	}
 	fail := func(err error) (*AppStatus, *plan) {
 		st.Error = strings.Join(append(warnings, err.Error()), "; ")
+		c.staleDesired(st)
 		return st, nil
 	}
 
@@ -169,6 +170,7 @@ func (c *Controller) assess(ctx context.Context, app *config.Application, fetchE
 	for _, ch := range changes {
 		st.Sync.Changes = append(st.Sync.Changes, toChange(name, ch))
 	}
+	st.Sync.RenderedAt = time.Now()
 	if deployed == nil {
 		reasons = append(reasons, "not deployed")
 	} else {
@@ -250,6 +252,9 @@ func (c *Controller) assess(ctx context.Context, app *config.Application, fetchE
 				reasons = append(reasons, "live containers drifted: "+strings.Join(parts, ", "))
 				p.drifted = true
 			}
+			if err := missingChanges(st, name, manifest, drift); err != nil {
+				warnings = append(warnings, err.Error())
+			}
 		}
 	}
 
@@ -260,7 +265,69 @@ func (c *Controller) assess(ctx context.Context, app *config.Application, fetchE
 		st.Sync.Status = Synced
 	}
 	st.Error = strings.Join(warnings, "; ")
+	c.rememberDesired(st)
 	return st, p
+}
+
+// missingChanges shows each deployed service the host no longer runs as
+// missing, diffed against nothing, so the diff shows its whole desired state
+// rather than only how Git moved on from the release.
+func missingChanges(st *AppStatus, name, manifest string, drift []action.ServiceDrift) error {
+	missing := map[string]bool{}
+	for _, d := range drift {
+		if d.Reason == action.DriftMissing {
+			missing["services/"+d.Service] = true
+		}
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	desired, err := diff.Manifests("", manifest)
+	if err != nil {
+		return err
+	}
+	out := st.Sync.Changes[:0:0]
+	for _, ch := range st.Sync.Changes {
+		if !missing[ch.Resource] || ch.Op == string(diff.Removed) {
+			out = append(out, ch)
+		}
+	}
+	for _, d := range desired {
+		if missing[d.Resource] {
+			d.Op = OpMissing
+			out = append(out, toChange(name, d))
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Resource < out[j].Resource })
+	st.Sync.Changes = out
+	return nil
+}
+
+// rememberDesired keeps st's rendered desired state for a later failed reconcile.
+func (c *Controller) rememberDesired(st *AppStatus) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	s, ok := c.apps[st.Name]
+	if !ok {
+		s = &appState{}
+		c.apps[st.Name] = s
+	}
+	desired := st.Sync
+	s.desired = &desired
+}
+
+// staleDesired shows the last rendered desired state on st, which failed
+// before rendering Git.
+func (c *Controller) staleDesired(st *AppStatus) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	s, ok := c.apps[st.Name]
+	if !ok || s.desired == nil {
+		return
+	}
+	d := s.desired
+	st.Sync.Revision, st.Sync.ValuesRevision, st.Sync.ChartRef = d.Revision, d.ValuesRevision, d.ChartRef
+	st.Sync.Changes, st.Sync.RenderedAt, st.Sync.Stale = d.Changes, d.RenderedAt, true
 }
 
 // existingDrift compares containers that predate app's first release with the

@@ -440,3 +440,42 @@ func TestUndeployedDiff(t *testing.T) {
 		t.Errorf("error = %q", manual.Error)
 	}
 }
+
+func TestMissingStackDiff(t *testing.T) {
+	e := newEnv(t)
+	e.refresh()
+	if _, err := e.c.Sync("manual", "trevor"); err != nil {
+		t.Fatal(err)
+	}
+	e.c.ops.Wait()
+	// The release is recorded, but the stack was taken down by hand.
+	delete(e.fake().Running, "manual")
+	e.refresh()
+	manual := e.app("manual")
+	if manual.Sync.Status != OutOfSync {
+		t.Errorf("sync = %+v", manual.Sync)
+	}
+	if len(manual.Sync.Changes) != 1 {
+		t.Fatalf("changes = %+v", manual.Sync.Changes)
+	}
+	ch := manual.Sync.Changes[0]
+	if ch.Resource != "services/web" || ch.Op != OpMissing || !strings.Contains(ch.Diff, "+image: nginx:1") || strings.Contains(ch.Diff, "\n-") {
+		t.Errorf("change = %+v", ch)
+	}
+}
+
+func TestRenderErrorKeepsTheLastDesiredState(t *testing.T) {
+	e := newEnv(t)
+	e.refresh()
+	good := e.app("manual")
+	if good.Sync.Stale || good.Sync.RenderedAt.IsZero() || len(good.Sync.Changes) == 0 {
+		t.Fatalf("first render: %+v", good.Sync)
+	}
+	e.commit(map[string]string{"charts/web/templates/a.yaml": "services: {{ fail \"boom\" }}\n"})
+	e.refresh()
+	manual := e.app("manual")
+	if !manual.Sync.Stale || !strings.Contains(manual.Error, "boom") || manual.Sync.Revision != good.Sync.Revision ||
+		!manual.Sync.RenderedAt.Equal(good.Sync.RenderedAt) || len(manual.Sync.Changes) != len(good.Sync.Changes) {
+		t.Errorf("after a render error: %+v", manual.Sync)
+	}
+}

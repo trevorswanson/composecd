@@ -105,6 +105,9 @@ type appState struct {
 	// heals counts self-heals in a row, for backoff.
 	heals    int
 	nextHeal time.Time
+	// desired is the status of the last reconcile that rendered Git, which a
+	// failed one shows as stale.
+	desired *SyncStatus
 }
 
 // infisicalClient returns the shared client for the bootstrap's infisical
