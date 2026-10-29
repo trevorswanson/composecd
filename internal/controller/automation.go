@@ -206,7 +206,7 @@ type timer struct {
 // runHeal re-applies the deployed revision to drifted containers.
 func (c *Controller) runHeal(ctx context.Context, p *plan, op *store.Operation, drift string) {
 	defer p.host.Use()()
-	log := &logBuffer{max: maxLog}
+	log := c.opLog(op)
 	cfg := p.host.Configuration(p.prep.Env, log)
 	r := action.NewRepair(cfg)
 	r.DeployOptions = deployOptions(p.app.Spec.SyncPolicy.Options)

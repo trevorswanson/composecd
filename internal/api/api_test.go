@@ -59,6 +59,15 @@ func (s *stub) Operation(id int64) (*store.Operation, error) {
 	return &store.Operation{ID: 7, App: "media", Log: "done"}, nil
 }
 
+func (s *stub) FollowOperation(_ context.Context, id int64, w io.Writer) error {
+	op, err := s.Operation(id)
+	if err != nil {
+		return err
+	}
+	_, err = io.WriteString(w, op.Log+"\n")
+	return err
+}
+
 func (s *stub) HostStatuses() []controller.HostStatus {
 	return []controller.HostStatus{{Status: hosts.Status{Name: "nas", State: hosts.StateUp}, Apps: 1}}
 }

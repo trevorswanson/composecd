@@ -36,6 +36,7 @@ type Controller interface {
 	History(string) ([]controller.Release, error)
 	Operations(string, int) ([]*store.Operation, error)
 	Operation(int64) (*store.Operation, error)
+	FollowOperation(context.Context, int64, io.Writer) error
 	HostStatuses() []controller.HostStatus
 	Unmanaged(context.Context, string) (*controller.Unmanaged, error)
 	Adopt(context.Context, string, string) (*controller.Adoption, error)
@@ -187,14 +188,17 @@ type Data struct {
 	Tokens                                                     []*store.Token
 	Inventory                                                  map[string]Inventory
 	Adoption                                                   *controller.Adoption
-	Filters                                                    url.Values
+	// Op is the operation an action started, whose output the result follows.
+	Op      *store.Operation
+	Filters url.Values
 }
 
 var templates = template.Must(template.New("web").Funcs(template.FuncMap{
 	"lower": func(v interface{}) string { return strings.ToLower(fmt.Sprint(v)) },
+	// short is a commit hash's first 7 characters, as Git abbreviates it.
 	"short": func(s string) string {
-		if len(s) > 12 {
-			return s[:12]
+		if len(s) > 7 {
+			return s[:7]
 		}
 		return s
 	},
@@ -247,6 +251,19 @@ var templates = template.Must(template.New("web").Funcs(template.FuncMap{
 	// live reports whether the page takes SSE updates.
 	"live": func(d *Data) bool { return d.Page != "settings" && d.Page != "adopt" },
 	"pair": func(a, b interface{}) []interface{} { return []interface{}{a, b} },
+	"list": func(v ...interface{}) []interface{} { return v },
+	// busy is what a button says while an operation of kind runs.
+	"busy": func(kind string) string {
+		switch kind {
+		case store.KindRollback:
+			return "Rolling back…"
+		case store.KindHeal:
+			return "Healing…"
+		case store.KindPrune:
+			return "Pruning…"
+		}
+		return "Syncing…"
+	},
 	// state is a Compose project status's state, "running" in "running(3)".
 	"state": func(s string) string {
 		state, _, _ := strings.Cut(s, "(")
@@ -366,6 +383,7 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /ui/settings/{action}", s.Action)
 	mux.HandleFunc("GET /events", s.Events)
 	mux.HandleFunc("GET /api/v1/apps/{name}/containers/{container}/logs", s.Logs)
+	mux.HandleFunc("GET /api/v1/apps/{name}/operations/{id}/log", s.OperationLog)
 }
 
 func (s *Server) identify(w http.ResponseWriter, r *http.Request, need auth.Role) *auth.Principal {
@@ -593,16 +611,17 @@ func (s *Server) Action(w http.ResponseWriter, r *http.Request) {
 	var err error
 	target := "/apps/" + url.PathEscape(name)
 	message, token := "Action requested", ""
+	var op *store.Operation
 	switch {
 	case strings.HasPrefix(r.URL.Path, "/ui/apps/"):
 		switch action {
 		case "sync":
-			_, err = s.C.Sync(name, p.Name)
+			op, err = s.C.Sync(name, p.Name)
 		case "rollback":
 			var rev int
 			rev, err = strconv.Atoi(r.FormValue("revision"))
 			if err == nil && rev > 0 {
-				_, err = s.C.Rollback(name, rev, p.Name)
+				op, err = s.C.Rollback(name, rev, p.Name)
 			} else {
 				err = invalidRequest("invalid revision")
 			}
@@ -672,8 +691,11 @@ func (s *Server) Action(w http.ResponseWriter, r *http.Request) {
 		pageError(w, err)
 		return
 	}
+	if op != nil {
+		message = fmt.Sprintf("%s #%d started", map[string]string{"sync": "Sync", "rollback": "Rollback"}[action], op.ID)
+	}
 	if r.Header.Get("HX-Request") == "true" {
-		render(w, 200, "result", &Data{Message: message, Token: token})
+		render(w, 200, "result", &Data{Message: message, Token: token, Op: op})
 		return
 	}
 	if token != "" {

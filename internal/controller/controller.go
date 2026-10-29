@@ -72,7 +72,10 @@ type Controller struct {
 	root         RootStatus
 	apps         map[string]*appState
 	running      map[string]int64
-	appLocks     map[string]*sync.Mutex
+	// liveLogs are running operations' output, by operation ID, so it can be
+	// followed before the operation finishes.
+	liveLogs map[int64]*logBuffer
+	appLocks map[string]*sync.Mutex
 	// checkouts counts operations using each checkout, so Prune keeps them.
 	checkouts map[string]int
 	windows   []*windows.Window
@@ -131,6 +134,7 @@ func New(o Options) *Controller {
 		sem:       make(chan struct{}, o.Boot.Concurrency),
 		apps:      map[string]*appState{},
 		running:   map[string]int64{},
+		liveLogs:  map[int64]*logBuffer{},
 		appLocks:  map[string]*sync.Mutex{},
 		checkouts: map[string]int{},
 		orphans:   map[string][]string{},
@@ -554,7 +558,7 @@ func (c *Controller) Apps() []AppStatus {
 	}
 	c.mu.RUnlock()
 	for i := range out {
-		out[i] = c.maskStatus(out[i])
+		out[i] = c.maskStatus(c.withRunning(out[i]))
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
@@ -572,7 +576,23 @@ func (c *Controller) App(name string) (AppStatus, error) {
 		st = s.status
 	}
 	c.mu.RUnlock()
-	return c.maskStatus(st), nil
+	return c.maskStatus(c.withRunning(st)), nil
+}
+
+// withRunning shows st's running operation, if any, as its last one: status
+// is recorded after each reconcile, which lags an operation that just started.
+func (c *Controller) withRunning(st AppStatus) AppStatus {
+	c.mu.RLock()
+	id := c.running[st.Name]
+	c.mu.RUnlock()
+	if id == 0 || (st.Operation != nil && st.Operation.ID == id) {
+		return st
+	}
+	if op, err := c.Store.Operation(id); err == nil {
+		op.Log = ""
+		st.Operation = op
+	}
+	return st
 }
 
 func pendingStatus(a *config.Application) AppStatus {

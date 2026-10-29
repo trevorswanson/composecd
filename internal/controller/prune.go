@@ -109,7 +109,7 @@ func (c *Controller) pruneOne(ctx context.Context, h *hosts.Host, rel *release.R
 			op.Phase, op.Message = store.PhaseFailed, "reading release history: "+err.Error()
 			return
 		}
-		log := &logBuffer{max: maxLog}
+		log := c.opLog(op)
 		cfg := h.Configuration(nil, log)
 		u := action.NewUninstall(cfg)
 		u.KeepHistory, u.Timeout = true, config.DefaultTimeout

@@ -152,6 +152,9 @@ code, pre, kbd { font-family: var(--mf-mono); font-size: 12px; }
 .dot { flex: none; width: 8px; height: 8px; border-radius: 999px; background: var(--mf-ok); }
 .dot.bad { background: var(--mf-bad); }
 .dot.idle { background: var(--mf-text-3); }
+/* ui.js marks the root's state while live updates are disconnected. */
+.root-status[data-conn=lost] .dot { background: var(--mf-warn); }
+.root-status[data-conn=lost] .what { color: var(--mf-warn); }
 .tip { position: absolute; z-index: 10; left: -8px; bottom: calc(100% + 6px); width: 216px; display: none; flex-direction: column; gap: 6px;
   padding: 12px; background: var(--mf-surface); border: 1px solid var(--mf-line-strong); border-radius: var(--mf-radius);
   box-shadow: 0 8px 24px rgb(0 0 0 / .12); color: var(--mf-text-2); cursor: auto; }
@@ -172,11 +175,6 @@ code, pre, kbd { font-family: var(--mf-mono); font-size: 12px; }
 
 .main { min-width: 0; display: flex; flex-direction: column; }
 .label { font-size: 11px; line-height: 16px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--mf-text-2); }
-.live { display: none; align-items: center; gap: 6px; margin-left: auto; font-size: 13px; line-height: 18px; color: var(--mf-text-3); }
-.live::before { content: ""; width: 8px; height: 8px; border-radius: 999px; background: currentColor; }
-.live[data-state] { display: inline-flex; }
-.live[data-state=open] { color: var(--mf-ok); }
-.live[data-state=closed] { color: var(--mf-warn); }
 .content { width: 100%; max-width: 1240px; padding: 28px 32px 48px; display: flex; flex-direction: column; gap: 20px; }
 .panel { display: flex; flex-direction: column; gap: 20px; }
 .panel:empty { display: none; }
@@ -229,6 +227,11 @@ button { font: inherit; }
 .btn-icon { width: 40px; padding: 0; }
 .btn-sm.btn-icon { width: 32px; }
 .btn:disabled { background: var(--mf-surface-2); border-color: var(--mf-line); color: var(--mf-text-3); cursor: not-allowed; }
+/* A button whose operation is running keeps its tone and spins. */
+.btn.is-busy, .btn.is-busy:hover { background: var(--mf-accent-soft); border-color: var(--mf-accent-soft); color: var(--mf-accent); cursor: progress; }
+.btn.is-busy::before { content: ""; flex: none; width: 14px; height: 14px; background: currentColor;
+  -webkit-mask: var(--g-arc) center / contain no-repeat; mask: var(--g-arc) center / contain no-repeat; animation: mf-spin 1s linear infinite; }
+@media (prefers-reduced-motion: reduce) { .btn.is-busy::before { animation: none; } }
 .htmx-request .btn, .btn.htmx-request { opacity: .6; pointer-events: none; }
 
 /* Fields */
@@ -387,6 +390,10 @@ details { border-top: 1px solid var(--mf-line); }
 summary { padding: 10px 16px; cursor: pointer; color: var(--mf-accent); font-size: 13px; font-weight: 500; }
 summary:hover { color: var(--mf-accent-hover); }
 details[open] summary { border-bottom: 1px solid var(--mf-line); }
+.op-live { margin-top: 8px; border-top: 0; }
+.op-live summary { padding: 4px 0; }
+.op-live[open] summary { border-bottom: 0; }
+.op-live .log { border-radius: var(--mf-radius-chip); }
 .op-title { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; min-width: 0; }
 .op-title h2 { font-size: 14px; line-height: 20px; }
 
@@ -426,7 +433,6 @@ details[open] summary { border-bottom: 1px solid var(--mf-line); }
   .page-head .actions { flex: 1 1 100%; }
   .page-head .actions form { flex: 1 1 0; }
   .page-head .actions .btn { width: 100%; padding: 0 10px; }
-  .page-head .actions .live { order: -1; flex-basis: 100%; margin-left: 0; }
 }
 
 /* Phones: each table row becomes a small card. The first cell is its title;

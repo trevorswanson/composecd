@@ -76,9 +76,16 @@ func TestWebPagesAndActions(t *testing.T) {
 	if code, _, _ := b.do("POST", "/ui/apps/media/sync", "", nil); code != 403 {
 		t.Fatalf("CSRF: %d", code)
 	}
-	for path, form := range map[string]string{"/ui/apps/media/sync": "", "/ui/apps/media/rollback": "revision=1", "/ui/apps/media/pause": "", "/ui/apps/media/resume": "", "/ui/apps/media/refresh": "", "/ui/hosts/nas/maintenance": "enabled=true"} {
-		code, _, body := b.do("POST", path, form, map[string]string{"Content-Type": "application/x-www-form-urlencoded", auth.CSRFHeader: b.csrf, "HX-Request": "true"})
-		if code != 200 || !strings.Contains(body, "Action requested") {
+	for path, form := range map[string][2]string{
+		"/ui/apps/media/sync":       {"", `Sync #7 started`},
+		"/ui/apps/media/rollback":   {"revision=1", `sse-connect="/api/v1/apps/media/operations/8/log"`},
+		"/ui/apps/media/pause":      {"", "Action requested"},
+		"/ui/apps/media/resume":     {"", "Action requested"},
+		"/ui/apps/media/refresh":    {"", "Action requested"},
+		"/ui/hosts/nas/maintenance": {"enabled=true", "Action requested"},
+	} {
+		code, _, body := b.do("POST", path, form[0], map[string]string{"Content-Type": "application/x-www-form-urlencoded", auth.CSRFHeader: b.csrf, "HX-Request": "true"})
+		if code != 200 || !strings.Contains(body, form[1]) {
 			t.Errorf("%s: %d %s", path, code, body)
 		}
 	}
@@ -234,6 +241,24 @@ func (s *followingStub) Logs(ctx context.Context, _ string, _ string, _ int, _ b
 	<-ctx.Done()
 	close(s.stopped)
 	return ctx.Err()
+}
+
+func TestOperationLogEndpoint(t *testing.T) {
+	srv, _ := newServer(t, Options{})
+	code, body := do(t, srv, "GET", "/api/v1/apps/media/operations/7/log", "secret", "")
+	if code != 200 || !strings.Contains(body, "event: log\ndata: <span>done") || !strings.Contains(body, "event: end") {
+		t.Fatalf("%d %s", code, body)
+	}
+	for path, want := range map[string]int{
+		"/api/v1/apps/other/operations/7/log": 404, "/api/v1/apps/media/operations/9/log": 404, "/api/v1/apps/media/operations/x/log": 400,
+	} {
+		if code, _ := do(t, srv, "GET", path, "secret", ""); code != want {
+			t.Errorf("%s: %d", path, code)
+		}
+	}
+	if code, _ := do(t, srv, "GET", "/api/v1/apps/media/operations/7/log", "", ""); code != 401 {
+		t.Fatal(code)
+	}
 }
 
 func TestReadonlyLogFollowCancellation(t *testing.T) {

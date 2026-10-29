@@ -14,16 +14,19 @@ document.addEventListener('htmx:responseError', function (event) {
   box.append(body);
   result.replaceChildren(box);
 });
-// Show whether the page's live updates are connected.
-function setLive(state, text) {
-  var live = document.getElementById('live');
-  if (live) { live.dataset.state = state; live.textContent = text; }
-}
+// Show in the sidebar's root state when the page's live updates disconnect.
+// Updates only arrive while connected, and each re-renders the root state, so
+// a reconnect restores it.
 document.addEventListener('htmx:sseOpen', function (event) {
-  if (event.target.id === 'events') { setLive('open', 'Live'); }
+  var root = document.getElementById('root-status');
+  if (event.target.id === 'events' && root) { root.removeAttribute('data-conn'); }
 });
 document.addEventListener('htmx:sseError', function (event) {
-  if (event.target.id === 'events') { setLive('closed', 'Reconnecting'); }
+  var root = document.getElementById('root-status');
+  if (event.target.id !== 'events' || !root) { return; }
+  root.dataset.conn = 'lost';
+  var what = root.querySelector('.what');
+  if (what) { what.textContent = 'Reconnecting'; }
 });
 // Keep a long-running tail bounded while allowing someone to scroll back.
 document.addEventListener('htmx:sseMessage', function (event) {

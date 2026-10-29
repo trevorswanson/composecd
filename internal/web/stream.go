@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/trevorswanson/composecd/internal/auth"
+	"github.com/trevorswanson/composecd/internal/controller"
 )
 
 func streamHeaders(w http.ResponseWriter) {
@@ -197,11 +198,45 @@ func (s *Server) Logs(w http.ResponseWriter, r *http.Request) {
 		tail = n
 	}
 	follow := r.URL.Query().Get("follow") == "1"
-	stream := &logStream{w: w, mask: func(text string) string { return s.C.Mask(r.PathValue("name"), text) }}
+	name := r.PathValue("name")
+	s.stream(w, r, p, func(text string) string { return s.C.Mask(name, text) }, func(ctx context.Context, out io.Writer) error {
+		return s.C.Logs(ctx, name, r.PathValue("container"), tail, follow, out)
+	})
+}
+
+// OperationLog streams an operation's output, following it while it runs.
+func (s *Server) OperationLog(w http.ResponseWriter, r *http.Request) {
+	p := s.identify(w, r, auth.RoleReadonly)
+	if p == nil {
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		pageError(w, invalidRequest("invalid operation id"))
+		return
+	}
+	op, err := s.C.Operation(id)
+	if err != nil {
+		pageError(w, err)
+		return
+	}
+	if op.App != r.PathValue("name") {
+		pageError(w, fmt.Errorf("operation %d: %w", id, controller.ErrNotFound))
+		return
+	}
+	// FollowOperation masks already.
+	s.stream(w, r, p, func(text string) string { return text }, func(ctx context.Context, out io.Writer) error {
+		return s.C.FollowOperation(ctx, id, out)
+	})
+}
+
+// stream runs run, sending what it writes as SSE log events until it returns.
+// Revocation and session expiry end it, as does a client that went away.
+func (s *Server) stream(w http.ResponseWriter, r *http.Request, p *auth.Principal, mask func(string) string, run func(context.Context, io.Writer) error) {
+	stream := &logStream{w: w, mask: mask}
 	ctx, cancel := context.WithCancel(r.Context())
 	done := make(chan struct{})
 	defer func() { cancel(); <-done }()
-	// Revocation and session expiry also end an otherwise idle log follow.
 	go func() {
 		defer close(done)
 		tick := time.NewTicker(15 * time.Second)
@@ -229,7 +264,7 @@ func (s *Server) Logs(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}()
-	err := s.C.Logs(ctx, r.PathValue("name"), r.PathValue("container"), tail, follow, stream)
+	err := run(ctx, stream)
 	stream.mu.Lock()
 	defer stream.mu.Unlock()
 	if !stream.started && err != nil {
@@ -241,7 +276,7 @@ func (s *Server) Logs(w http.ResponseWriter, r *http.Request) {
 		stream.emit(string(stream.pending))
 	}
 	if err != nil && ctx.Err() == nil {
-		_ = frame(w, "error", html.EscapeString(s.C.Mask(r.PathValue("name"), err.Error())))
+		_ = frame(w, "error", html.EscapeString(mask(err.Error())))
 	}
 	_ = frame(w, "end", "")
 }

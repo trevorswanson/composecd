@@ -1,4 +1,4 @@
-{{define "apps-head"}}<div class="page-head"><div class="title"><div class="title-row"><h1>Applications</h1>{{template "live" .}}</div></div></div>
+{{define "apps-head"}}<div class="page-head"><div class="title"><div class="title-row"><h1>Applications</h1></div></div></div>
 <form class="toolbar" method="get" action="/apps">
 <div class="seg" role="group" aria-label="Sync status">{{range $v := lines "\nSynced\nOutOfSync\nUnknown"}}<a href="/apps{{query $.Filters "sync" $v}}" {{if eq ($.Filters.Get "sync") $v}}aria-current="true"{{end}}>{{if $v}}{{$v}}{{else}}All{{end}}</a>{{end}}</div>
 {{with .Filters.Get "sync"}}<input type="hidden" name="sync" value="{{.}}">{{end}}
@@ -15,17 +15,17 @@
 <td data-label="Health"><div class="cell">{{template "pill" .Health.Status}}{{with .Health.Message}}<span class="reason">{{.}}</span>{{end}}</div></td>
 <td data-label="Revision"><div class="cell">{{if .Sync.ChartRef}}<span class="chip">{{.Sync.ChartRef}}</span>{{else if .Source.Chart}}<span class="chip">{{.Source.Chart}}</span>{{else if .Sync.Revision}}<span class="chip rev" title="{{.Sync.Revision}}">{{short .Sync.Revision}}</span>{{else}}<span class="muted">Not rendered</span>{{end}}{{with .Sync.ValuesRevision}}<span class="reason">values {{short .}}</span>{{end}}{{with .Release}}<span class="reason">release rev {{.Revision}}{{with .Chart}} · {{.}}{{end}}</span>{{end}}</div></td>
 <td data-label="Last operation">{{with .Operation}}<div class="cell"><span class="pill plain {{lower .Phase}}">{{.Phase}}</span><span class="reason">{{.Kind}} · {{.Trigger}}{{with .User}} · {{.}}{{end}} · <time datetime="{{iso .StartedAt}}" title="{{iso .StartedAt}}">{{ago .StartedAt}}</time></span></div>{{else}}<span class="muted">None yet</span>{{end}}</td>
-{{if $.Admin}}<td class="act"><form method="post" action="/ui/apps/{{path .Name}}/sync" hx-post="/ui/apps/{{path .Name}}/sync" hx-target="#action-result">{{template "csrf" $}}<button type="submit" class="btn btn-sm{{if eq .Sync.Status "OutOfSync"}} btn-primary{{end}}">Sync</button></form></td>{{end}}</tr>
+{{if $.Admin}}<td class="act">{{template "syncbtn" (list $ . true)}}</td>{{end}}</tr>
 {{else}}<tr><td colspan="6" class="empty-row">No applications match these filters. <a href="/apps">Show all</a></td></tr>{{end}}</tbody></table></div></div>{{end}}
 
 {{define "detail-head"}}<div id="app-head" class="detail-head" {{if .OOB}}hx-swap-oob="outerHTML"{{end}}>
 <nav class="crumbs" aria-label="Breadcrumb"><a href="/apps">Applications</a><span aria-hidden="true">/</span><span aria-current="page">{{.App.Name}}</span></nav>
 <div class="page-head"><div class="title">
-<div class="title-row"><h1>{{.App.Name}}</h1>{{template "pill" .App.Sync.Status}}{{template "pill" .App.Health.Status}}{{if .App.Paused}}<span class="pill paused">Paused</span>{{end}}{{if .App.Automated}}<span class="tag auto">auto</span>{{else}}<span class="tag">manual</span>{{end}}{{if not .Admin}}{{template "live" .}}{{end}}</div>
+<div class="title-row"><h1>{{.App.Name}}</h1>{{template "pill" .App.Sync.Status}}{{template "pill" .App.Health.Status}}{{if .App.Paused}}<span class="pill paused">Paused</span>{{end}}{{if .App.Automated}}<span class="tag auto">auto</span>{{else}}<span class="tag">manual</span>{{end}}</div>
 <div class="meta"><span class="chip i-host">{{.App.Host}}</span>{{with .App.Sync.ChartRef}}<span class="chip">{{.}}</span>{{else}}{{with .App.Source.Chart}}<span class="chip">{{.}}{{with $.App.Source.Version}}:{{.}}{{end}}</span>{{else}}{{with .App.Source.Path}}<span class="chip">{{.}}{{with $.App.Source.TargetRevision}} @ {{.}}{{end}}</span>{{end}}{{end}}{{end}}{{range $k, $v := .App.Labels}}<span class="chip selector">{{$k}}={{$v}}</span>{{end}}</div>
 </div>
-{{if .Admin}}<div class="actions">{{template "live" .}}
-<form method="post" action="/ui/apps/{{path .Name}}/sync" hx-post="/ui/apps/{{path .Name}}/sync" hx-target="#action-result">{{template "csrf" .}}<button type="submit" class="btn btn-primary i-sync">Sync</button></form>
+{{if .Admin}}<div class="actions">
+{{template "syncbtn" (list . .App false)}}
 <form method="post" action="/ui/apps/{{path .Name}}/refresh" hx-post="/ui/apps/{{path .Name}}/refresh" hx-target="#action-result">{{template "csrf" .}}<button type="submit" class="btn i-refresh">Refresh</button></form>
 {{if .App.Paused}}<form method="post" action="/ui/apps/{{path .Name}}/resume" hx-post="/ui/apps/{{path .Name}}/resume" hx-target="#action-result">{{template "csrf" .}}<button type="submit" class="btn i-resume">Resume</button></form>
 {{else}}<form method="post" action="/ui/apps/{{path .Name}}/pause" hx-post="/ui/apps/{{path .Name}}/pause" hx-target="#action-result">{{template "csrf" .}}<button type="submit" class="btn i-pause">Pause</button></form>{{end}}
