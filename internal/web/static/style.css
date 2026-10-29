@@ -560,3 +560,15 @@ details[open] summary { border-bottom: 1px solid var(--mf-line); }
 .legend span::before { content: ""; width: 8px; height: 8px; border-radius: 999px; background: var(--k); }
 @media (prefers-reduced-motion: reduce) { .gb.progressing { animation: none; } }
 @media (max-width: 640px) { .legend { display: none; } .graph-tools .seg { width: 100%; } }
+
+/* Live state */
+.live-object { display: flex; flex-direction: column; gap: 6px; }
+.fold { border: 1px solid var(--mf-line); border-radius: var(--mf-radius-chip); }
+.fold summary { padding: 6px 12px; font: 400 12px/18px var(--mf-mono); color: var(--mf-text-2); }
+.fold summary .muted { font-family: var(--mf-font); margin-left: 6px; }
+.fold[open] summary { border-bottom: 1px solid var(--mf-line); }
+.fold .output { border-radius: 0; }
+.diff-bar { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 6px 12px; font-size: 13px; }
+.card-diff .empty { margin: 16px; }
+.card-diff .dialog-text { padding: 12px 16px; }
+.card-head h2 .gicon { width: 18px; height: 18px; }

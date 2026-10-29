@@ -59,6 +59,16 @@ func (s *stub) Operation(id int64) (*store.Operation, error) {
 	return &store.Operation{ID: 7, App: "media", Log: "done"}, nil
 }
 
+func (s *stub) LiveObject(_ context.Context, app, id string, all, redact bool) (*controller.Live, error) {
+	s.calls = append(s.calls, fmt.Sprintf("live %s %s %v %v", app, id, all, redact))
+	if id != "services/web" {
+		return nil, controller.ErrNotFound
+	}
+	return &controller.Live{Object: controller.Object{ID: id}, Projected: "image: nginx:0\n", Desired: "image: nginx:1\n",
+		Diff:    "@@ -1 +1 @@\n-image: nginx:0\n+image: nginx:1\n",
+		Inspect: []controller.Inspected{{Name: "media-web-1", YAML: "Name: /media-web-1\n", Folded: []controller.Fold{{Path: "GraphDriver", Fields: 2, YAML: "GraphDriver: {}\n"}}}}}, nil
+}
+
 func (s *stub) FollowOperation(_ context.Context, id int64, w io.Writer) error {
 	op, err := s.Operation(id)
 	if err != nil {

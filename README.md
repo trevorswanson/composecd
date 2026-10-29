@@ -382,9 +382,11 @@ binary; there is no CDN or Node build step.
 - **Applications** (`/apps`): filter by host, sync, health, or a label (`key` or `key=value`).
 - **Application details** (`/apps/NAME`): a strip with the app's health, sync status (desired and deployed
   commits) and last operation, then tabs: a **graph** of its services, networks, volumes, configs, secrets and
-  containers, each marked Synced, OutOfSync, Missing or Prune with its health (click one for its details and
-  desired and deployed YAML); containers and live log tails; colorized resource diffs; release history with
-  rollback; and operations with their output. **Details** shows the source, automation policy and retries.
+  containers, each marked Synced, OutOfSync, Missing or Prune with its health (click one for its details, its
+  live `docker inspect` state with engine bookkeeping folded away, a live-to-desired diff, and its desired and
+  deployed YAML); containers and live log tails; diffs, either of the compose file against the deployed
+  release or of each object's live state against Git; release history with rollback; and operations with
+  their output. **Details** shows the source, automation policy and retries.
   Admins can sync, pause, resume and refresh; a running sync disables the button and streams its output.
 - **ApplicationSets** (`/applicationsets`): generated apps, counts and expansion/validation errors.
 - **Hosts** (`/hosts`): connectivity, Docker/Compose versions, orphaned releases and admin maintenance toggles.
@@ -398,6 +400,13 @@ Pages are server-rendered and readable without JavaScript; actions also accept o
 JavaScript enabled, authenticated `GET /events` delivers `app`, `host` and `operation` SSE events containing
 HTML panels swapped with `hx-swap-oob`. Reconnecting clients receive a fresh snapshot. Changes never block
 reconciliation, even if a browser is slow. Log tails stay connected when other panels update.
+
+Live object state (`GET /api/v1/apps/NAME/objects/SECTION/NAME`, e.g. `services/web`; `?all=true` adds keys Git
+doesn't set) compares what composecd can read back from the engine (image, command, environment, ports,
+volumes, networks, labels, restart, healthcheck and similar) with Git, leaving out what the image sets by
+default. Inspect output is cached for 30 seconds. For readonly users, environment variables named like
+secrets (`*PASSWORD*`, `*TOKEN*`, `*KEY*`, ...) are redacted, since live containers can hold values composecd
+never decrypted and so can't mask.
 
 The log endpoint checks a fresh compose project listing and its project label before streaming; a container
 from another project is refused. Log lines, diffs and displayed operation output mask SOPS-decrypted values

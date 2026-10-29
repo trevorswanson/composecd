@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/url"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -53,6 +54,7 @@ type Controller interface {
 	Subscribe() (<-chan controller.Update, func())
 	Logs(context.Context, string, string, int, bool, io.Writer) error
 	Mask(string, string) string
+	LiveObject(ctx context.Context, app, id string, all, redact bool) (*controller.Live, error)
 }
 
 type Server struct {
@@ -192,8 +194,16 @@ type Data struct {
 	// Op is the operation an action started, whose output the result follows.
 	Op *store.Operation
 	// Object is the object a dialog shows, in View.
-	Object  *controller.Object
-	View    string
+	Object *controller.Object
+	View   string
+	// Live is Object's state on its host, for its live and diff views; All
+	// includes live keys Git doesn't set (or, on the diff tab, synced objects).
+	Live *controller.Live
+	All  bool
+	// Mode is the diff tab's: "" compares the compose file, "objects" each
+	// object's live state.
+	Mode    string
+	Objects []ObjectDiff
 	Filters url.Values
 }
 
@@ -472,7 +482,15 @@ func (s *Server) data(r *http.Request, p *auth.Principal) (*Data, error) {
 		}
 		d.App = a
 		switch d.Tab {
-		case "graph", "containers", "diff":
+		case "graph", "containers":
+		case "diff":
+			d.Mode = r.URL.Query().Get("mode")
+			if d.Mode == "objects" {
+				d.All = r.URL.Query().Get("synced") == "1"
+				d.Objects = s.objectDiffs(r.Context(), a, d.All, !d.Admin)
+			} else {
+				d.Mode = ""
+			}
 		case "history":
 			d.History, err = s.C.History(d.Name)
 		case "operations":
@@ -788,6 +806,13 @@ func (s *Server) Dialog(w http.ResponseWriter, r *http.Request) {
 		if !slices.Contains(objectViews(*d.Object), d.View) {
 			d.View = "summary"
 		}
+		if d.View == "live" || d.View == "diff" {
+			d.All = r.URL.Query().Get("all") == "1"
+			if d.Live, err = s.C.LiveObject(r.Context(), d.Name, id, d.All, !d.Admin); err != nil {
+				pageError(w, err)
+				return
+			}
+		}
 	}
 	render(w, 200, name, d)
 }
@@ -795,10 +820,43 @@ func (s *Server) Dialog(w http.ResponseWriter, r *http.Request) {
 // objectViews are the views an object's dialog offers.
 func objectViews(o controller.Object) []string {
 	views := []string{"summary"}
-	if o.Kind != controller.KindContainer && o.ID != "networks/default" {
+	switch {
+	case o.Kind == controller.KindContainer, o.ID == "networks/default":
+		views = append(views, "live")
+	case o.Kind == controller.KindConfig, o.Kind == controller.KindSecret:
 		views = append(views, "desired", "deployed")
+	default:
+		views = append(views, "live", "diff", "desired", "deployed")
 	}
 	return views
+}
+
+// ObjectDiff is one object's live state against Git, on the diff tab.
+type ObjectDiff struct {
+	Object controller.Object
+	Live   *controller.Live
+	Error  string
+}
+
+// objectDiffs compares each object that isn't synced (or every one, with
+// all) with its live state. Containers are covered by their services.
+func (s *Server) objectDiffs(ctx context.Context, a controller.AppStatus, all, redact bool) []ObjectDiff {
+	order := map[controller.ObjectSync]int{controller.ObjectMissing: 0, controller.ObjectOutOfSync: 1, controller.ObjectPrune: 2, controller.ObjectSynced: 3}
+	var out []ObjectDiff
+	for _, o := range a.Objects {
+		if o.Kind == controller.KindContainer || (!all && o.Sync == controller.ObjectSynced) {
+			continue
+		}
+		d := ObjectDiff{Object: o}
+		live, err := s.C.LiveObject(ctx, a.Name, o.ID, false, redact)
+		if err != nil {
+			d.Error = err.Error()
+		}
+		d.Live = live
+		out = append(out, d)
+	}
+	sort.SliceStable(out, func(i, j int) bool { return order[out[i].Object.Sync] < order[out[j].Object.Sync] })
+	return out
 }
 
 // graphNode is an object as graph.js draws it, without its YAML.

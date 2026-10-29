@@ -75,6 +75,8 @@ type Controller struct {
 	// liveLogs are running operations' output, by operation ID, so it can be
 	// followed before the operation finishes.
 	liveLogs map[int64]*logBuffer
+	// live caches inspect output for LiveObject.
+	live     liveCache
 	appLocks map[string]*sync.Mutex
 	// checkouts counts operations using each checkout, so Prune keeps them.
 	checkouts map[string]int

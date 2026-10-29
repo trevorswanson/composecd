@@ -59,9 +59,11 @@ func TestWebPagesAndActions(t *testing.T) {
 		"/apps?label=missing": "No applications match", "/hosts": "Start maintenance", "/hosts/nas": "composetpl releases", "/windows": "nightly",
 		"/operations": "operator", "/settings": "Create token",
 		"/apps/media": "Sync status", "/ui/apps/media/details": "Desired revision", "/apps/media?tab=containers": "media-web-1",
-		"/apps/media?tab=graph": `id="graph-data"`, "/ui/apps/media/objects/services/web": "nginx:1", "/ui/apps/media/objects/services/web?view=desired": "image: nginx:1",
-		"/ui/apps/media/operations/7": `sse-connect="/api/v1/apps/media/operations/7/log"`,
-		"/apps/media?tab=diff":        "services/web", "/apps/media?tab=diff&existing": "<strong>cache</strong>: not in Git, would be removed", "/apps/media?tab=history": "Roll back",
+		"/apps/media?tab=graph": `class="graph-data"`, "/ui/apps/media/objects/services/web": "nginx:1", "/ui/apps/media/objects/services/web?view=desired": "image: nginx:1",
+		"/ui/apps/media/operations/7":                   `sse-connect="/api/v1/apps/media/operations/7/log"`,
+		"/ui/apps/media/objects/services/web?view=live": "GraphDriver", "/ui/apps/media/objects/services/web?view=diff": `<span class="removed">-image: nginx:0</span>`,
+		"/apps/media?tab=diff&mode=objects": "services/web", "/apps/media?tab=diff&mode=objects&synced=1": "networks/default",
+		"/apps/media?tab=diff": "services/web", "/apps/media?tab=diff&existing": "<strong>cache</strong>: not in Git, would be removed", "/apps/media?tab=history": "Roll back",
 		"/apps/media?tab=operations": "Output",
 	}
 	for path, want := range cases {

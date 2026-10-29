@@ -192,7 +192,7 @@ func (c *Controller) assess(ctx context.Context, app *config.Application, fetchE
 			reasons = append(reasons, "chart reference differs from the desired OCI digest")
 		}
 		if len(changes) > 0 {
-			reasons = append(reasons, fmt.Sprintf("%d %s differ from Git", len(changes), plural(len(changes), "resource", "resources")))
+			reasons = append(reasons, fmt.Sprintf("%d %s from Git", len(changes), plural(len(changes), "resource differs", "resources differ")))
 		}
 		if !sameHooks(deployed.Hooks, hks) {
 			reasons = append(reasons, "hooks differ from Git")

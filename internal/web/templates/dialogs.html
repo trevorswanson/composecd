@@ -31,6 +31,11 @@
 {{with children $.App.Objects .ID}}<dt>Containers</dt><dd><span class="links">{{range .}}<a href="#" data-dialog="/ui/apps/{{path $.Name}}/objects/{{.ID}}">{{.Name}}</a>{{end}}</span></dd>{{end}}
 {{if eq .Kind "container"}}<dt>Logs</dt><dd><a href="/apps/{{path $.Name}}?tab=containers&amp;container={{.Name}}">Follow logs</a></dd>{{end}}
 </dl>{{end}}
+{{if eq $.View "live"}}{{with $.Live}}{{with .Note}}<p class="dialog-text">{{.}}</p>{{end}}{{range .Inspect}}<section class="live-object">{{if gt (len $.Live.Inspect) 1}}<h3><code>{{.Name}}</code></h3>{{end}}<pre class="output yaml">{{.YAML}}</pre>{{range .Folded}}<details class="fold"><summary>{{.Path}} <span class="muted">{{.Fields}} field{{if ne .Fields 1}}s{{end}}</span></summary><pre class="output yaml">{{.YAML}}</pre></details>{{end}}</section>{{end}}{{end}}{{end}}
+{{if eq $.View "diff"}}{{with $.Live}}<div class="diff-bar"><span class="muted">live → desired, for what composecd can read back from the engine</span><a href="/ui/apps/{{path $.Name}}/objects/{{$.Object.ID}}?view=diff{{if not $.All}}&amp;all=1{{end}}" data-dialog="/ui/apps/{{path $.Name}}/objects/{{$.Object.ID}}?view=diff{{if not $.All}}&amp;all=1{{end}}">{{if $.All}}Hide live-only fields{{else}}Show live-only fields{{end}}</a></div>{{template "livediff" .}}{{end}}{{end}}
 {{if eq $.View "desired"}}{{with .Desired}}<pre class="output yaml">{{.}}</pre>{{else}}<div class="empty"><strong>Not in Git</strong><span>{{if eq .Sync "Prune"}}Git no longer has this object; a sync with prune removes it.{{else}}This object has no compose definition of its own.{{end}}</span></div>{{end}}{{end}}
 {{if eq $.View "deployed"}}{{with .Deployed}}<pre class="output yaml">{{.}}</pre>{{else}}<div class="empty"><strong>Not in the deployed release</strong><span>A sync creates it.</span></div>{{end}}{{end}}
 {{end}}{{end}}
+
+{{/* livediff is an object's live state diffed against Git. */}}
+{{define "livediff"}}{{if .Diff}}<pre class="diff">{{range lines .Diff}}<span class="{{lineClass .}}">{{.}}</span>{{end}}</pre>{{else if .Note}}<p class="dialog-text">{{.Note}}</p>{{else}}<div class="empty"><strong>Live matches Git</strong><span>Every key Git sets has the same value on the host.</span></div>{{end}}{{end}}

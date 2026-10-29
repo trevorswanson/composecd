@@ -92,9 +92,14 @@
     canvas.style.transform = 'translate(' + view.x + 'px,' + view.y + 'px) scale(' + view.k + ')';
   }
 
+  // fit scales the graph to the box's width (on a phone, no smaller than
+  // can be read; it pans from there), sizes the box to it and centers it.
   function fit(view, host, w, h) {
-    var k = Math.min(1, (host.clientWidth - 16) / w, (host.clientHeight - 16) / h);
-    view.k = Math.max(0.3, k);
+    var narrow = host.clientWidth < 560;
+    var k = Math.min(1, (host.clientWidth - 16) / w);
+    view.k = Math.max(narrow ? 0.6 : 0.3, k);
+    host.style.height = Math.min(Math.max(h * view.k + 48, 240), Math.max(window.innerHeight * 0.7, 360)) + 'px';
+    view.k = Math.min(view.k, Math.max(narrow ? 0.6 : 0.3, (host.clientHeight - 16) / h));
     view.x = Math.max(8, (host.clientWidth - w * view.k) / 2);
     view.y = Math.max(8, (host.clientHeight - h * view.k) / 2);
   }
@@ -109,8 +114,9 @@
   }
 
   function draw() {
-    var host = document.getElementById('graph');
-    var data = document.getElementById('graph-data');
+    // No ids: htmx's settle step would reset the attributes set here.
+    var host = document.querySelector('.graph');
+    var data = document.querySelector('.graph-wrap script[type="application/json"]');
     if (!host || !data || host.dataset.drawn || typeof dagre === 'undefined') { return; }
     // A swap can run this before the new graph is laid out; try once it is.
     if (!host.isConnected || host.clientWidth === 0) { requestAnimationFrame(draw); return; }
@@ -121,9 +127,13 @@
     var g = layout(graph.nodes, links);
     var size = g.graph();
     var view = views[graph.app] || (views[graph.app] = { filter: 'all' });
-    host.style.height = Math.min(Math.max(size.height + 48, 280), Math.max(window.innerHeight * 0.7, 360)) + 'px';
     // Until someone pans or zooms, each update fits the graph again.
-    if (!view.moved) { fit(view, host, size.width, size.height); }
+    if (!view.moved || !view.height) {
+      fit(view, host, size.width, size.height);
+      view.height = host.style.height;
+    } else {
+      host.style.height = view.height;
+    }
 
     var canvas = el('div', 'graph-canvas');
     canvas.style.width = size.width + 'px';
@@ -197,7 +207,13 @@
     }, { passive: false });
     wrap.querySelectorAll('[data-zoom]').forEach(function (b) {
       b.addEventListener('click', function () {
-        if (b.dataset.zoom === 'fit') { view.moved = false; fit(view, host, size.width, size.height); apply(view, canvas); return; }
+        if (b.dataset.zoom === 'fit') {
+          view.moved = false;
+          fit(view, host, size.width, size.height);
+          view.height = host.style.height;
+          apply(view, canvas);
+          return;
+        }
         zoom(view, canvas, b.dataset.zoom === 'in' ? 1.25 : 0.8, host.clientWidth / 2, host.clientHeight / 2);
       });
     });
