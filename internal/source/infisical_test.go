@@ -69,3 +69,34 @@ func TestPrepareInfisicalErrors(t *testing.T) {
 		t.Fatalf("server error: %v", err)
 	}
 }
+
+func TestNestFolders(t *testing.T) {
+	got, paths, err := nest("secrets", []infisical.Secret{
+		{Key: "SHARED", Value: "s"},
+		{Key: "TOKEN", Value: "t", Folder: []string{"traefik"}},
+		{Key: "TOKEN", Value: "t2", Folder: []string{"traefik"}},
+		{Key: "KEY", Value: "k", Folder: []string{"traefik", "acme"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]interface{}{"secrets": map[string]interface{}{
+		"SHARED":  "s",
+		"traefik": map[string]interface{}{"TOKEN": "t2", "acme": map[string]interface{}{"KEY": "k"}},
+	}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("nest = %#v", got)
+	}
+	wantPaths := [][]string{{"secrets", "SHARED"}, {"secrets", "traefik", "TOKEN"}, {"secrets", "traefik", "acme", "KEY"}}
+	if !reflect.DeepEqual(paths, wantPaths) {
+		t.Fatalf("paths = %#v", paths)
+	}
+	for _, in := range [][]infisical.Secret{
+		{{Key: "traefik", Value: "x"}, {Key: "TOKEN", Value: "y", Folder: []string{"traefik"}}},
+		{{Key: "TOKEN", Value: "y", Folder: []string{"traefik"}}, {Key: "traefik", Value: "x"}},
+	} {
+		if _, _, err := nest("", in); err == nil {
+			t.Errorf("collision: %v", err)
+		}
+	}
+}
