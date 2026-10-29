@@ -342,7 +342,7 @@ func (c *Controller) prepare(ctx context.Context, app *config.Application, h *ho
 			return nil, err
 		}
 	}
-	prep, err := source.Prepare(ctx, app, h.Spec, checkout, sha, c.Registry, c.Boot.SOPSAgeKeyFile)
+	prep, err := source.Prepare(ctx, app, h.Spec, checkout, sha, c.Registry, c.Boot.SOPSAgeKeyFile, c.infisicalClient())
 	if prep != nil {
 		c.rememberPaths(app.Metadata.Name, prep.SecretPaths)
 	}

@@ -593,6 +593,47 @@ controller can only recover secrets from the values and history still available.
 [The example](examples/sops/README.md) includes a disposable public test identity, a real encrypted values
 file, and an optional demo Application. Use your own identity for real secrets.
 
+## Secrets from Infisical
+
+As an alternative to SOPS files, an Application can read secrets straight from
+[Infisical](https://infisical.com). Create a machine identity with Universal Auth and read access to the
+project, then give composecd its credentials in `composecd.yaml`:
+
+```yaml
+infisical:
+  siteURL: https://app.infisical.com   # default; set it for a self-hosted server
+  clientID: 3f1c...                    # the identity's client ID
+  clientSecretFile: /run/secrets/infisical-client-secret
+  # or, instead of clientID/clientSecretFile: tokenFile: /run/secrets/infisical-token
+```
+
+Then select the secrets in the Application:
+
+```yaml
+spec:
+  source:
+    path: charts/media
+    valueFiles: [values-nas.yaml]
+    infisical:
+      projectId: 1b2c3d4e-...
+      environment: prod
+      path: /media          # default /
+      recursive: false
+      into: secrets         # optional dotted values path; default is the top level
+```
+
+Each secret key becomes a value key (`.Values.secrets.DB_PASSWORD` above). Secrets are merged after
+`valueFiles` and before inline `values`, so inline values still win. Secret references and imports are
+resolved by Infisical. Values are fetched on every refresh, so rotating a secret in Infisical shows up as
+a diff on the next refresh and, with automated sync, is deployed.
+
+Fetched values are masked exactly like SOPS values (see above), including after rotation: composecd
+remembers the keys it has seen and recovers older values from release history. Unlike SOPS, the key names
+are only known after a successful fetch, so after a restart an old value is masked only once Infisical has
+been reachable again. A failed fetch makes the app's sync state `Unknown`; the error never includes the
+server's response. `siteURL` must be `https://` (plain `http://` is allowed for localhost only). As with
+SOPS, deployed values are stored plain on the host. The same masking limits apply.
+
 ## Webhooks, notifications and metrics
 
 **Webhooks.** Set `webhook.secretFile` in `composecd.yaml`, then add a push webhook in your Git server that

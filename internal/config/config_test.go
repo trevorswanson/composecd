@@ -181,3 +181,20 @@ func TestSOPSAgeKeyBootstrap(t *testing.T) {
 		t.Fatalf("%+v %v", b, err)
 	}
 }
+
+func TestInfisicalBootstrap(t *testing.T) {
+	b, err := ParseBootstrap([]byte("root: {repoURL: x}\ninfisical: {clientID: id, clientSecretFile: /run/secrets/i}\n"))
+	if err != nil || b.Infisical.SiteURL != DefaultInfisicalSiteURL {
+		t.Fatalf("%+v %v", b.Infisical, err)
+	}
+	for name, doc := range map[string]string{
+		"no creds":   "infisical: {}",
+		"id only":    "infisical: {clientID: id}",
+		"both kinds": "infisical: {clientID: id, clientSecretFile: f, tokenFile: t}",
+		"plain http": "infisical: {tokenFile: t, siteURL: http://infisical.lan}",
+	} {
+		if _, err := ParseBootstrap([]byte("root: {repoURL: x}\n" + doc + "\n")); err == nil {
+			t.Errorf("%s: expected an error", name)
+		}
+	}
+}

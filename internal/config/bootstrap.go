@@ -35,6 +35,19 @@ type Bootstrap struct {
 	Notifications []Notifier `yaml:"notifications,omitempty"`
 	// SOPSAgeKeyFile is a mounted age identity used only by the SOPS subprocess.
 	SOPSAgeKeyFile string `yaml:"sopsAgeKeyFile,omitempty"`
+	// Infisical lets Applications read secrets from Infisical.
+	Infisical *Infisical `yaml:"infisical,omitempty"`
+}
+
+// Infisical connects composecd to an Infisical server. Set clientID with
+// clientSecretFile (a machine identity using Universal Auth), or tokenFile
+// (an access token). Credentials are read from files, like all other secrets.
+type Infisical struct {
+	// SiteURL is the Infisical server (default https://app.infisical.com).
+	SiteURL          string `yaml:"siteURL,omitempty"`
+	ClientID         string `yaml:"clientID,omitempty"`
+	ClientSecretFile string `yaml:"clientSecretFile,omitempty"`
+	TokenFile        string `yaml:"tokenFile,omitempty"`
 }
 
 // Webhook configures POST /api/v1/webhook.
@@ -143,6 +156,8 @@ const (
 	DefaultDataDir         = "/var/lib/composecd"
 	DefaultRefreshInterval = 3 * time.Minute
 	DefaultConcurrency     = 4
+
+	DefaultInfisicalSiteURL = "https://app.infisical.com"
 )
 
 // LoadBootstrap reads and validates a bootstrap file, filling in defaults.
@@ -220,6 +235,20 @@ func ParseBootstrap(data []byte) (*Bootstrap, error) {
 		}
 		if len(o.AdminGroups) == 0 {
 			errs = append(errs, errors.New("auth.oidc.adminGroups needs at least one group"))
+		}
+	}
+	if i := b.Infisical; i != nil {
+		if i.SiteURL == "" {
+			i.SiteURL = DefaultInfisicalSiteURL
+		}
+		if !hasScheme(i.SiteURL, "https://") && !strings.HasPrefix(i.SiteURL, "http://localhost") && !strings.HasPrefix(i.SiteURL, "http://127.0.0.1") {
+			errs = append(errs, errors.New("infisical.siteURL must be an https:// URL"))
+		}
+		switch {
+		case i.TokenFile != "" && (i.ClientID != "" || i.ClientSecretFile != ""):
+			errs = append(errs, errors.New("infisical: set tokenFile, or clientID with clientSecretFile, not both"))
+		case i.TokenFile == "" && (i.ClientID == "" || i.ClientSecretFile == ""):
+			errs = append(errs, errors.New("infisical: set tokenFile, or both clientID and clientSecretFile"))
 		}
 	}
 	names := map[string]bool{}

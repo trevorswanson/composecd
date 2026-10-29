@@ -108,6 +108,17 @@ func (o *Objects) validate(allowGenerated bool) error {
 				fail(a.Origin, "application %q: valueFiles[%d] %q must be a file inside the source repository", name, i, vf)
 			}
 		}
+		if inf := s.Infisical; inf != nil {
+			if inf.ProjectID == "" || inf.Environment == "" {
+				fail(a.Origin, "application %q: source.infisical needs projectId and environment", name)
+			}
+			if inf.Path != "" && !strings.HasPrefix(inf.Path, "/") {
+				fail(a.Origin, "application %q: source.infisical.path must start with /", name)
+			}
+			if strings.HasPrefix(inf.Into, ".") || strings.HasSuffix(inf.Into, ".") || strings.Contains(inf.Into, "..") {
+				fail(a.Origin, "application %q: source.infisical.into %q must be a dotted path like secrets.app", name, inf.Into)
+			}
+		}
 
 		if a.Spec.Destination.Host == "" {
 			fail(a.Origin, "application %q: destination.host is required", name)

@@ -110,6 +110,25 @@ type AppSource struct {
 	// Env is visible to compose ${VAR} interpolation and the env template
 	// function, over the host's Env.
 	Env map[string]string `yaml:"env,omitempty" json:"env,omitempty"`
+	// Infisical pulls secrets from Infisical into the values, after ValueFiles
+	// and before Values.
+	Infisical *InfisicalSource `yaml:"infisical,omitempty" json:"infisical,omitempty"`
+}
+
+// InfisicalSource selects the secrets an Application reads from Infisical. The
+// server's credentials are in composecd.yaml; nothing here is secret.
+type InfisicalSource struct {
+	// ProjectID is the Infisical project (workspace) ID.
+	ProjectID string `yaml:"projectId" json:"projectId"`
+	// Environment is the environment slug, e.g. prod.
+	Environment string `yaml:"environment" json:"environment"`
+	// Path is the secret folder (default /).
+	Path string `yaml:"path,omitempty" json:"path,omitempty"`
+	// Recursive also reads secrets in subfolders.
+	Recursive bool `yaml:"recursive,omitempty" json:"recursive,omitempty"`
+	// Into is a dotted values path to put the secrets under (default: the
+	// top level of the values). Each secret key becomes a value key.
+	Into string `yaml:"into,omitempty" json:"into,omitempty"`
 }
 
 // GitSource locates a Git repository and revision without a chart path.

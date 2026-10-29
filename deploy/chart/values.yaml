@@ -14,6 +14,11 @@ extraVolumes: []
 config:
   # Mount the identity via extraVolumes before enabling encrypted valueFiles.
   # sopsAgeKeyFile: /run/secrets/sops-age-key
+  # Read secrets from Infisical with a Universal Auth machine identity (mount
+  # the client secret via extraVolumes), or use tokenFile instead.
+  # infisical:
+  #   clientID: YOUR_CLIENT_ID
+  #   clientSecretFile: /run/secrets/infisical-client-secret
   refreshInterval: 3m
   root:
     repoURL: https://git.example.lan/me/homelab.git
