@@ -404,9 +404,9 @@ reconciliation, even if a browser is slow. Log tails stay connected when other p
 Live object state (`GET /api/v1/apps/NAME/objects/SECTION/NAME`, e.g. `services/web`; `?all=true` adds keys Git
 doesn't set) compares what composecd can read back from the engine (image, command, environment, ports,
 volumes, networks, labels, restart, healthcheck and similar) with Git, leaving out what the image sets by
-default. Inspect output is cached for 30 seconds. For readonly users, environment variables named like
-secrets (`*PASSWORD*`, `*TOKEN*`, `*KEY*`, ...) are redacted, since live containers can hold values composecd
-never decrypted and so can't mask.
+default. Inspect output is cached for 30 seconds. Readonly users see every environment value replaced by a
+tag (`<redacted 1a2b3c4d>`), since live containers can hold values composecd never decrypted and so can't
+mask; equal values get equal tags, so a changed value still shows in the diff.
 
 The log endpoint checks a fresh compose project listing and its project label before streaming; a container
 from another project is refused. Log lines, diffs and displayed operation output mask SOPS-decrypted values

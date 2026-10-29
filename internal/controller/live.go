@@ -3,10 +3,13 @@ package controller
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"path"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -149,6 +152,8 @@ func (c *Controller) LiveObject(ctx context.Context, name, id string, all, redac
 			continue
 		}
 		if redact {
+			// A copy: the cache is shared with admins.
+			got = deepCopy(got).(map[string]interface{})
 			redactEnv(got)
 		}
 		ins, err := foldInspect(e, kind, got)
@@ -166,6 +171,11 @@ func (c *Controller) LiveObject(ctx context.Context, name, id string, all, redac
 			if ref, _ := got["Image"].(string); ref != "" {
 				if image, err = look("image", ref); err != nil {
 					return nil, err
+				}
+				if redact {
+					// Tagged like the container's, so its defaults still match.
+					image = deepCopy(image).(map[string]interface{})
+					redactEnv(image)
 				}
 			}
 			projected = projectContainer(got, image, name)
@@ -189,10 +199,8 @@ func (c *Controller) LiveObject(ctx context.Context, name, id string, all, redac
 	}
 	desired := normalizeDesired(obj.Kind, parseYAML(desiredYAML), h.ProjectDir(name))
 	if redact && desired != nil {
+		// The live side was tagged from the inspect output already.
 		redactEnvMap(desired["environment"])
-		if projected != nil {
-			redactEnvMap(projected["environment"])
-		}
 	}
 	if projected != nil && !all && desired != nil {
 		for k := range projected {
@@ -414,19 +422,34 @@ func deepCopy(v interface{}) interface{} {
 	return v
 }
 
-// secretName matches environment variables whose values are likely secret.
-var secretName = regexp.MustCompile(`(?i)(PASSW|SECRET|TOKEN|KEY|CREDENTIAL|PRIVATE)`)
+// redactKey keys the tags that stand in for hidden values: equal values get
+// equal tags, so a diff still shows a change, but a tag can't be reversed by
+// guessing values, and it changes when composecd restarts.
+var redactKey = func() []byte {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		panic(err)
+	}
+	return b
+}()
 
-const redacted = "<redacted>"
+// redactValue is the tag shown instead of v.
+func redactValue(v string) string {
+	m := hmac.New(sha256.New, redactKey)
+	m.Write([]byte(v))
+	return "<redacted " + hex.EncodeToString(m.Sum(nil))[:8] + ">"
+}
 
-// redactEnv hides secret-looking variables in a container's inspect output.
+// redactEnv hides every environment value in a container's inspect output: a
+// live container can hold values composecd never decrypted, so it can't tell
+// which are secret.
 func redactEnv(in map[string]interface{}) {
 	cfg, _ := in["Config"].(map[string]interface{})
 	env, _ := cfg["Env"].([]interface{})
 	for i, e := range env {
 		if s, ok := e.(string); ok {
-			if k, _, ok := strings.Cut(s, "="); ok && secretName.MatchString(k) {
-				env[i] = k + "=" + redacted
+			if k, v, ok := strings.Cut(s, "="); ok {
+				env[i] = k + "=" + redactValue(v)
 			}
 		}
 	}
@@ -434,10 +457,8 @@ func redactEnv(in map[string]interface{}) {
 
 func redactEnvMap(v interface{}) {
 	if env, ok := v.(map[string]interface{}); ok {
-		for k := range env {
-			if secretName.MatchString(k) {
-				env[k] = redacted
-			}
+		for k, e := range env {
+			env[k] = redactValue(fmt.Sprint(e))
 		}
 	}
 }

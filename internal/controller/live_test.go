@@ -77,12 +77,12 @@ func TestFoldInspect(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, gone := range []string{"GraphDriver", "LogPath", "SandboxKey", "com.docker.compose.project", "hunter2", "Privileged", "ExitCode"} {
+	for _, gone := range []string{"GraphDriver", "LogPath", "SandboxKey", "com.docker.compose.project", "hunter2", "MODE=prod", "Privileged", "ExitCode"} {
 		if strings.Contains(ins.YAML, gone) {
 			t.Errorf("%s not folded:\n%s", gone, ins.YAML)
 		}
 	}
-	for _, kept := range []string{"tier: front", "API_TOKEN=<redacted>", "unless-stopped", "Status: healthy"} {
+	for _, kept := range []string{"tier: front", "API_TOKEN=<redacted ", "MODE=<redacted ", "unless-stopped", "Status: healthy"} {
 		if !strings.Contains(ins.YAML, kept) {
 			t.Errorf("%s missing:\n%s", kept, ins.YAML)
 		}
@@ -118,5 +118,28 @@ ports: ["127.0.0.1:53:53/udp", "9000"]
 		if !strings.Contains(got, want) {
 			t.Errorf("missing %q in\n%s", want, got)
 		}
+	}
+}
+
+func TestRedactKeepsDifferencesVisible(t *testing.T) {
+	a, b := map[string]interface{}{"X": "one", "Y": "same"}, map[string]interface{}{"X": "two", "Y": "same"}
+	redactEnvMap(a)
+	redactEnvMap(b)
+	if a["X"] == b["X"] || a["Y"] != b["Y"] || strings.Contains(a["X"].(string), "one") {
+		t.Errorf("a = %v, b = %v", a, b)
+	}
+}
+
+func TestRedactedProjectionMatchesDesired(t *testing.T) {
+	in, image := decode(t, inspectWeb), decode(t, inspectImage)
+	redactEnv(in)
+	redactEnv(image)
+	live := projectContainer(in, image, "demo")
+	desired := normalizeDesired(KindService, parseYAML(desiredWeb), "/opt/composecd/demo")
+	redactEnvMap(desired["environment"])
+	ly, _ := encodeYAML(map[string]interface{}{"environment": live["environment"]})
+	dy, _ := encodeYAML(map[string]interface{}{"environment": desired["environment"]})
+	if ly != dy || strings.Contains(ly, "hunter2") || strings.Contains(ly, "NGINX_VERSION") {
+		t.Errorf("live:\n%s\ndesired:\n%s", ly, dy)
 	}
 }
