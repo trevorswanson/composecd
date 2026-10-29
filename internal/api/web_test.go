@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/trevorswanson/composetpl/pkg/action"
 	"github.com/trevorswanson/composetpl/pkg/compose"
 
 	"github.com/trevorswanson/composecd/internal/auth"
@@ -29,6 +30,7 @@ func (s *webStub) App(name string) (controller.AppStatus, error) {
 	a, err := s.stub.App(name)
 	a.Health.Containers = []compose.Container{{Name: "media-web-1", Image: "nginx:1", State: "running", Health: "healthy"}}
 	a.Sync.Changes = []controller.Change{{Resource: "services/web", Op: "changed", Diff: "-password: secret-value\n+password: <script>\n"}}
+	a.Sync.Drift = []action.ServiceDrift{{Service: "cache", Reason: action.DriftOrphaned, Containers: []string{"media-cache-1"}}}
 	return a, err
 }
 func (s *webStub) Subscribe() (<-chan controller.Update, func()) { return s.updates, func() {} }
@@ -51,7 +53,7 @@ func TestWebPagesAndActions(t *testing.T) {
 		"/apps?label=missing": "No applications match", "/hosts": "Start maintenance", "/hosts/nas": "composetpl releases", "/windows": "nightly",
 		"/operations": "operator", "/settings": "Create token",
 		"/apps/media": "Desired revision", "/apps/media?tab=containers": "media-web-1",
-		"/apps/media?tab=diff": "services/web", "/apps/media?tab=history": "Roll back",
+		"/apps/media?tab=diff": "services/web", "/apps/media?tab=diff&existing": "<strong>cache</strong>: not in Git, would be removed", "/apps/media?tab=history": "Roll back",
 		"/apps/media?tab=operations": "Output",
 	}
 	for path, want := range cases {

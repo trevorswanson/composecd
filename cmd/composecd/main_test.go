@@ -152,7 +152,7 @@ func TestCLIAgainstServer(t *testing.T) {
 	if !errors.As(err, &ee) || ee.code != 1 {
 		t.Errorf("diff --exit-code of an undeployed app: %v", err)
 	}
-	expect(t, out, "dashboard is not deployed yet")
+	expect(t, out, "dashboard is not deployed yet", "dashboard, services/dozzle, added:")
 
 	out = mustCLI(t, srv, "app", "sync", "dashboard", "--logs")
 	expect(t, out, "Operation #2 Succeeded: composecd sync to")

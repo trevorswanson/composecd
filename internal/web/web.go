@@ -210,9 +210,10 @@ var templates = template.Must(template.New("web").Funcs(template.FuncMap{
 		}
 		return ""
 	},
-	"diffstat": diffstat,
-	"tally":    tally,
-	"ago":      ago,
+	"diffstat":       diffstat,
+	"existingAction": controller.ExistingAction,
+	"tally":          tally,
+	"ago":            ago,
 	"iso": func(v interface{}) string {
 		if t := toTime(v); !t.IsZero() {
 			return t.Format(time.RFC3339)

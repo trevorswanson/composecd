@@ -212,6 +212,12 @@ release. With --exit-code, exit 1 when there are differences.`,
 			for _, ch := range a.Sync.Changes {
 				fmt.Fprintf(w, "%s, %s, %s:\n%s\n", a.Name, ch.Resource, ch.Op, ch.Diff)
 			}
+			if a.Release == nil && len(a.Sync.Drift) > 0 {
+				fmt.Fprintln(w, "Existing containers a sync would replace:")
+				for _, d := range a.Sync.Drift {
+					fmt.Fprintf(w, "  %s (%s): %s\n", d.Service, strings.Join(d.Containers, ", "), controller.ExistingAction(d.Reason))
+				}
+			}
 			if a.Release != nil && len(a.Sync.Changes) == 0 {
 				fmt.Fprintln(w, "No differences between Git and the deployed manifest.")
 			}

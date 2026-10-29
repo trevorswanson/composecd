@@ -66,7 +66,8 @@ type SyncStatus struct {
 	// Changes are the compose resources that differ between the deployed
 	// manifest and Git.
 	Changes []Change `json:"changes,omitempty"`
-	// Drift is how the live containers differ from the deployed manifest.
+	// Drift is how the live containers differ from the deployed manifest or,
+	// before the first sync, from Git: what that sync would recreate or remove.
 	Drift []action.ServiceDrift `json:"drift,omitempty"`
 }
 
