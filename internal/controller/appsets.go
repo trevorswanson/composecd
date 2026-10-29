@@ -130,8 +130,9 @@ func (c *Controller) expand(ctx context.Context, objs *config.Objects) (*config.
 const maxSkippedListed = 10
 
 // setWarnings explains output that is probably not what the author meant: no
-// applications, or matched directories that were skipped for lacking a chart
-// (often a Chart.yaml with another name, or one not yet committed).
+// applications, or matched directories skipped because the application they
+// generate has no chart at its source path (often a Chart.yaml with another
+// name, one not yet committed, or a template path pointing at the wrong place).
 func setWarnings(generated int, skipped []string) []string {
 	var out []string
 	if generated == 0 {
@@ -142,7 +143,7 @@ func setWarnings(generated int, skipped []string) []string {
 		if n > maxSkippedListed {
 			listed = skipped[:maxSkippedListed]
 		}
-		w := fmt.Sprintf("skipped %d matched %s without a Chart.yaml: %s", n, plural(n, "directory", "directories"), strings.Join(listed, ", "))
+		w := fmt.Sprintf("skipped %d matched %s with no Chart.yaml at the generated source path: %s", n, plural(n, "directory", "directories"), strings.Join(listed, ", "))
 		if n > len(listed) {
 			w += fmt.Sprintf(", and %d more", n-len(listed))
 		}

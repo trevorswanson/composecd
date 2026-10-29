@@ -434,9 +434,26 @@ spec:
 ```
 
 `gitDirectories` uses Go `path.Match` globs: `*` matches one path segment, and `**` has no recursive-glob
-meaning. Matching directories need a regular `Chart.yaml`; hidden and symlinked directories are skipped.
-A matched directory without a `Chart.yaml` (a `Chart.yml`, say) generates nothing, and the set lists it
-in a warning, as it does a set that generates no applications at all.
+meaning. Hidden and symlinked directories are skipped. A matched directory generates an app when that
+app has a chart: its `source.path` needs a regular `Chart.yaml`. That path need not be the matched
+directory, so directories holding only values can share one chart:
+
+```yaml
+  generators:
+    - gitDirectories: {directories: ["envs/*"]}
+  template:
+    metadata: {name: "web-{{ .path.basename }}"}
+    spec:
+      source:
+        path: charts/web
+        valueFiles: ["../../{{ .path.path }}/values.yaml"]
+      destination: {host: nas}
+```
+
+A matched directory whose app has no chart there (a `Chart.yml`, say) generates nothing, and the set
+lists it in a warning, as it does a set that generates no applications at all. Charts in another
+repository or revision, and OCI charts, aren't checked during generation; if one is missing, the app
+shows the render error.
 Overlapping include globs within one generator generate each directory once. Repository and revision
 defaults follow the Git root, or `HEAD` for another repository. Generated Git sources with no explicit
 repository inherit their Git generator's repository/revision.

@@ -57,11 +57,10 @@ func Generate(ctx context.Context, set *config.ApplicationSet, hosts []*config.H
 			}
 			generated, err := func() ([]*config.Application, error) {
 				defer done()
-				dirs, noChart, err := directories(ctx, dir, d)
+				dirs, err := directories(ctx, dir, d)
 				if err != nil {
 					return nil, err
 				}
-				skipped = append(skipped, noChart...)
 				var out []*config.Application
 				for _, p := range dirs {
 					params := map[string]interface{}{"path": map[string]interface{}{"path": p, "basename": path.Base(p), "segments": strings.Split(p, "/")}}
@@ -74,6 +73,14 @@ func Generate(ctx context.Context, set *config.ApplicationSet, hosts []*config.H
 						if a.Spec.Source.TargetRevision == "" {
 							a.Spec.Source.TargetRevision = d.TargetRevision
 						}
+					}
+					ok, err := hasChart(dir, d, a)
+					if err != nil {
+						return nil, err
+					}
+					if !ok {
+						skipped = append(skipped, p)
+						continue
 					}
 					out = append(out, a)
 				}
@@ -112,10 +119,10 @@ func Generate(ctx context.Context, set *config.ApplicationSet, hosts []*config.H
 	return apps, skipped, nil
 }
 
-// directories returns the directories under root that g matches and that hold
-// a chart, and those it matches that don't.
-func directories(ctx context.Context, root string, g *config.GitDirectories) (dirs, noChart []string, err error) {
-	err = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+// directories returns the directories under root that g matches.
+func directories(ctx context.Context, root string, g *config.GitDirectories) ([]string, error) {
+	var dirs []string
+	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -133,26 +140,41 @@ func directories(ctx context.Context, root string, g *config.GitDirectories) (di
 			return err
 		}
 		rel = filepath.ToSlash(rel)
-		if !matches(g.Directories, rel) || matches(g.Exclude, rel) {
-			return nil
+		if matches(g.Directories, rel) && !matches(g.Exclude, rel) {
+			dirs = append(dirs, rel)
 		}
-		st, err := os.Lstat(filepath.Join(p, "Chart.yaml"))
-		if os.IsNotExist(err) {
-			noChart = append(noChart, rel)
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-		if !st.Mode().IsRegular() {
-			return fmt.Errorf("%s/Chart.yaml must be a regular repository file", rel)
-		}
-		dirs = append(dirs, rel)
 		return nil
 	})
 	sort.Strings(dirs)
-	sort.Strings(noChart)
-	return dirs, noChart, err
+	return dirs, err
+}
+
+// hasChart reports whether the Application generated for a matched directory
+// has a chart to render, so a directory holding only values can generate an
+// app whose source.path is a shared chart. Only a chart in the generator's own
+// checkout can be checked here; an OCI chart, or one in another repository or
+// revision (or outside the repository, which validation rejects), is assumed
+// present, and rendering reports it if it isn't.
+func hasChart(root string, g *config.GitDirectories, a *config.Application) (bool, error) {
+	s := a.Spec.Source
+	if s.IsOCI() || s.RepoURL != g.RepoURL || s.TargetRevision != g.TargetRevision {
+		return true, nil
+	}
+	rel := path.Clean(s.Path)
+	if path.IsAbs(rel) || rel == ".." || strings.HasPrefix(rel, "../") || strings.Contains(s.Path, `\`) {
+		return true, nil
+	}
+	st, err := os.Lstat(filepath.Join(root, filepath.FromSlash(rel), "Chart.yaml"))
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if !st.Mode().IsRegular() {
+		return false, fmt.Errorf("%s/Chart.yaml must be a regular repository file", rel)
+	}
+	return true, nil
 }
 func matches(globs []string, s string) bool {
 	for _, g := range globs {
