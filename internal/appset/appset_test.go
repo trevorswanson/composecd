@@ -100,3 +100,26 @@ func TestTemplateErrorsAndUnavailableHelpers(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// Directories holding only values generate apps whose source.path is a shared
+// chart; a directory is skipped only when its app's chart is missing.
+func TestGitDirectoriesWithSharedChart(t *testing.T) {
+	root := fixture(t, map[string]string{"charts/web/Chart.yaml": "name: web", "envs/prod/values.yaml": "a: 1", "envs/dev/values.yaml": "a: 2", "envs/broken/values.yaml": "a: 3"})
+	set := baseSet()
+	set.Spec.Generators = []config.Generator{{GitDirectories: &config.GitDirectories{RepoURL: "https://git.lan/repo.git", Directories: []string{"envs/*"}}}}
+	set.Spec.Template.Metadata.Name = "web-{{ .path.basename }}"
+	set.Spec.Template.Spec.Source = config.AppSource{Path: `{{ if eq .path.basename "broken" }}charts/missing{{ else }}charts/web{{ end }}`, ValueFiles: []string{"../../{{ .path.path }}/values.yaml"}}
+	checkout := func(context.Context, string, string) (string, func(), error) { return root, func() {}, nil }
+	apps, skipped, err := Generate(context.Background(), set, nil, checkout)
+	if err != nil || len(apps) != 2 || apps[0].Metadata.Name != "web-dev" || apps[1].Spec.Source.ValueFiles[0] != "../../envs/prod/values.yaml" {
+		t.Fatalf("%v %v", apps, err)
+	}
+	if !reflect.DeepEqual(skipped, []string{"envs/broken"}) {
+		t.Fatal(skipped)
+	}
+	// A chart in another repository can't be checked here; rendering reports it.
+	set.Spec.Template.Spec.Source = config.AppSource{RepoURL: "https://git.lan/charts.git", Path: "charts/missing"}
+	if apps, skipped, err := Generate(context.Background(), set, nil, checkout); err != nil || len(apps) != 3 || len(skipped) != 0 {
+		t.Fatalf("%v %v %v", apps, skipped, err)
+	}
+}

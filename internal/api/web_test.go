@@ -295,7 +295,7 @@ type appsetAppErrorStub struct{ stub }
 
 func (s *appsetAppErrorStub) ApplicationSets() []controller.ApplicationSetStatus {
 	return []controller.ApplicationSetStatus{{Name: "stacks", Generated: 2, Ready: true, Applications: []string{"media", "web"},
-		Warnings:  []string{"skipped 1 matched directory without a Chart.yaml: charts/<x>"},
+		Warnings:  []string{"skipped 1 matched directory with no Chart.yaml at the generated source path: charts/<x>"},
 		AppErrors: map[string]string{"web": "rendering: charts/web/templates/a.yaml:3: <bad>"}}}
 }
 

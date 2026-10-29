@@ -352,7 +352,7 @@ func TestApplicationSetWarnsAboutSkippedDirectories(t *testing.T) {
 	})
 	e.refresh()
 	st := e.c.ApplicationSets()[0]
-	if !st.Ready || st.Generated != 0 || strings.Join(st.Warnings, "|") != "generated no applications|skipped 1 matched directory without a Chart.yaml: charts/app-a" {
+	if !st.Ready || st.Generated != 0 || strings.Join(st.Warnings, "|") != "generated no applications|skipped 1 matched directory with no Chart.yaml at the generated source path: charts/app-a" {
 		t.Fatalf("%+v", st)
 	}
 	e.git("mv", "charts/app-a/Chart.yml", "charts/app-a/Chart.yaml")
@@ -371,5 +371,31 @@ func TestSetWarningsBoundsListedDirectories(t *testing.T) {
 	w := setWarnings(1, skipped)
 	if len(w) != 1 || !strings.HasPrefix(w[0], "skipped 12 matched directories") || !strings.HasSuffix(w[0], "d09, and 2 more") {
 		t.Fatal(w)
+	}
+}
+
+// Directories holding only values deploy a chart from elsewhere in the repository.
+func TestApplicationSetValuesOnlyDirectories(t *testing.T) {
+	e := newEnv(t)
+	set := strings.Replace(directorySet("envs", "envs/*"), "      source: {path: '{{ .path.path }}'}",
+		"      source: {path: charts/web, valueFiles: ['../../{{ .path.path }}/values.yaml']}", 1)
+	e.commit(map[string]string{
+		"composecd/sets.yaml":    set,
+		"envs/prod/values.yaml":  "tag: prod\n",
+		"envs/stage/values.yaml": "tag: stage\n",
+	})
+	e.refresh()
+	st := e.c.ApplicationSets()[0]
+	if !st.Ready || st.Generated != 2 || len(st.Warnings) != 0 || len(st.AppErrors) != 0 {
+		t.Fatalf("%+v", st)
+	}
+	for _, env := range []string{"prod", "stage"} {
+		if a := e.app("gen-" + env); a.Sync.Status != Synced || a.Error != "" {
+			t.Fatalf("%+v", a)
+		}
+		rel, err := e.c.Hosts.Get("nas").Store().Get("gen-"+env, 1)
+		if err != nil || !strings.Contains(rel.Manifest, "image: nginx:"+env) {
+			t.Fatalf("%v %v", rel, err)
+		}
 	}
 }
