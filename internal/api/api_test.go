@@ -307,7 +307,7 @@ func TestSessions(t *testing.T) {
 		t.Fatalf("login: %q", loc)
 	}
 	status, _, body = b.do("GET", "/", "", nil)
-	for _, want := range []string{"<strong>media</strong>", `class="badge synced"`, `class="badge healthy"`, "trevor <span class=\"badge\">admin</span>", "Sign out"} {
+	for _, want := range []string{"<strong>media</strong>", `class="pill synced"`, `class="pill healthy"`, "<strong>trevor</strong><span>admin", "Sign out"} {
 		if status != 200 || !strings.Contains(body, want) {
 			t.Errorf("status page lacks %q:\n%s", want, body)
 		}

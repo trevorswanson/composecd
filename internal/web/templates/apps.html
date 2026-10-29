@@ -1,27 +1,74 @@
-{{define "apps"}}<div class="card"><table><thead><tr><th>Name</th><th>Host</th><th>Sync</th><th>Health</th><th>Revision</th><th>Last operation</th></tr></thead><tbody>
-{{range .Apps}}<tr><td><a href="/apps/{{path .Name}}"><strong>{{.Name}}</strong></a>{{if .Automated}} <span class="muted">auto</span>{{end}}{{if .Paused}} <span class="badge suspended" title="{{.PausedReason}}">paused</span>{{end}}{{with .Error}}<div class="error">{{.}}</div>{{end}}</td>
-<td>{{.Host}}</td><td><span class="badge {{lower .Sync.Status}}">{{.Sync.Status}}</span>{{range .Sync.Reasons}}<div class="muted">{{.}}</div>{{end}}{{with .Blocked}}<div class="muted">waiting: {{.}}</div>{{end}}</td>
-<td><span class="badge {{lower .Health.Status}}">{{.Health.Status}}</span>{{with .Health.Message}}<div class="muted">{{.}}</div>{{end}}</td><td><code>{{if .Sync.ChartRef}}{{.Sync.ChartRef}}{{else if .Source.Chart}}{{.Source.Chart}}{{else}}{{short .Sync.Revision}}{{end}}</code>{{with .Sync.ValuesRevision}}<div>values <code>{{short .}}</code></div>{{end}}{{with .Release}}<div>release rev {{.Revision}} · {{.Chart}}</div>{{end}}</td><td>{{with .Operation}}<span class="badge {{lower .Phase}}">{{.Phase}}</span> {{.Kind}} ({{.Trigger}}){{else}}none{{end}}</td></tr>
-{{else}}<tr><td colspan="6">No applications match these filters.</td></tr>{{end}}</tbody></table></div>{{end}}
+{{define "apps-head"}}<div class="page-head"><div class="title"><h1>Applications</h1></div></div>
+<form class="toolbar" method="get" action="/apps">
+<div class="seg" role="group" aria-label="Sync status">{{range $v := lines "\nSynced\nOutOfSync\nUnknown"}}<a href="/apps{{query $.Filters "sync" $v}}" {{if eq ($.Filters.Get "sync") $v}}aria-current="true"{{end}}>{{if $v}}{{$v}}{{else}}All{{end}}</a>{{end}}</div>
+{{with .Filters.Get "sync"}}<input type="hidden" name="sync" value="{{.}}">{{end}}
+<div class="field"><label for="f-host">Host</label><select id="f-host" name="host"><option value="">All hosts</option>{{range .Hosts}}<option value="{{.Name}}" {{if eq ($.Filters.Get "host") .Name}}selected{{end}}>{{.Name}}</option>{{end}}</select></div>
+<div class="field"><label for="f-health">Health</label><select id="f-health" name="health">{{range $v := lines "\nHealthy\nProgressing\nDegraded\nSuspended\nMissing\nUnknown"}}<option value="{{$v}}" {{if eq ($.Filters.Get "health") $v}}selected{{end}}>{{if $v}}{{$v}}{{else}}Any health{{end}}</option>{{end}}</select></div>
+<div class="field grow"><label for="f-label">Label</label><input id="f-label" class="mono" name="label" placeholder="key=value" value="{{.Filters.Get "label"}}"></div>
+<button type="submit" class="btn">Filter</button>{{if .Filters}}<a class="btn btn-ghost" href="/apps">Clear</a>{{end}}</form>{{end}}
+
+{{define "apps"}}{{with tally .Apps}}<p class="summary">{{.Total}} application{{if ne .Total 1}}s{{end}}{{if .Degraded}} · <span class="t-bad">{{.Degraded}} Degraded</span>{{end}}{{if .Missing}} · <span class="t-warn">{{.Missing}} Missing</span>{{end}}{{if .OutOfSync}} · <span class="t-warn">{{.OutOfSync}} OutOfSync</span>{{end}}{{if .Progressing}} · <span class="t-prog">{{.Progressing}} Progressing</span>{{end}}</p>{{end}}
+<div class="card"><div class="table-wrap"><table class="wide"><thead><tr><th scope="col">Application</th><th scope="col">Sync</th><th scope="col">Health</th><th scope="col">Revision</th><th scope="col">Last operation</th>{{if $.Admin}}<th scope="col"><span class="sr-only">Actions</span></th>{{end}}</tr></thead><tbody>
+{{range .Apps}}<tr>
+<td><div class="cell"><div class="name-row"><a class="name" href="/apps/{{path .Name}}"><strong>{{.Name}}</strong></a>{{if .Automated}}<span class="tag auto">auto</span>{{else}}<span class="tag">manual</span>{{end}}</div><span class="host i-host">{{.Host}}</span>{{with .Error}}<span class="error">{{.}}</span>{{end}}</div></td>
+<td><div class="cell">{{template "pill" .Sync.Status}}{{range .Sync.Reasons}}<span class="reason">{{.}}</span>{{end}}{{if .Paused}}<span class="pill plain paused" title="{{.PausedReason}}">Paused</span>{{end}}{{with .Blocked}}<span class="pill plain held">{{.}}</span>{{end}}</div></td>
+<td><div class="cell">{{template "pill" .Health.Status}}{{with .Health.Message}}<span class="reason">{{.}}</span>{{end}}</div></td>
+<td><div class="cell">{{if .Sync.ChartRef}}<span class="chip">{{.Sync.ChartRef}}</span>{{else if .Source.Chart}}<span class="chip">{{.Source.Chart}}</span>{{else if .Sync.Revision}}<span class="chip rev" title="{{.Sync.Revision}}">{{short .Sync.Revision}}</span>{{else}}<span class="muted">Not rendered</span>{{end}}{{with .Sync.ValuesRevision}}<span class="reason">values {{short .}}</span>{{end}}{{with .Release}}<span class="reason">release rev {{.Revision}}{{with .Chart}} · {{.}}{{end}}</span>{{end}}</div></td>
+<td>{{with .Operation}}<div class="cell"><span class="pill plain {{lower .Phase}}">{{.Phase}}</span><span class="reason">{{.Kind}} · {{.Trigger}}{{with .User}} · {{.}}{{end}} · <time datetime="{{iso .StartedAt}}" title="{{iso .StartedAt}}">{{ago .StartedAt}}</time></span></div>{{else}}<span class="muted">None yet</span>{{end}}</td>
+{{if $.Admin}}<td class="act"><form method="post" action="/ui/apps/{{path .Name}}/sync" hx-post="/ui/apps/{{path .Name}}/sync" hx-target="#action-result">{{template "csrf" $}}<button type="submit" class="btn btn-sm{{if eq .Sync.Status "OutOfSync"}} btn-primary{{end}}">Sync</button></form></td>{{end}}</tr>
+{{else}}<tr><td colspan="6" class="empty-row">No applications match these filters. <a href="/apps">Show all</a></td></tr>{{end}}</tbody></table></div></div>{{end}}
+
+{{define "detail-head"}}<div id="app-head" class="detail-head" {{if .OOB}}hx-swap-oob="outerHTML"{{end}}>
+<nav class="crumbs" aria-label="Breadcrumb"><a href="/apps">Applications</a><span aria-hidden="true">/</span><span aria-current="page">{{.App.Name}}</span></nav>
+<div class="page-head"><div class="title">
+<div class="title-row"><h1>{{.App.Name}}</h1>{{template "pill" .App.Sync.Status}}{{template "pill" .App.Health.Status}}{{if .App.Paused}}<span class="pill paused">Paused</span>{{end}}{{if .App.Automated}}<span class="tag auto">auto</span>{{else}}<span class="tag">manual</span>{{end}}</div>
+<div class="meta"><span class="chip i-host">{{.App.Host}}</span>{{with .App.Sync.ChartRef}}<span class="chip">{{.}}</span>{{else}}{{with .App.Source.Chart}}<span class="chip">{{.}}{{with $.App.Source.Version}}:{{.}}{{end}}</span>{{else}}{{with .App.Source.Path}}<span class="chip">{{.}}{{with $.App.Source.TargetRevision}} @ {{.}}{{end}}</span>{{end}}{{end}}{{end}}{{range $k, $v := .App.Labels}}<span class="chip selector">{{$k}}={{$v}}</span>{{end}}</div>
+</div>
+{{if .Admin}}<div class="actions">
+<form method="post" action="/ui/apps/{{path .Name}}/sync" hx-post="/ui/apps/{{path .Name}}/sync" hx-target="#action-result">{{template "csrf" .}}<button type="submit" class="btn btn-primary i-sync">Sync</button></form>
+<form method="post" action="/ui/apps/{{path .Name}}/refresh" hx-post="/ui/apps/{{path .Name}}/refresh" hx-target="#action-result">{{template "csrf" .}}<button type="submit" class="btn i-refresh">Refresh</button></form>
+{{if .App.Paused}}<form method="post" action="/ui/apps/{{path .Name}}/resume" hx-post="/ui/apps/{{path .Name}}/resume" hx-target="#action-result">{{template "csrf" .}}<button type="submit" class="btn i-resume">Resume</button></form>
+{{else}}<form method="post" action="/ui/apps/{{path .Name}}/pause" hx-post="/ui/apps/{{path .Name}}/pause" hx-target="#action-result">{{template "csrf" .}}<button type="submit" class="btn i-pause">Pause</button></form>{{end}}
+</div>{{end}}</div>
+{{with .App.Error}}<div class="callout bad" role="alert"><div><strong>Couldn't reconcile {{$.App.Name}}</strong><code>{{.}}</code></div></div>{{end}}
+{{if .App.Paused}}<div class="callout"><div><strong>Automated sync is paused</strong><p>{{.App.PausedReason}}. Resume to let Git drive this app again.</p></div></div>
+{{else}}{{with .App.Blocked}}<div class="callout warn"><div><strong>Automation is waiting</strong><p>{{.}}</p></div></div>{{end}}{{end}}
+<nav class="tabs" aria-label="Application tabs">{{range $tab := lines "summary\ncontainers\ndiff\nhistory\noperations"}}<a href="/apps/{{path $.Name}}?tab={{$tab}}" {{if eq $.Tab $tab}}aria-current="page"{{end}}>{{$tab}}{{if eq $tab "containers"}}<span class="count">{{len $.App.Health.Containers}}</span>{{end}}{{if eq $tab "diff"}}{{with $.App.Sync.Changes}}<span class="count warn">{{len .}}</span>{{end}}{{end}}</a>{{end}}</nav>
+</div>{{end}}
 
 {{define "detail"}}
-{{if eq .Tab "summary"}}<div class="card"><dl>
-<dt>Host</dt><dd>{{.App.Host}}</dd><dt>Source</dt><dd><code>{{.App.Source.RepoURL}} {{.App.Source.Path}} {{.App.Source.Chart}} {{.App.Source.Version}}</code> @ {{.App.Source.TargetRevision}}</dd>
+{{if eq .Tab "summary"}}<div class="split"><div>
+<section class="card"><div class="card-head"><h2>Sync</h2>{{template "pill" .App.Sync.Status}}</div><dl class="props">
+<dt>Desired revision</dt><dd>{{with .App.Sync.Revision}}<code>{{.}}</code>{{else}}<span class="none">Not rendered</span>{{end}}</dd>
+<dt>Deployed revision</dt><dd>{{with .App.Sync.DeployedRevision}}<code>{{.}}</code>{{else}}<span class="none">Not deployed</span>{{end}}{{with .App.Release}}<span class="reason">release rev {{.Revision}} · {{.Status}} · <time datetime="{{iso .LastDeployed}}" title="{{iso .LastDeployed}}">{{ago .LastDeployed}}</time></span>{{end}}</dd>
 {{with .App.Sync.ChartRef}}<dt>Chart ref</dt><dd><code>{{.}}</code></dd>{{end}}
-{{with .App.Source.ValuesFrom}}<dt>Values source</dt><dd>{{.RepoURL}} @ {{.TargetRevision}}</dd>{{end}}
-{{with .App.Sync.ValuesRevision}}<dt>Values revision</dt><dd>{{.}}</dd><dt>Deployed values revision</dt><dd>{{$.App.Sync.DeployedValuesRevision}}</dd>{{end}}
-<dt>Definition</dt><dd>{{.App.Origin}}</dd><dt>Desired revision</dt><dd>{{.App.Sync.Revision}}</dd><dt>Deployed revision</dt><dd>{{.App.Sync.DeployedRevision}}</dd>
-<dt>Sync</dt><dd>{{.App.Sync.Status}}{{range .App.Sync.Reasons}}<p>{{.}}</p>{{end}}</dd><dt>Health</dt><dd>{{.App.Health.Status}} {{.App.Health.Message}}</dd>
-<dt>Automation</dt><dd>{{if .App.Automated}}enabled{{else}}manual{{end}}{{if .App.Paused}} · paused: {{.App.PausedReason}}{{end}}{{with .App.Blocked}} · waiting: {{.}}{{end}}</dd>
-<dt>Dependencies</dt><dd>{{range .App.DependsOn}}<a href="/apps/{{path .}}">{{.}}</a> {{else}}none{{end}}</dd>
-<dt>Retry</dt><dd>{{with .App.Retry}}{{.Failures}} failures / {{.Limit}} retries; next: {{if .NextAt.IsZero}}no retry scheduled{{else}}{{.NextAt}}{{end}}{{else}}none{{end}}</dd>
-<dt>Reconciled</dt><dd>{{.App.ReconciledAt}}</dd>{{with .App.Error}}<dt>Error</dt><dd class="error">{{.}}</dd>{{end}}</dl></div>{{end}}
-{{if eq .Tab "containers"}}<div class="card"><table><thead><tr><th>Container / service</th><th>State</th><th>Health</th><th>Image</th><th>Logs</th></tr></thead><tbody>
-{{range .App.Health.Containers}}<tr><td>{{.Name}}<div class="muted">{{.Service}}</div></td><td>{{.State}}</td><td>{{.Health}}</td><td><code>{{.Image}}</code></td><td><a href="/apps/{{path $.Name}}?tab=containers&amp;container={{.Name}}">View tail</a></td></tr>{{else}}<tr><td colspan="5">No containers.</td></tr>{{end}}
-</tbody></table></div>
-{{end}}
-{{if eq .Tab "diff"}}{{range .App.Sync.Changes}}<h2>{{.Resource}} · {{.Op}}</h2><pre class="card diff">{{range lines .Diff}}<span class="{{lineClass .}}">{{.}}</span>{{end}}</pre>{{else}}<p>No resource differences.</p>{{end}}
-{{range .App.Sync.Drift}}<p>{{.Service}}: {{.Reason}}</p>{{end}}{{end}}
-{{if eq .Tab "history"}}<div class="card"><table><thead><tr><th>Revision</th><th>Status</th><th>Chart</th><th>Deployed</th><th>Description</th>{{if .Admin}}<th>Action</th>{{end}}</tr></thead><tbody>{{range .History}}<tr><td>{{.Revision}}</td><td>{{.Status}}</td><td>{{.Chart}}</td><td>{{.LastDeployed}}</td><td>{{.Description}}</td>{{if $.Admin}}<td><form method="post" action="/ui/apps/{{path $.Name}}/rollback" hx-post="/ui/apps/{{path $.Name}}/rollback" hx-target="#action-result" hx-confirm="Roll back to revision {{.Revision}}? Automated sync will pause."><input type="hidden" name="csrf" value="{{$.User.CSRF}}"><input type="hidden" name="revision" value="{{.Revision}}"><button type="submit">Rollback</button></form></td>{{end}}</tr>{{else}}<tr><td colspan="6">No release history.</td></tr>{{end}}</tbody></table></div>{{end}}
+{{with .App.Sync.ValuesRevision}}<dt>Values revision</dt><dd><code>{{.}}</code></dd><dt>Deployed values</dt><dd>{{with $.App.Sync.DeployedValuesRevision}}<code>{{.}}</code>{{else}}<span class="none">Not deployed</span>{{end}}</dd>{{end}}
+{{with .App.Sync.Reasons}}<dt>Why</dt><dd>{{range .}}<span>{{.}}</span>{{end}}</dd>{{end}}
+</dl></section>
+<section class="card"><div class="card-head"><h2>Health</h2>{{template "pill" .App.Health.Status}}</div><dl class="props">
+<dt>Status</dt><dd>{{with .App.Health.Message}}{{.}}{{else}}<span class="none">No message</span>{{end}}</dd>
+<dt>Containers</dt><dd><a href="/apps/{{path .Name}}?tab=containers">{{len .App.Health.Containers}} container{{if ne (len .App.Health.Containers) 1}}s{{end}}</a></dd>
+<dt>Reconciled</dt><dd>{{if .App.ReconciledAt.IsZero}}<span class="none">Not yet</span>{{else}}<time datetime="{{iso .App.ReconciledAt}}" title="{{iso .App.ReconciledAt}}">{{ago .App.ReconciledAt}}</time>{{end}}</dd>
+</dl></section>
+</div><aside>
+<section class="card"><div class="card-head"><h2>Source</h2></div><dl class="props">
+<dt>Source</dt><dd><code>{{.App.Source.RepoURL}} {{.App.Source.Path}} {{.App.Source.Chart}} {{.App.Source.Version}}</code>{{with .App.Source.TargetRevision}}<span class="reason">@ {{.}}</span>{{end}}</dd>
+{{with .App.Source.ValuesFrom}}<dt>Values source</dt><dd><code>{{.RepoURL}}</code><span class="reason">@ {{.TargetRevision}}</span></dd>{{end}}
+<dt>Definition</dt><dd>{{with .App.Origin}}<code>{{.}}</code>{{else}}<span class="none">Unknown</span>{{end}}</dd>
+</dl></section>
+<section class="card"><div class="card-head"><h2>Automation</h2></div><dl class="props">
+<dt>Policy</dt><dd>{{if .App.Automated}}Automated{{else}}Manual{{end}}{{if .App.Paused}}<span class="pill plain paused">Paused: {{.App.PausedReason}}</span>{{end}}{{with .App.Blocked}}<span class="pill plain held">{{.}}</span>{{end}}</dd>
+<dt>Depends on</dt><dd>{{with .App.DependsOn}}<span class="links">{{range .}}<a href="/apps/{{path .}}">{{.}}</a>{{end}}</span>{{else}}<span class="none">Nothing</span>{{end}}</dd>
+<dt>Retry</dt><dd>{{with .App.Retry}}{{.Failures}} failed of {{.Limit}} retries<span class="reason">{{if .NextAt.IsZero}}No retry scheduled{{else}}Next <time datetime="{{iso .NextAt}}" title="{{iso .NextAt}}">{{ago .NextAt}}</time>{{end}}</span>{{else}}<span class="none">No retry policy</span>{{end}}</dd>
+</dl></section>
+</aside></div>{{end}}
+{{if eq .Tab "containers"}}<div class="card"><div class="table-wrap"><table><thead><tr><th scope="col">Container</th><th scope="col">State</th><th scope="col">Health</th><th scope="col">Image</th><th scope="col"><span class="sr-only">Logs</span></th></tr></thead><tbody>
+{{range .App.Health.Containers}}<tr><td><div class="cell"><strong>{{.Name}}</strong>{{with .Service}}<span class="reason">{{.}}</span>{{end}}</div></td><td><span class="pill c-{{lower .State}}">{{.State}}</span></td><td>{{with .Health}}<span class="pill h-{{lower .}}">{{.}}</span>{{else}}<span class="muted">No healthcheck</span>{{end}}</td><td><code>{{.Image}}</code></td><td class="act"><a class="btn btn-sm i-logs" href="/apps/{{path $.Name}}?tab=containers&amp;container={{.Name}}">Logs</a></td></tr>
+{{else}}<tr><td colspan="5" class="empty-row">No containers.</td></tr>{{end}}
+</tbody></table></div></div>{{end}}
+{{if eq .Tab "diff"}}{{range .App.Sync.Changes}}<section class="card"><div class="card-head"><h2><code>{{.Resource}}</code><span class="tag {{lower .Op}}">{{.Op}}</span></h2>{{with diffstat .Diff}}<span class="diffstat"><span class="add">+{{.Add}}</span><span class="del">−{{.Del}}</span></span>{{end}}</div><pre class="diff">{{range lines .Diff}}<span class="{{lineClass .}}">{{.}}</span>{{end}}</pre></section>
+{{else}}<div class="empty"><strong>No resource differences</strong><span>What Git renders matches the deployed release.</span></div>{{end}}
+{{with .App.Sync.Drift}}<section class="card"><div class="card-head"><h2>Live drift</h2><span class="muted">containers that differ from the deployed release</span></div><div class="card-body">{{range .}}<span class="pill plain drift"><span><strong>{{.Service}}</strong>: {{.Reason}}</span></span>{{end}}</div></section>{{end}}{{end}}
+{{if eq .Tab "history"}}<div class="card"><div class="table-wrap"><table><thead><tr><th scope="col" class="num">Revision</th><th scope="col">Status</th><th scope="col">Chart</th><th scope="col">Deployed</th><th scope="col">Description</th>{{if .Admin}}<th scope="col"><span class="sr-only">Action</span></th>{{end}}</tr></thead><tbody>{{range .History}}<tr><td class="num">{{.Revision}}</td><td><span class="pill r-{{lower .Status}}">{{.Status}}</span></td><td><code>{{.Chart}}</code></td><td>{{if .LastDeployed.IsZero}}<span class="muted">Never</span>{{else}}<time datetime="{{iso .LastDeployed}}" title="{{iso .LastDeployed}}">{{ago .LastDeployed}}</time>{{end}}</td><td>{{.Description}}</td>{{if $.Admin}}<td class="act"><form method="post" action="/ui/apps/{{path $.Name}}/rollback" hx-post="/ui/apps/{{path $.Name}}/rollback" hx-target="#action-result" hx-confirm="Roll back {{$.Name}} to revision {{.Revision}}? Automated sync pauses until you resume it.">{{template "csrf" $}}<input type="hidden" name="revision" value="{{.Revision}}"><button type="submit" class="btn btn-sm btn-danger i-rollback">Roll back</button></form></td>{{end}}</tr>{{else}}<tr><td colspan="6" class="empty-row">No release history.</td></tr>{{end}}</tbody></table></div></div>{{end}}
 {{if eq .Tab "operations"}}{{template "operations" .}}{{end}}
 {{end}}
