@@ -33,3 +33,18 @@ func TestLogStreamMasksAcrossWrites(t *testing.T) {
 		t.Fatal("unflushed log line")
 	}
 }
+
+func TestShortVersion(t *testing.T) {
+	for in, want := range map[string]string{
+		"dev":    "dev",
+		"v1.4.0": "v1.4.0",
+		"ci":     "ci",
+		"dev-6e49ccac46c1d0f1b0a6e8d6f3c3a1c2b9e7d4f5": "dev-6e49cca",
+		"v1.4.0-3-g6e49cca":                            "v1.4.0-3-g6e49cca",
+		"dev-not-a-hash-but-long-enough":               "dev-not-a-hash-but-long-enough",
+	} {
+		if got := shortVersion(in); got != want {
+			t.Errorf("shortVersion(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

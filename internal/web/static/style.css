@@ -60,6 +60,8 @@
   --i-info: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23000' stroke-width='1.5' stroke-linecap='round'%3E%3Ccircle cx='8' cy='8' r='6.25'/%3E%3Cpath d='M8 7.25v3.5M8 5h.01'/%3E%3C/svg%3E");
   --i-alert: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23000' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M8 1.75 14.75 13.5H1.25Z'/%3E%3Cpath d='M8 6.25v3M8 11.25h.01'/%3E%3C/svg%3E");
   --i-ok: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23000' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='8' cy='8' r='6.25'/%3E%3Cpath d='M5.25 8.2 7.1 10l3.65-3.75'/%3E%3C/svg%3E");
+  --i-menu: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23000' stroke-width='1.5' stroke-linecap='round'%3E%3Cpath d='M2.5 4h11M2.5 8h11M2.5 12h11'/%3E%3C/svg%3E");
+  --i-close: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23000' stroke-width='1.5' stroke-linecap='round'%3E%3Cpath d='m3.5 3.5 9 9m0-9-9 9'/%3E%3C/svg%3E");
   --i-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%238A919D' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m4 6 4 4 4-4'/%3E%3C/svg%3E");
 }
 
@@ -118,7 +120,17 @@ code, pre, kbd { font-family: var(--mf-mono); font-size: 12px; }
 .brand { display: flex; align-items: center; gap: 10px; padding: 0 8px; color: var(--mf-text); text-decoration: none;
   font-size: 16px; line-height: 24px; font-weight: 600; }
 .brand:hover { color: var(--mf-text); }
-.brand .version { font: 400 12px/18px var(--mf-mono); color: var(--mf-text-3); }
+/* The running version sits under the name, so a dev build's commit fits. */
+.brand-text { min-width: 0; display: flex; flex-direction: column; }
+.brand .version { overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font: 400 11px/14px var(--mf-mono); color: var(--mf-text-3); }
+/* The menu button only shows on narrow screens; wide ones lay the menu's
+   parts out straight in the sidebar. */
+.sidebar .nav-toggle { display: none; }
+.nav-toggle::before { content: ""; width: 20px; height: 20px; background: currentColor;
+  -webkit-mask: var(--i-menu) center / contain no-repeat; mask: var(--i-menu) center / contain no-repeat; }
+.nav-toggle[aria-expanded=true]::before { -webkit-mask-image: var(--i-close); mask-image: var(--i-close); }
+.sidebar-menu { display: contents; }
 .logo { flex: none; width: 28px; height: 28px; }
 .logo-bg { fill: var(--mf-accent); }
 .logo-line { fill: none; stroke: var(--mf-accent-fg); stroke-width: 2.4; }
@@ -169,18 +181,21 @@ code, pre, kbd { font-family: var(--mf-mono); font-size: 12px; }
 .panel { display: flex; flex-direction: column; gap: 20px; }
 .panel:empty { display: none; }
 
+/* Narrow screens: a slim bar with the brand and a menu button, which opens
+   the nav, the root's state and the account below it. */
 @media (max-width: 800px) {
-  .shell { grid-template-columns: minmax(0, 1fr); }
-  .sidebar { position: static; height: auto; flex-direction: row; flex-wrap: wrap; align-items: center; gap: 12px;
-    padding: 12px 16px; border-right: 0; border-bottom: 1px solid var(--mf-line); }
-  .nav { order: 3; flex-basis: 100%; flex-direction: row; overflow-x: auto; margin: 0 -8px; padding: 0 8px; }
-  .sidebar { overflow: visible; }
-  .root-status { order: 4; flex-basis: 100%; margin: 0; padding: 0; }
+  .shell { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
+  .sidebar { position: static; height: auto; overflow: visible; flex-direction: row; flex-wrap: wrap; align-items: center;
+    gap: 0; padding: 8px 8px 8px 16px; border-right: 0; border-bottom: 1px solid var(--mf-line); }
+  .sidebar .brand { flex: 1; min-width: 0; padding: 0; }
+  .sidebar .nav-toggle { display: inline-flex; flex: none; color: var(--mf-text); }
+  .sidebar-menu { display: none; flex-basis: 100%; flex-direction: column; gap: 12px; padding: 12px 8px 8px 0; }
+  .nav-toggle[aria-expanded=true] + .sidebar-menu { display: flex; }
+  .nav a { height: 44px; }
+  .root-status { margin: 0; padding: 4px 0 0 10px; border-top: 1px solid var(--mf-line); }
   .tip { bottom: auto; top: calc(100% + 6px); left: 0; width: min(320px, calc(100vw - 32px)); }
   .tip::after { top: auto; bottom: 100%; }
-  .account { margin: 0 0 0 auto; padding: 0; border-top: 0; }
-  .who { display: none; }
-  .content { padding: 20px 16px 40px; }
+  .account { padding: 12px 0 0 10px; }
 }
 
 /* Page heads */
@@ -390,3 +405,50 @@ details[open] summary { border-bottom: 1px solid var(--mf-line); }
 .login .btn { width: 100%; }
 .or { display: flex; align-items: center; gap: 12px; color: var(--mf-text-3); font-size: 12px; }
 .or::before, .or::after { content: ""; flex: 1; border-top: 1px solid var(--mf-line); }
+
+/* Narrow screens: tighter page spacing. Last, so these override the rules above. */
+@media (max-width: 800px) {
+  .content { padding: 20px 16px 40px; gap: 16px; }
+  h1 { font-size: 22px; line-height: 30px; }
+  .page-head .title { flex-basis: 100%; }
+  .card-head { padding: 12px 16px; }
+  .card-body, .card > h4 { padding-left: 16px; padding-right: 16px; }
+  .form-row { padding: 16px; }
+  .form-row .field { flex: 1 1 100%; }
+  .form-row > .btn { margin-top: 0; }
+  .toolbar .field { flex: 1 1 140px; }
+  .toolbar select { width: 100%; }
+  /* Below 16px, iOS zooms the page in when a field takes focus. */
+  input:not([type=hidden]):not([type=checkbox]):not([type=radio]), select { font-size: 16px; }
+  input.mono { font-size: 15px; }
+  .props { padding: 16px; }
+  /* Page actions share one even row under the title. */
+  .page-head .actions { flex: 1 1 100%; }
+  .page-head .actions form { flex: 1 1 0; }
+  .page-head .actions .btn { width: 100%; padding: 0 10px; }
+  .page-head .actions .live { order: -1; flex-basis: 100%; margin-left: 0; }
+}
+
+/* Phones: each table row becomes a small card. The first cell is its title;
+   the others hang their column's name (data-label) to their left. */
+@media (max-width: 640px) {
+  table.wide { min-width: 0; }
+  .table-wrap { overflow-x: visible; }
+  thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  table, tbody, tr, td { display: block; }
+  tbody tr { display: flex; flex-direction: column; gap: 8px; padding: 14px 16px; border-bottom: 1px solid var(--mf-line); }
+  tbody tr:last-child { border-bottom: 0; }
+  td, th:first-child, td:first-child, th:last-child, td:last-child,
+  table.forms td, table.forms td.act, table.compact td { padding: 0; border: 0; }
+  tbody tr:hover td { background: none; }
+  td[data-label] { position: relative; min-height: 20px; padding-left: 104px; overflow-wrap: anywhere; }
+  td[data-label]::before { content: attr(data-label); position: absolute; left: 0; top: 2px; width: 92px;
+    font-size: 11px; line-height: 16px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--mf-text-3); }
+  td.num, td.act { text-align: left; }
+  td.act { padding-top: 4px; white-space: normal; }
+  td.act:empty { display: none; }
+  td code { overflow-wrap: anywhere; }
+  td.empty-row { padding: 24px 0; }
+  table.forms .toolbar { flex-wrap: nowrap; }
+  table.forms .toolbar input { flex: 1; width: 100%; }
+}

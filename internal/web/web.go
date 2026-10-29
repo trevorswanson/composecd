@@ -198,7 +198,8 @@ var templates = template.Must(template.New("web").Funcs(template.FuncMap{
 		}
 		return s
 	},
-	"lines": func(s string) []string { return strings.Split(s, "\n") },
+	"shortVersion": shortVersion,
+	"lines":        func(s string) []string { return strings.Split(s, "\n") },
 	"lineClass": func(s string) string {
 		switch {
 		case strings.HasPrefix(s, "@@"):
@@ -299,6 +300,17 @@ func tally(apps []controller.AppStatus) Tally {
 		}
 	}
 	return t
+}
+
+// shortVersion cuts a full commit hash at the end of a build version
+// ("dev-6e49ccac46…" becomes "dev-6e49cca") so it fits beside the brand.
+func shortVersion(v string) string {
+	i := strings.LastIndexAny(v, "-+.")
+	tail := v[i+1:]
+	if len(tail) <= 12 || strings.Trim(tail, "0123456789abcdef") != "" {
+		return v
+	}
+	return v[:i+1] + tail[:7]
 }
 
 // ago renders t relative to now ("3 min ago", "in 2 h"), falling back to a
