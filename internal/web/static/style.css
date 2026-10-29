@@ -129,7 +129,28 @@ code, pre, kbd { font-family: var(--mf-mono); font-size: 12px; }
 .nav a:hover { background: var(--mf-surface-2); color: var(--mf-text); }
 .nav a[aria-current=page] { background: var(--mf-accent-soft); color: var(--mf-accent); font-weight: 600; }
 .nav a[aria-current=page]::before { opacity: 1; }
-.account { margin-top: auto; display: flex; align-items: center; gap: 10px; padding: 12px 8px 0; border-top: 1px solid var(--mf-line); }
+/* The Git root's state; its repository, branch and commit show in a tooltip. */
+.root-status { margin-top: auto; display: flex; align-items: center; gap: 4px; padding: 0 0 0 8px;
+  font-size: 13px; line-height: 18px; color: var(--mf-text-2); }
+.root-status form { display: inline-flex; }
+.tip-anchor { position: relative; flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; padding: 6px 0;
+  border-radius: var(--mf-radius); cursor: default; }
+.tip-anchor .what { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dot { flex: none; width: 8px; height: 8px; border-radius: 999px; background: var(--mf-ok); }
+.dot.bad { background: var(--mf-bad); }
+.dot.idle { background: var(--mf-text-3); }
+.tip { position: absolute; z-index: 10; left: -8px; bottom: calc(100% + 6px); width: 216px; display: none; flex-direction: column; gap: 6px;
+  padding: 12px; background: var(--mf-surface); border: 1px solid var(--mf-line-strong); border-radius: var(--mf-radius);
+  box-shadow: 0 8px 24px rgb(0 0 0 / .12); color: var(--mf-text-2); cursor: auto; }
+/* An invisible bridge over the gap keeps the tip open on the way to its link. */
+.tip::after { content: ""; position: absolute; left: 0; right: 0; top: 100%; height: 8px; }
+.tip-anchor:hover .tip, .tip-anchor:focus-within .tip { display: flex; }
+.tip .repo { font: 400 12px/18px var(--mf-mono); color: var(--mf-text); overflow-wrap: anywhere; }
+.tip a.repo { color: var(--mf-accent); }
+.tip dl { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 4px 10px; margin: 0; font-size: 12px; line-height: 18px; }
+.tip dt { color: var(--mf-text-3); }
+.tip dd { margin: 0; color: var(--mf-text); overflow-wrap: anywhere; }
+.account { display: flex; align-items: center; gap: 10px; padding: 12px 8px 0; border-top: 1px solid var(--mf-line); }
 .avatar { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px;
   border-radius: 999px; background: var(--mf-accent-soft); color: var(--mf-accent); font-size: 13px; font-weight: 600; }
 .who { flex: 1; min-width: 0; display: flex; flex-direction: column; }
@@ -137,13 +158,8 @@ code, pre, kbd { font-family: var(--mf-mono); font-size: 12px; }
 .who span { font-size: 12px; line-height: 16px; color: var(--mf-text-3); }
 
 .main { min-width: 0; display: flex; flex-direction: column; }
-.rootbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px;
-  padding: 12px 32px; border-bottom: 1px solid var(--mf-line); font-size: 13px; line-height: 18px; color: var(--mf-text-2); }
-.rootbar .root { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; }
-.rootbar code { overflow-wrap: anywhere; }
-.rootbar .repo { color: var(--mf-text); }
 .label { font-size: 11px; line-height: 16px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--mf-text-2); }
-.live { display: none; align-items: center; gap: 6px; color: var(--mf-text-3); }
+.live { display: none; align-items: center; gap: 6px; margin-left: auto; font-size: 13px; line-height: 18px; color: var(--mf-text-3); }
 .live::before { content: ""; width: 8px; height: 8px; border-radius: 999px; background: currentColor; }
 .live[data-state] { display: inline-flex; }
 .live[data-state=open] { color: var(--mf-ok); }
@@ -157,15 +173,19 @@ code, pre, kbd { font-family: var(--mf-mono); font-size: 12px; }
   .sidebar { position: static; height: auto; flex-direction: row; flex-wrap: wrap; align-items: center; gap: 12px;
     padding: 12px 16px; border-right: 0; border-bottom: 1px solid var(--mf-line); }
   .nav { order: 3; flex-basis: 100%; flex-direction: row; overflow-x: auto; margin: 0 -8px; padding: 0 8px; }
+  .sidebar { overflow: visible; }
+  .root-status { order: 4; flex-basis: 100%; margin: 0; padding: 0; }
+  .tip { bottom: auto; top: calc(100% + 6px); left: 0; width: min(320px, calc(100vw - 32px)); }
+  .tip::after { top: auto; bottom: 100%; }
   .account { margin: 0 0 0 auto; padding: 0; border-top: 0; }
   .who { display: none; }
-  .rootbar { padding: 10px 16px; }
   .content { padding: 20px 16px 40px; }
 }
 
 /* Page heads */
 .page-head { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 16px; }
-.page-head .title { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.page-head .title { flex: 1 1 320px; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.detail-head .page-head { align-items: flex-start; }
 .title-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
 .title-row h1 { overflow-wrap: anywhere; }
 .subtitle, .summary { color: var(--mf-text-2); }
@@ -209,7 +229,10 @@ input:user-invalid, input[aria-invalid=true] { border-color: var(--mf-bad); }
 select { appearance: none; padding-right: 36px; background: var(--mf-surface) var(--i-chevron) right 10px center / 16px no-repeat; }
 .toolbar { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px; }
 .toolbar .grow { flex: 1 1 200px; }
-.form-row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px; padding: 16px 20px; border-top: 1px solid var(--mf-line); }
+/* Top-aligned so a field's hint hangs below without lifting its input; the
+   button drops by a label's height (18px line + 6px gap) to sit beside the inputs. */
+.form-row { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 12px; padding: 16px 20px; border-top: 1px solid var(--mf-line); }
+.form-row > .btn { margin-top: 24px; }
 
 /* Segmented filter and tabs */
 .seg { display: inline-flex; flex-wrap: wrap; padding: 3px; gap: 2px; background: var(--mf-surface-2);
@@ -251,6 +274,9 @@ tbody tr:hover td { background: var(--mf-surface-2); }
 table.wide { min-width: 880px; }
 .num { text-align: right; font-variant-numeric: tabular-nums; }
 td.act { text-align: right; white-space: nowrap; padding-top: 10px; }
+/* Rows holding inputs center everything on the input. */
+table.forms td, table.forms td.act { vertical-align: middle; padding-top: 10px; padding-bottom: 10px; }
+table.compact td { padding-top: 8px; padding-bottom: 8px; }
 td.act form + form { margin-left: 4px; }
 td.empty-row { padding: 40px 20px; text-align: center; color: var(--mf-text-2); }
 tbody tr:hover td.empty-row { background: none; }

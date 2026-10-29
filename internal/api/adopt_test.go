@@ -56,7 +56,7 @@ func TestAdoptionRoutesAndRoles(t *testing.T) {
 	}
 	b := newBrowser(t, srv)
 	b.login("", "secret")
-	code, _, body := b.do("GET", "/hosts", "", nil)
+	code, _, body := b.do("GET", "/hosts/nas", "", nil)
 	if code != 200 || !strings.Contains(body, `href="/hosts/nas/adopt/external"`) || !strings.Contains(body, "composetpl create") || strings.Contains(body, "<script>") || strings.Contains(body, "plaintext-secret") {
 		t.Fatal(code, body)
 	}
@@ -72,7 +72,7 @@ func TestAdoptionRoutesAndRoles(t *testing.T) {
 	}
 	guest := newBrowser(t, srv)
 	guest.login("guest", "guest password!")
-	code, _, body = guest.do("GET", "/hosts", "", nil)
+	code, _, body = guest.do("GET", "/hosts/nas", "", nil)
 	if code != 200 || strings.Contains(body, ">Adopt</a>") || strings.Contains(body, "plaintext-secret") {
 		t.Fatal(code, body)
 	}
@@ -83,8 +83,10 @@ func TestAdoptionRoutesAndRoles(t *testing.T) {
 	failure := &discoveryFailure{stub: stub{}}
 	fs := httptest.NewServer(New(failure, Options{Auth: a}))
 	defer fs.Close()
-	if code, body := do(t, fs, "GET", "/hosts", "secret", ""); code != 200 || !strings.Contains(body, "Discovery failed") {
-		t.Fatal(code, body)
+	for _, path := range []string{"/hosts", "/hosts/nas"} {
+		if code, body := do(t, fs, "GET", path, "secret", ""); code != 200 || !strings.Contains(body, "Discovery failed") {
+			t.Fatal(path, code, body)
+		}
 	}
 }
 

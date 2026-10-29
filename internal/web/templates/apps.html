@@ -1,4 +1,4 @@
-{{define "apps-head"}}<div class="page-head"><div class="title"><h1>Applications</h1></div></div>
+{{define "apps-head"}}<div class="page-head"><div class="title"><div class="title-row"><h1>Applications</h1>{{template "live" .}}</div></div></div>
 <form class="toolbar" method="get" action="/apps">
 <div class="seg" role="group" aria-label="Sync status">{{range $v := lines "\nSynced\nOutOfSync\nUnknown"}}<a href="/apps{{query $.Filters "sync" $v}}" {{if eq ($.Filters.Get "sync") $v}}aria-current="true"{{end}}>{{if $v}}{{$v}}{{else}}All{{end}}</a>{{end}}</div>
 {{with .Filters.Get "sync"}}<input type="hidden" name="sync" value="{{.}}">{{end}}
@@ -21,10 +21,10 @@
 {{define "detail-head"}}<div id="app-head" class="detail-head" {{if .OOB}}hx-swap-oob="outerHTML"{{end}}>
 <nav class="crumbs" aria-label="Breadcrumb"><a href="/apps">Applications</a><span aria-hidden="true">/</span><span aria-current="page">{{.App.Name}}</span></nav>
 <div class="page-head"><div class="title">
-<div class="title-row"><h1>{{.App.Name}}</h1>{{template "pill" .App.Sync.Status}}{{template "pill" .App.Health.Status}}{{if .App.Paused}}<span class="pill paused">Paused</span>{{end}}{{if .App.Automated}}<span class="tag auto">auto</span>{{else}}<span class="tag">manual</span>{{end}}</div>
+<div class="title-row"><h1>{{.App.Name}}</h1>{{template "pill" .App.Sync.Status}}{{template "pill" .App.Health.Status}}{{if .App.Paused}}<span class="pill paused">Paused</span>{{end}}{{if .App.Automated}}<span class="tag auto">auto</span>{{else}}<span class="tag">manual</span>{{end}}{{if not .Admin}}{{template "live" .}}{{end}}</div>
 <div class="meta"><span class="chip i-host">{{.App.Host}}</span>{{with .App.Sync.ChartRef}}<span class="chip">{{.}}</span>{{else}}{{with .App.Source.Chart}}<span class="chip">{{.}}{{with $.App.Source.Version}}:{{.}}{{end}}</span>{{else}}{{with .App.Source.Path}}<span class="chip">{{.}}{{with $.App.Source.TargetRevision}} @ {{.}}{{end}}</span>{{end}}{{end}}{{end}}{{range $k, $v := .App.Labels}}<span class="chip selector">{{$k}}={{$v}}</span>{{end}}</div>
 </div>
-{{if .Admin}}<div class="actions">
+{{if .Admin}}<div class="actions">{{template "live" .}}
 <form method="post" action="/ui/apps/{{path .Name}}/sync" hx-post="/ui/apps/{{path .Name}}/sync" hx-target="#action-result">{{template "csrf" .}}<button type="submit" class="btn btn-primary i-sync">Sync</button></form>
 <form method="post" action="/ui/apps/{{path .Name}}/refresh" hx-post="/ui/apps/{{path .Name}}/refresh" hx-target="#action-result">{{template "csrf" .}}<button type="submit" class="btn i-refresh">Refresh</button></form>
 {{if .App.Paused}}<form method="post" action="/ui/apps/{{path .Name}}/resume" hx-post="/ui/apps/{{path .Name}}/resume" hx-target="#action-result">{{template "csrf" .}}<button type="submit" class="btn i-resume">Resume</button></form>
