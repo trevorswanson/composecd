@@ -50,7 +50,7 @@ func TestWebPagesAndActions(t *testing.T) {
 		"/apps?label=missing": "No applications match", "/hosts": "Start maintenance", "/windows": "nightly",
 		"/operations": "operator", "/settings": "Create token",
 		"/apps/media": "Desired revision", "/apps/media?tab=containers": "media-web-1",
-		"/apps/media?tab=diff": "services/web", "/apps/media?tab=history": "Rollback",
+		"/apps/media?tab=diff": "services/web", "/apps/media?tab=history": "Roll back",
 		"/apps/media?tab=operations": "Output",
 	}
 	for path, want := range cases {

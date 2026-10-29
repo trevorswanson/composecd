@@ -32,8 +32,11 @@ with `go mod download` under $(go env GOMODCACHE).
 The embedded web UI vendors htmx 2.0.11 (https://htmx.org) and the htmx SSE
 extension 2.2.4 (https://github.com/bigskysoftware/htmx-extensions), both under
 the Zero-Clause BSD (0BSD) license. The upstream license texts are included in
-internal/web/static/HTMX-LICENSE and internal/web/static/SSE-LICENSE. Browser
-assets are served locally; see internal/web/static/README.md for pinned sources.
+internal/web/static/HTMX-LICENSE and internal/web/static/SSE-LICENSE. It also embeds
+IBM Plex Sans and IBM Plex Mono (https://github.com/IBM/plex), Copyright IBM Corp.,
+under the SIL Open Font License 1.1; the license texts are in
+internal/web/static/fonts/. Browser assets are served locally; see
+internal/web/static/README.md for pinned sources.
 
 The container image includes the standalone SOPS 3.13.3 executable
 (https://github.com/getsops/sops/releases/tag/v3.13.3), licensed under the

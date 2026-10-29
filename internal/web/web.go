@@ -21,6 +21,7 @@ import (
 
 	"github.com/trevorswanson/composecd/internal/auth"
 	"github.com/trevorswanson/composecd/internal/controller"
+	"github.com/trevorswanson/composecd/internal/health"
 	"github.com/trevorswanson/composecd/internal/store"
 	"github.com/trevorswanson/composecd/internal/windows"
 )
@@ -123,13 +124,46 @@ var templates = template.Must(template.New("web").Funcs(template.FuncMap{
 	},
 	"lines": func(s string) []string { return strings.Split(s, "\n") },
 	"lineClass": func(s string) string {
-		if strings.HasPrefix(s, "+") {
+		switch {
+		case strings.HasPrefix(s, "@@"):
+			return "hunk"
+		case strings.HasPrefix(s, "+"):
 			return "added"
-		}
-		if strings.HasPrefix(s, "-") {
+		case strings.HasPrefix(s, "-"):
 			return "removed"
 		}
 		return ""
+	},
+	"diffstat": diffstat,
+	"tally":    tally,
+	"ago":      ago,
+	"iso": func(v interface{}) string {
+		if t := toTime(v); !t.IsZero() {
+			return t.Format(time.RFC3339)
+		}
+		return ""
+	},
+	"initial": func(s string) string {
+		for _, r := range s {
+			return strings.ToUpper(string(r))
+		}
+		return "?"
+	},
+	// query is the filter query string with key set to v (or removed when v is "").
+	"query": func(q url.Values, key, v string) string {
+		out := url.Values{}
+		for k, vs := range q {
+			out[k] = vs
+		}
+		if v == "" {
+			out.Del(key)
+		} else {
+			out.Set(key, v)
+		}
+		if len(out) == 0 {
+			return ""
+		}
+		return "?" + out.Encode()
 	},
 	"path": url.PathEscape,
 	"headers": func(p *auth.Principal) string {
@@ -137,6 +171,83 @@ var templates = template.Must(template.New("web").Funcs(template.FuncMap{
 		return string(b)
 	},
 }).ParseFS(files, "templates/*.html"))
+
+// Stat counts the lines a unified diff adds and removes.
+type Stat struct{ Add, Del int }
+
+func diffstat(diff string) Stat {
+	var s Stat
+	for _, l := range strings.Split(diff, "\n") {
+		switch {
+		case strings.HasPrefix(l, "+"):
+			s.Add++
+		case strings.HasPrefix(l, "-"):
+			s.Del++
+		}
+	}
+	return s
+}
+
+// Tally counts the states worth calling out above the applications table.
+type Tally struct{ Total, OutOfSync, Degraded, Progressing, Missing int }
+
+func tally(apps []controller.AppStatus) Tally {
+	t := Tally{Total: len(apps)}
+	for _, a := range apps {
+		if a.Sync.Status == controller.OutOfSync {
+			t.OutOfSync++
+		}
+		switch a.Health.Status {
+		case health.Degraded:
+			t.Degraded++
+		case health.Progressing:
+			t.Progressing++
+		case health.Missing:
+			t.Missing++
+		}
+	}
+	return t
+}
+
+// ago renders t relative to now ("3 min ago", "in 2 h"), falling back to a
+// date past a week. Live updates re-render it, so it stays current.
+func ago(v interface{}) string {
+	t := toTime(v)
+	if t.IsZero() {
+		return "never"
+	}
+	d := time.Since(t)
+	suffix, prefix := " ago", ""
+	if d < 0 {
+		d, suffix, prefix = -d, "", "in "
+	}
+	switch {
+	case d < 10*time.Second && suffix != "":
+		return "just now"
+	case d < time.Minute:
+		return fmt.Sprintf("%s%d s%s", prefix, int(d.Seconds()), suffix)
+	case d < time.Hour:
+		return fmt.Sprintf("%s%d min%s", prefix, int(d.Minutes()), suffix)
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%s%d h%s", prefix, int(d.Hours()), suffix)
+	case d < 7*24*time.Hour:
+		return fmt.Sprintf("%s%d d%s", prefix, int(d.Hours()/24), suffix)
+	}
+	return t.Local().Format("Jan 2, 2006 15:04")
+}
+
+// toTime accepts the time.Time and optional *time.Time fields templates pass.
+func toTime(v interface{}) time.Time {
+	switch x := v.(type) {
+	case time.Time:
+		return x
+	case *time.Time:
+		if x != nil {
+			return *x
+		}
+	}
+	return time.Time{}
+}
 
 func (s *Server) Register(mux *http.ServeMux) {
 	static, _ := fs.Sub(files, "static")
