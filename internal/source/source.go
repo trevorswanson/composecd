@@ -21,6 +21,7 @@ import (
 	"sigs.k8s.io/yaml"
 
 	"github.com/trevorswanson/composecd/internal/config"
+	"github.com/trevorswanson/composecd/internal/infisical"
 	"github.com/trevorswanson/composecd/internal/masking"
 	"github.com/trevorswanson/composecd/internal/sops"
 )
@@ -69,7 +70,9 @@ var depLocks sync.Map
 // valuesFrom, checkout and revision are ignored. If the chart has a Chart.lock,
 // its dependencies are vendored into the checkout first. When a values file
 // can't be decrypted, the error comes with a Prepared holding only SecretPaths.
-func Prepare(ctx context.Context, app *config.Application, host *config.Host, checkout, revision string, reg *registry.Client, ageKeyFile string) (*Prepared, error) {
+// inf reads the app's source.infisical secrets; it is nil when the server has
+// no infisical configuration.
+func Prepare(ctx context.Context, app *config.Application, host *config.Host, checkout, revision string, reg *registry.Client, ageKeyFile string, inf ...*infisical.Client) (*Prepared, error) {
 	s := app.Spec.Source
 	p := &Prepared{Env: mergeEnv(host.Spec.Env, s.Env)}
 	vals := map[string]interface{}{}
@@ -146,6 +149,25 @@ func Prepare(ctx context.Context, app *config.Application, host *config.Host, ch
 	if decryptErr != nil {
 		return &Prepared{SecretPaths: p.SecretPaths}, decryptErr
 	}
+	if is := s.Infisical; is != nil {
+		var c *infisical.Client
+		if len(inf) > 0 {
+			c = inf[0]
+		}
+		if c == nil {
+			return nil, errors.New("source.infisical requires an infisical section in composecd.yaml")
+		}
+		secrets, err := c.Secrets(ctx, is)
+		if err != nil {
+			return nil, err
+		}
+		cur, paths := nest(is.Into, secrets)
+		p.SecretPaths = append(p.SecretPaths, paths...)
+		for _, x := range secrets {
+			p.Secrets = append(p.Secrets, masking.Leaves(x.Value)...)
+		}
+		vals = values.Merge(vals, cur)
+	}
 	if !s.IsOCI() {
 		if err := vendor(ctx, dir, reg); err != nil {
 			return nil, err
@@ -157,6 +179,28 @@ func Prepare(ctx context.Context, app *config.Application, host *config.Host, ch
 	}
 	p.Values = values.Merge(vals, inline)
 	return p, nil
+}
+
+// nest places secrets under the dotted path into, and returns the value paths
+// they occupy. A later secret with the same key replaces an earlier one.
+func nest(into string, secrets []infisical.Secret) (map[string]interface{}, [][]string) {
+	var prefix []string
+	if into != "" {
+		prefix = strings.Split(into, ".")
+	}
+	leaf := map[string]interface{}{}
+	var paths [][]string
+	for _, x := range secrets {
+		if _, dup := leaf[x.Key]; !dup {
+			paths = append(paths, append(append([]string{}, prefix...), x.Key))
+		}
+		leaf[x.Key] = x.Value
+	}
+	var out interface{} = leaf
+	for i := len(prefix) - 1; i >= 0; i-- {
+		out = map[string]interface{}{prefix[i]: out}
+	}
+	return out.(map[string]interface{}), paths
 }
 
 // inside resolves symlinks in p and checks that it stays under root, so a

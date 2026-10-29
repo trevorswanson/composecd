@@ -20,6 +20,7 @@ import (
 	"github.com/trevorswanson/composecd/internal/gitcache"
 	"github.com/trevorswanson/composecd/internal/health"
 	"github.com/trevorswanson/composecd/internal/hosts"
+	"github.com/trevorswanson/composecd/internal/infisical"
 	"github.com/trevorswanson/composecd/internal/masking"
 	"github.com/trevorswanson/composecd/internal/store"
 	"github.com/trevorswanson/composecd/internal/windows"
@@ -54,6 +55,9 @@ type Controller struct {
 	secretValues map[string]map[string]bool
 	secretPaths  map[string]map[string][]string
 	maskers      map[string]*masking.Masker
+	infisicalMu  sync.Mutex
+	infisicalFor *config.Infisical
+	infisicalC   *infisical.Client
 
 	// ctx is the Run context; operations started from the API use it.
 	ctx       context.Context
@@ -98,6 +102,21 @@ type appState struct {
 	// heals counts self-heals in a row, for backoff.
 	heals    int
 	nextHeal time.Time
+}
+
+// infisicalClient returns the shared client for the bootstrap's infisical
+// section, so the Universal Auth session is reused across reconciles. It is nil
+// when the section is absent.
+func (c *Controller) infisicalClient() *infisical.Client {
+	c.infisicalMu.Lock()
+	defer c.infisicalMu.Unlock()
+	if c.Boot == nil || c.Boot.Infisical == nil {
+		return nil
+	}
+	if c.infisicalFor != c.Boot.Infisical {
+		c.infisicalFor, c.infisicalC = c.Boot.Infisical, infisical.New(c.Boot.Infisical)
+	}
+	return c.infisicalC
 }
 
 // New returns a Controller. Call Run to start reconciling.
