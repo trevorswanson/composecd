@@ -250,7 +250,7 @@ spec:
 - Plain project config paths are read from container labels because the pinned Runner.Ls omits that field.
 - **Listing.** Per host, list composetpl releases that composecd doesn't manage, and compose projects that
   aren't composetpl releases at all. This uses `Store().List()` and `compose.Runner.Ls`.
-  - Exposed as `GET /api/v1/hosts/{name}/unmanaged`, `composecd host unmanaged NAME`, and on the UI hosts page.
+  - Exposed as `GET /api/v1/hosts/{name}/unmanaged`, `composecd host unmanaged NAME`, and on each host's UI page (`/hosts/NAME`), which serves a cached scan and rescans in the background.
   - `GET /api/v1/hosts/{name}/adopt/{release}` returns YAML and warnings as JSON for admins; the UI renders the same preview.
 - **Adopting a composetpl release.**
   - `composecd adopt HOST RELEASE` (and **Adopt** in the UI) prints an `Application` YAML.

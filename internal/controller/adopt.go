@@ -9,11 +9,13 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/trevorswanson/composetpl/pkg/registry"
 	"github.com/trevorswanson/composetpl/pkg/release"
 	"github.com/trevorswanson/composetpl/pkg/storage"
+	"golang.org/x/sync/errgroup"
 	"sigs.k8s.io/yaml"
 
 	"github.com/trevorswanson/composecd/internal/config"
@@ -113,30 +115,42 @@ func (c *Controller) Unmanaged(ctx context.Context, host string) (*Unmanaged, er
 	if err != nil {
 		return nil, fmt.Errorf("listing Compose projects on %s: %w", host, err)
 	}
+	// Over SSH each ps is a round trip, so read a few projects at once.
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(4)
+	var mu sync.Mutex
 	for _, p := range projects {
 		if names[p.Name] {
 			continue
 		}
-		// The pinned composetpl Runner.Ls omits ConfigFiles. Compose also records
-		// them on container labels, which PS exposes for running and stopped projects.
-		containers, err := cfg.Compose.PS(ctx, p.Name)
-		if err != nil {
-			return nil, fmt.Errorf("reading project %s on %s: %w", p.Name, host, err)
-		}
-		files := map[string]bool{}
-		for _, container := range containers {
-			for _, f := range strings.Split(container.Labels["com.docker.compose.project.config_files"], ",") {
-				if f = strings.TrimSpace(f); f != "" {
-					files[f] = true
+		g.Go(func() error {
+			// The pinned composetpl Runner.Ls omits ConfigFiles. Compose also records
+			// them on container labels, which PS exposes for running and stopped projects.
+			containers, err := cfg.Compose.PS(gctx, p.Name)
+			if err != nil {
+				return fmt.Errorf("reading project %s on %s: %w", p.Name, host, err)
+			}
+			files := map[string]bool{}
+			for _, container := range containers {
+				for _, f := range strings.Split(container.Labels["com.docker.compose.project.config_files"], ",") {
+					if f = strings.TrimSpace(f); f != "" {
+						files[f] = true
+					}
 				}
 			}
-		}
-		paths := make([]string, 0, len(files))
-		for f := range files {
-			paths = append(paths, f)
-		}
-		sort.Strings(paths)
-		out.Projects = append(out.Projects, UnmanagedProject{Name: p.Name, Status: p.Status, ConfigFiles: paths, Hint: "Convert to a chart with composetpl create; automatic conversion is not supported."})
+			paths := make([]string, 0, len(files))
+			for f := range files {
+				paths = append(paths, f)
+			}
+			sort.Strings(paths)
+			mu.Lock()
+			defer mu.Unlock()
+			out.Projects = append(out.Projects, UnmanagedProject{Name: p.Name, Status: p.Status, ConfigFiles: paths, Hint: "Convert to a chart with composetpl create; automatic conversion is not supported."})
+			return nil
+		})
+	}
+	if err := g.Wait(); err != nil {
+		return nil, err
 	}
 	sort.Slice(out.Releases, func(i, j int) bool { return out.Releases[i].Name < out.Releases[j].Name })
 	sort.Slice(out.Projects, func(i, j int) bool { return out.Projects[i].Name < out.Projects[j].Name })

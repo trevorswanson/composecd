@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -47,7 +48,7 @@ func TestWebPagesAndActions(t *testing.T) {
 	b.login("", "secret")
 	cases := map[string]string{
 		"/": "Applications", "/apps?host=nas&sync=Synced&health=Healthy": "<strong>media</strong>",
-		"/apps?label=missing": "No applications match", "/hosts": "Start maintenance", "/windows": "nightly",
+		"/apps?label=missing": "No applications match", "/hosts": "Start maintenance", "/hosts/nas": "composetpl releases", "/windows": "nightly",
 		"/operations": "operator", "/settings": "Create token",
 		"/apps/media": "Desired revision", "/apps/media?tab=containers": "media-web-1",
 		"/apps/media?tab=diff": "services/web", "/apps/media?tab=history": "Roll back",
@@ -79,8 +80,22 @@ func TestWebPagesAndActions(t *testing.T) {
 			t.Errorf("%s: %d %s", path, code, body)
 		}
 	}
-	if code, _, _ := b.do("GET", "/apps/absent", "", nil); code != 404 {
-		t.Errorf("unknown app: %d", code)
+	for path, want := range map[string]string{"/ui/hosts/nas/rescan": "Rescan started", "/ui/root/refresh": "Fetching the root repository"} {
+		code, _, body := b.do("POST", path, "", map[string]string{"Content-Type": "application/x-www-form-urlencoded", auth.CSRFHeader: b.csrf, "HX-Request": "true"})
+		if code != 200 || !strings.Contains(body, want) {
+			t.Errorf("%s: %d %s", path, code, body)
+		}
+	}
+	if !slices.Contains(st.calls, "refresh all") {
+		t.Errorf("root refresh not requested: %v", st.calls)
+	}
+	for _, path := range []string{"/apps/absent", "/hosts/absent"} {
+		if code, _, _ := b.do("GET", path, "", nil); code != 404 {
+			t.Errorf("%s: %d", path, code)
+		}
+	}
+	if code, _, _ := b.do("POST", "/ui/hosts/absent/rescan", "", map[string]string{auth.CSRFHeader: b.csrf, "HX-Request": "true"}); code != 404 {
+		t.Errorf("rescan unknown host: %d", code)
 	}
 	if err := a.AddUser("guest", auth.RoleReadonly, "guest password!"); err != nil {
 		t.Fatal(err)
@@ -332,20 +347,26 @@ func (s *countingDiscovery) Unmanaged(ctx context.Context, host string) (*contro
 	return s.webStub.Unmanaged(ctx, host)
 }
 
-// Live hosts-page updates reuse recent discovery instead of listing every
-// host's releases and projects on each controller change.
+// Host pages serve discovery from a cache that background scans refresh, so
+// neither page loads nor live updates wait on every host's releases and projects.
 func TestHostsEventsReuseDiscovery(t *testing.T) {
 	a := newAuthn(t, "secret")
 	st := &countingDiscovery{webStub: webStub{updates: make(chan controller.Update, 1)}}
 	srv := httptest.NewServer(New(st, Options{Auth: a}))
 	defer srv.Close()
-	if code, body := do(t, srv, "GET", "/hosts", "secret", ""); code != 200 || !strings.Contains(body, "external") {
+	// The first load waits briefly for a quick host's first scan.
+	if code, body := do(t, srv, "GET", "/hosts/nas", "secret", ""); code != 200 || !strings.Contains(body, "external") {
 		t.Fatal(code, body)
 	}
-	loads := st.calls.Load()
+	if code, body := do(t, srv, "GET", "/hosts", "secret", ""); code != 200 || !strings.Contains(body, "1 release · 1 Compose project") {
+		t.Fatal(code, body)
+	}
+	if got := st.calls.Load(); got != 1 {
+		t.Fatalf("page loads ran discovery %d times", got)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	req, _ := http.NewRequestWithContext(ctx, "GET", srv.URL+"/events?page=/hosts", nil)
+	req, _ := http.NewRequestWithContext(ctx, "GET", srv.URL+"/events?page=/hosts/nas", nil)
 	req.Header.Set("Authorization", "Bearer secret")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -354,23 +375,30 @@ func TestHostsEventsReuseDiscovery(t *testing.T) {
 	defer resp.Body.Close()
 	sc := bufio.NewScanner(resp.Body)
 	frames := 0
-	for frames < 3 && sc.Scan() {
-		if sc.Text() == "" {
-			frames++
-			if frames < 3 {
-				st.updates <- controller.Update{Kind: "app", Name: "media"}
+	next := func() {
+		for sc.Scan() {
+			if sc.Text() == "" {
+				frames++
+				return
 			}
 		}
+		t.Fatal("missing frame", sc.Err())
 	}
-	if frames != 3 {
-		t.Fatal("missing frames", sc.Err())
+	next()
+	st.updates <- controller.Update{Kind: "app", Name: "media"}
+	next()
+	if got := st.calls.Load(); got != 1 {
+		t.Fatalf("live updates ran discovery %d more times", got-1)
 	}
-	if got := st.calls.Load(); got != loads {
-		t.Fatalf("live updates ran discovery %d more times", got-loads)
+	// A rescan runs in the background and wakes the open page.
+	if code, body := do(t, srv, "POST", "/ui/hosts/nas/rescan", "secret", ""); code != 200 {
+		t.Fatal(code, body)
 	}
-	// A page load always runs it again.
-	do(t, srv, "GET", "/hosts", "secret", "")
-	if st.calls.Load() == loads {
-		t.Fatal("page load reused cached discovery")
+	next()
+	for st.calls.Load() < 2 && ctx.Err() == nil {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := st.calls.Load(); got != 2 {
+		t.Fatalf("rescan ran discovery %d times", got-1)
 	}
 }

@@ -1,20 +1,43 @@
-{{define "hosts"}}<div class="page-head"><div class="title"><h1>Hosts</h1><p class="subtitle">The Docker engines composecd deploys to, and what else runs on them.</p></div></div>
-<div class="card"><div class="table-wrap"><table class="wide"><thead><tr><th scope="col">Host</th><th scope="col">Engine</th><th scope="col">State</th><th scope="col">Versions</th><th scope="col" class="num">Apps</th>{{if .Admin}}<th scope="col"><span class="sr-only">Maintenance</span></th>{{end}}</tr></thead><tbody>
-{{range .Hosts}}<tr><td><div class="cell"><strong>{{.Name}}</strong>{{if .Retired}}<span class="reason">Removed from Git; kept until its releases are pruned</span>{{end}}</div></td>
-<td><code>{{if .URL}}{{.URL}}{{else if .Context}}context {{.Context}}{{else}}default engine{{end}}</code></td>
+{{define "hosts"}}<div class="page-head"><div class="title"><div class="title-row"><h1>Hosts</h1>{{template "live" .}}</div><p class="subtitle">The Docker engines composecd deploys to, and what else runs on them.</p></div></div>
+<div class="card"><div class="table-wrap"><table class="wide"><thead><tr><th scope="col">Host</th><th scope="col">Engine</th><th scope="col">State</th><th scope="col">Versions</th><th scope="col" class="num">Apps</th><th scope="col">Unmanaged</th>{{if .Admin}}<th scope="col"><span class="sr-only">Maintenance</span></th>{{end}}</tr></thead><tbody>
+{{range .Hosts}}<tr><td><div class="cell">{{if .Retired}}<strong>{{.Name}}</strong><span class="reason">Removed from Git; kept until its releases are pruned</span>{{else}}<a class="name" href="/hosts/{{path .Name}}"><strong>{{.Name}}</strong></a>{{end}}</div></td>
+<td><code>{{template "engine" .}}</code></td>
 <td><div class="cell">{{template "pill" .State}}{{if .Maintenance}}<span class="pill maintenance">Maintenance</span>{{with .MaintenanceReason}}<span class="reason">{{.}}</span>{{end}}{{end}}{{with .Error}}<span class="error">{{.}}</span>{{end}}{{with .Orphans}}<span class="reason">Orphaned releases: {{range .}}<code>{{.}}</code> {{end}}</span>{{end}}</div></td>
-<td>{{if .DockerVersion}}Docker {{.DockerVersion}} · Compose {{.ComposeVersion}}{{else}}<span class="muted">Unknown</span>{{end}}</td><td class="num">{{.Apps}}</td>
-{{if $.Admin}}<td class="act">{{if not .Retired}}<form method="post" action="/ui/hosts/{{path .Name}}/maintenance" hx-post="/ui/hosts/{{path .Name}}/maintenance" hx-target="#action-result">{{template "csrf" $}}<input type="hidden" name="enabled" value="{{if .Maintenance}}false{{else}}true{{end}}"><button type="submit" class="btn btn-sm">{{if .Maintenance}}End maintenance{{else}}Start maintenance{{end}}</button></form>{{end}}</td>{{end}}</tr>
-{{else}}<tr><td colspan="6" class="empty-row">No hosts defined. Add a Host object to the root repository.</td></tr>{{end}}</tbody></table></div></div>
-{{range .Hosts}}{{if not .Retired}}{{$host := .Name}}
-<section class="card"><div class="card-head"><h2>Unmanaged on {{.Name}}</h2><span class="muted">running here, not in Git</span></div>
-{{with index $.DiscoveryErrors .Name}}<div class="card-body"><div class="callout bad" role="alert"><div><strong>Discovery failed</strong><code>{{.}}</code></div></div></div>{{end}}
-{{with index $.Unmanaged .Name}}
-<h3 class="sr-only">composetpl releases</h3><div class="table-wrap"><table><thead><tr><th scope="col">composetpl release</th><th scope="col">Status</th><th scope="col">Chart</th><th scope="col"><span class="sr-only">Adoption</span></th></tr></thead><tbody>
-{{range .Releases}}<tr><td><div class="name-row"><strong>{{.Name}}</strong>{{if .Orphaned}}<span class="pill orphaned">Orphaned</span>{{end}}</div></td><td>{{.Status}} · revision {{.Revision}}</td><td><div class="cell"><code>{{.ChartRef}}</code>{{with .ProjectDir}}<span class="reason">{{.}}</span>{{end}}</div></td><td class="act">{{if .Blocked}}<span class="reason">{{.Blocked}}</span>{{else if $.Admin}}<a class="btn btn-sm" href="/hosts/{{path $host}}/adopt/{{path .Name}}">Adopt</a>{{else}}<span class="reason">An admin can export YAML</span>{{end}}</td></tr>{{else}}<tr><td colspan="4" class="empty-row">No unmanaged composetpl releases.</td></tr>{{end}}</tbody></table></div>
-<h3 class="sr-only">Plain Compose projects</h3><div class="table-wrap"><table><thead><tr><th scope="col">Compose project</th><th scope="col">Status</th><th scope="col">Config files</th><th scope="col">Next step</th></tr></thead><tbody>{{range .Projects}}<tr><td><strong>{{.Name}}</strong></td><td>{{.Status}}</td><td><div class="cell">{{range .ConfigFiles}}<code>{{.}}</code>{{else}}<span class="muted">Unavailable</span>{{end}}</div></td><td>{{.Hint}}</td></tr>{{else}}<tr><td colspan="4" class="empty-row">No plain Compose projects.</td></tr>{{end}}</tbody></table></div>{{end}}</section>{{end}}{{end}}{{end}}
+<td>{{if .DockerVersion}}Docker {{.DockerVersion}} · Compose {{.ComposeVersion}}{{else}}<span class="muted">Unknown</span>{{end}}</td><td class="num"><a href="/apps?host={{.Name}}">{{.Apps}}</a></td>
+<td>{{if .Retired}}<span class="muted">—</span>{{else}}{{with index $.Inventory .Name}}{{template "inventory-summary" .}}{{end}}{{end}}</td>
+{{if $.Admin}}<td class="act">{{if not .Retired}}{{template "maintenance" (pair $ .)}}{{end}}</td>{{end}}</tr>
+{{else}}<tr><td colspan="7" class="empty-row">No hosts defined. Add a Host object to the root repository.</td></tr>{{end}}</tbody></table></div></div>{{end}}
 
-{{define "windows"}}<div class="page-head"><div class="title"><h1>Sync windows</h1><p class="subtitle">Schedules that allow or deny automatic syncs, self-heal and prune.</p></div></div>
+{{define "engine"}}{{if .URL}}{{.URL}}{{else if .Context}}context {{.Context}}{{else}}default engine{{end}}{{end}}
+
+{{define "maintenance"}}{{$d := index . 0}}{{$h := index . 1}}<form method="post" action="/ui/hosts/{{path $h.Name}}/maintenance" hx-post="/ui/hosts/{{path $h.Name}}/maintenance" hx-target="#action-result">{{template "csrf" $d}}<input type="hidden" name="enabled" value="{{if $h.Maintenance}}false{{else}}true{{end}}"><button type="submit" class="btn btn-sm">{{if $h.Maintenance}}End maintenance{{else}}Start maintenance{{end}}</button></form>{{end}}
+
+{{define "inventory-summary"}}{{if .Unmanaged}}<div class="cell">{{if or .Releases .Projects}}<span>{{with len .Releases}}{{.}} release{{if ne . 1}}s{{end}}{{end}}{{if and .Releases .Projects}} · {{end}}{{with len .Projects}}{{.}} Compose project{{if ne . 1}}s{{end}}{{end}}</span>{{else}}<span class="muted">None</span>{{end}}{{template "scanned" .}}</div>{{else if .Error}}<div class="cell"><span class="error">Discovery failed</span>{{template "scanned" .}}</div>{{else}}<span class="muted scanning">Scanning…</span>{{end}}{{end}}
+
+{{define "scanned"}}<span class="reason">{{if .Scanning}}Rescanning…{{else}}scanned <time datetime="{{iso .At}}" title="{{iso .At}}">{{ago .At}}</time>{{end}}</span>{{end}}
+
+{{define "host"}}{{$inv := index .Inventory .Name}}<nav class="crumbs" aria-label="Breadcrumb"><a href="/hosts">Hosts</a><span aria-hidden="true">/</span><span aria-current="page">{{.Name}}</span></nav>
+<div class="page-head"><div class="title">
+<div class="title-row"><h1>{{.Host.Name}}</h1>{{template "pill" .Host.State}}{{if .Host.Maintenance}}<span class="pill maintenance">Maintenance</span>{{end}}{{if .Host.Retired}}<span class="tag">retired</span>{{end}}{{template "live" .}}</div>
+<div class="meta"><span class="chip">{{template "engine" .Host}}</span>{{if .Host.DockerVersion}}<span class="chip">Docker {{.Host.DockerVersion}} · Compose {{.Host.ComposeVersion}}</span>{{end}}<a class="chip i-apps" href="/apps?host={{.Host.Name}}">{{.Host.Apps}} app{{if ne .Host.Apps 1}}s{{end}}</a></div>
+</div>
+{{if and .Admin (not .Host.Retired)}}<div class="actions">
+<form method="post" action="/ui/hosts/{{path .Name}}/rescan" hx-post="/ui/hosts/{{path .Name}}/rescan" hx-target="#action-result">{{template "csrf" .}}<button type="submit" class="btn i-refresh" {{if $inv.Scanning}}disabled{{end}}>{{if $inv.Scanning}}Scanning…{{else}}Rescan{{end}}</button></form>
+{{template "maintenance" (pair . .Host)}}
+</div>{{end}}</div>
+{{with .Host.Error}}<div class="callout bad" role="alert"><div><strong>Couldn't reach {{$.Name}}</strong><code>{{.}}</code></div></div>{{end}}
+{{if .Host.Maintenance}}<div class="callout"><div><strong>In maintenance</strong><p>{{.Host.MaintenanceReason}}. Automatic syncs, self-heal and prune skip this host; manual operations still work.</p></div></div>{{end}}
+{{if .Host.Retired}}<div class="empty"><strong>Removed from Git</strong><span>This host is kept until its releases are pruned; discovery doesn't run on it.</span></div>
+{{else}}{{with $inv}}{{with .Error}}<div class="callout bad" role="alert"><div><strong>Discovery failed</strong><code>{{.}}</code></div></div>{{end}}
+{{if .Unmanaged}}<p class="summary">Running here, not in Git · {{template "scanned" .}}</p>
+<section class="card"><div class="card-head"><h2>composetpl releases<span class="count">{{len .Releases}}</span></h2><span class="muted">adopt one to export its Application YAML</span></div>
+<div class="table-wrap"><table><thead><tr><th scope="col">Release</th><th scope="col">Status</th><th scope="col">Chart</th><th scope="col"><span class="sr-only">Adoption</span></th></tr></thead><tbody>
+{{range .Releases}}<tr><td><div class="name-row"><strong>{{.Name}}</strong>{{if .Orphaned}}<span class="pill orphaned">Orphaned</span>{{end}}</div></td><td>{{.Status}} · revision {{.Revision}}</td><td><div class="cell"><code>{{.ChartRef}}</code>{{with .ProjectDir}}<span class="reason">{{.}}</span>{{end}}</div></td><td class="act">{{if .Blocked}}<span class="reason">{{.Blocked}}</span>{{else if $.Admin}}<a class="btn btn-sm" href="/hosts/{{path $.Name}}/adopt/{{path .Name}}">Adopt</a>{{else}}<span class="reason">An admin can export YAML</span>{{end}}</td></tr>{{else}}<tr><td colspan="4" class="empty-row">No unmanaged composetpl releases.</td></tr>{{end}}</tbody></table></div></section>
+<section class="card"><div class="card-head"><h2>Compose projects<span class="count">{{len .Projects}}</span></h2><span class="muted">convert one to a chart with <code>composetpl create</code></span></div>
+<div class="table-wrap"><table class="compact"><thead><tr><th scope="col">Project</th><th scope="col">Status</th><th scope="col">Config files</th></tr></thead><tbody>{{range .Projects}}<tr><td><strong>{{.Name}}</strong></td><td><span class="pill plain c-{{state .Status}}">{{.Status}}</span></td><td><div class="cell">{{range .ConfigFiles}}<code>{{.}}</code>{{else}}<span class="muted">Unavailable</span>{{end}}</div></td></tr>{{else}}<tr><td colspan="3" class="empty-row">No plain Compose projects.</td></tr>{{end}}</tbody></table></div></section>
+{{else if not .Error}}<div class="empty"><strong>Scanning {{$.Name}}…</strong><span>Listing releases and Compose projects. This page fills in when the scan finishes.</span></div>{{end}}{{end}}{{end}}{{end}}
+
+{{define "windows"}}<div class="page-head"><div class="title"><div class="title-row"><h1>Sync windows</h1>{{template "live" .}}</div><p class="subtitle">Schedules that allow or deny automatic syncs, self-heal and prune.</p></div></div>
 <div class="card"><div class="table-wrap"><table class="wide"><thead><tr><th scope="col">Window</th><th scope="col">State</th><th scope="col">Schedule</th><th scope="col">Next change</th><th scope="col">Applications</th></tr></thead><tbody>{{range .Windows}}<tr>
 <td><div class="name-row"><strong>{{.Name}}</strong><span class="tag{{if eq .Kind "deny"}} changed{{end}}">{{.Kind}}</span></div></td>
 <td>{{if .Open}}<span class="pill open">In effect</span>{{else}}<span class="pill closed">Not in effect</span>{{end}}</td>
