@@ -99,6 +99,14 @@ func (s *stub) Rollback(name string, revision int, user string) (*store.Operatio
 	return &store.Operation{ID: 8, App: name}, nil
 }
 
+func (s *stub) DeleteRelease(host, name, user string) (*store.Operation, error) {
+	if host != "nas" {
+		return nil, fmt.Errorf("host %q: %w", host, controller.ErrNotFound)
+	}
+	s.calls = append(s.calls, fmt.Sprintf("delete-release %s %s %s", host, name, user))
+	return &store.Operation{ID: 9, App: name, Kind: store.KindPrune}, nil
+}
+
 func (s *stub) Pause(name, reason string) error {
 	s.calls = append(s.calls, "pause "+name+" "+reason)
 	return nil
@@ -475,7 +483,10 @@ func TestPhase2Endpoints(t *testing.T) {
 	if status, _ := do(t, srv, "POST", "/api/v1/hosts/pi/maintenance", "secret", `{"enabled": true}`); status != 404 {
 		t.Errorf("unknown host: %d", status)
 	}
-	if strings.Join(st.calls, ";") != "maintenance nas true disks (by admin)" {
+	if status, body := do(t, srv, "DELETE", "/api/v1/hosts/nas/releases/old", "secret", ""); status != 202 || !strings.Contains(body, `"kind": "prune"`) {
+		t.Errorf("delete release: %d %s", status, body)
+	}
+	if strings.Join(st.calls, ";") != "maintenance nas true disks (by admin);delete-release nas old admin" {
 		t.Errorf("calls = %v", st.calls)
 	}
 

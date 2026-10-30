@@ -195,7 +195,8 @@ backs off from 5 seconds up to 5 minutes between repairs.
 **Prune** is recorded on the release when it's synced, so composecd still knows after the Application is
 gone. Pruning uninstalls the release with `composetpl uninstall --keep-history`, so named volumes and history
 stay. It never happens when the root can't be read, or when the root suddenly defines no applications at all.
-Releases that are left behind and not pruned show as orphaned releases on their host.
+Releases that are left behind and not pruned show as orphaned releases on their host, where an admin can
+delete one by hand: the same uninstall, recorded as a manual prune operation.
 
 ### SyncWindow
 
@@ -281,6 +282,7 @@ Every `/api/v1` endpoint needs `Authorization: Bearer <token>`, or a browser ses
 | `GET /api/v1/hosts`, `POST /api/v1/hosts/{name}/maintenance` (`{"enabled": true, "reason": "..."}`) | |
 | `GET /api/v1/hosts/{name}/unmanaged` | Release metadata and plain Compose config paths (readonly) |
 | `GET /api/v1/hosts/{name}/adopt/{release}` | Application YAML and warnings as JSON (admin; contains plaintext user values) |
+| `DELETE /api/v1/hosts/{name}/releases/{release}` | Uninstall an orphaned release, keeping its history and named volumes (admin; returns the operation) |
 | `GET /api/v1/windows`, `GET /api/v1/root`, `POST /api/v1/refresh`, `GET /api/v1/version` | |
 | `GET /api/v1/me` | Who you are, your role, and how you signed in |
 | `GET/POST /api/v1/tokens` (`{"name", "role"}`), `DELETE /api/v1/tokens/{name}` | API tokens (admin) |
@@ -385,12 +387,12 @@ binary; there is no CDN or Node build step.
   containers, each marked Synced, OutOfSync, Missing or Prune with its health (click one for its details, its
   live `docker inspect` state with engine bookkeeping folded away, a live-to-desired diff, and its desired and
   deployed YAML); containers and live log tails; diffs, either of the compose file against the deployed
-  release or of each object's live state against Git; release history with rollback; and operations with
+  release (side by side, compact or every resource in full) or of each object's live state against Git; release history with rollback; and operations with
   their output. **Details** shows the source, automation policy and retries.
   Admins can sync, pause, resume and refresh; a running sync disables the button and streams its output.
 - **ApplicationSets** (`/applicationsets`): generated apps, counts and expansion/validation errors.
 - **Hosts** (`/hosts`): connectivity, Docker/Compose versions, orphaned releases and admin maintenance toggles.
-  Lists unmanaged composetpl releases and plain Compose projects with config paths. Admins can use **Adopt** to preview Application YAML.
+  Lists unmanaged composetpl releases and plain Compose projects with config paths. Admins can use **Adopt** to preview Application YAML, or **Delete** an orphaned release.
 - **Sync windows** (`/windows`): open/closed state, next change, and matching applications.
 - **Operations** (`/operations`): the latest 50 operations across applications, including who acted and output.
 - **Settings** (`/settings`): your identity; admins can create/revoke tokens and add/delete users or change
