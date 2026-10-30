@@ -789,7 +789,7 @@ func longPort(p interface{}) []interface{} {
 		if v, ok := m["host_ip"]; ok {
 			out["host_ip"] = fmt.Sprint(v)
 		}
-		return []interface{}{out}
+		return []interface{}{anyHost(out)}
 	}
 	s := fmt.Sprint(p)
 	spec, proto, ok := strings.Cut(s, "/")
@@ -809,7 +809,16 @@ func longPort(p interface{}) []interface{} {
 	if hp, _ := out["published"].(string); hp == "" {
 		delete(out, "published")
 	}
-	return []interface{}{out}
+	return []interface{}{anyHost(out)}
+}
+
+// anyHost drops a host_ip that binds every address, as the live side does:
+// "0.0.0.0:80:80" and "80:80" publish the same port.
+func anyHost(p map[string]interface{}) map[string]interface{} {
+	if ip, _ := p["host_ip"].(string); ip == "" || ip == "0.0.0.0" || ip == "::" {
+		delete(p, "host_ip")
+	}
+	return p
 }
 
 // longVolume is compose's long syntax for a short volume ("data:/data:ro"),

@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -171,6 +172,25 @@ func TestPrune(t *testing.T) {
 	e.refresh()
 	if ops, _ := e.c.Store.Operations("web", 5); len(ops) != 2 {
 		t.Errorf("web operations = %d, want sync and one prune", len(ops))
+	}
+
+	// An orphan can be deleted by hand; an app still in Git can't.
+	if _, err := e.c.DeleteRelease("nas", "other", "admin"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("deleting an app in Git: %v", err)
+	}
+	op, err := e.c.DeleteRelease("nas", "keep", "admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.c.Wait()
+	if _, ok := e.fake().Running["keep"]; ok {
+		t.Error("keep was not deleted")
+	}
+	if got, _ := e.c.Store.Operation(op.ID); got.Phase != store.PhaseSucceeded || got.Trigger != store.TriggerManual || got.User != "admin" {
+		t.Errorf("delete operation = %+v", got)
+	}
+	if h := e.c.HostStatuses()[0]; len(h.Orphans) != 0 {
+		t.Errorf("orphans after delete = %v", h.Orphans)
 	}
 }
 

@@ -34,6 +34,9 @@ type AppStatus struct {
 	// Origin is where the Application is defined in the root (file:line).
 	Origin    string `json:"origin,omitempty"`
 	Automated bool   `json:"automated"`
+	// Self is true for the Application that runs composecd itself, which
+	// composecd doesn't sync, prune or self-heal.
+	Self bool `json:"self,omitempty"`
 	// Paused stops automatic sync, e.g. after a rollback.
 	Paused       bool         `json:"paused,omitempty"`
 	PausedReason string       `json:"pausedReason,omitempty"`
@@ -142,6 +145,8 @@ type HostStatus struct {
 	// Orphans are releases composecd deployed whose Application is no longer in
 	// Git for this host, and that weren't pruned (prune off, or blocked).
 	Orphans []string `json:"orphans,omitempty"`
+	// Self is the release composecd itself runs as on this host, if any.
+	Self string `json:"self,omitempty"`
 }
 
 // Event is something notifications report.

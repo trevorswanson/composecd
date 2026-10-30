@@ -208,8 +208,12 @@ func (c *Controller) Sync(name, user string) (*store.Operation, error) {
 	return op, nil
 }
 
-// manualAllowed checks the sync windows for a manual operation on app.
+// manualAllowed checks the sync windows for a manual operation on app, and
+// refuses one on composecd itself.
 func (c *Controller) manualAllowed(app *config.Application) error {
+	if c.isSelfApp(app) {
+		return fmt.Errorf("%w: %s", ErrSelf, selfBlocked)
+	}
 	c.mu.RLock()
 	ws := c.windows
 	c.mu.RUnlock()

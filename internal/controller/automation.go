@@ -149,6 +149,9 @@ func retryStatus(r *config.Retry, s *appState) *RetryStatus {
 
 // gate returns why automation may not run kind for app now, or "".
 func (c *Controller) gate(app *config.Application, kind string) string {
+	if c.isSelfApp(app) {
+		return selfBlocked
+	}
 	host := app.Spec.Destination.Host
 	if hs, err := c.Store.HostState(host); err == nil && hs.Maintenance {
 		return fmt.Sprintf("host %s is in maintenance (%s)", host, hs.MaintenanceReason)

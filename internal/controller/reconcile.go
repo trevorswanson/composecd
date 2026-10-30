@@ -61,6 +61,9 @@ func (c *Controller) reconcile(ctx context.Context, app *config.Application, fet
 		c.automate(ctx, app, st, p, false)
 	}
 	p.done()
+	if msg := c.selfConflict(app); msg != "" {
+		st.Error = strings.TrimPrefix(st.Error+"; "+msg, "; ")
+	}
 	c.setStatus(st)
 }
 

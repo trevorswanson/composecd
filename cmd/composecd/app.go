@@ -46,6 +46,8 @@ func newAppListCmd(cf *clientFlags) *cobra.Command {
 				for _, a := range apps {
 					auto := "-"
 					switch {
+					case a.Self:
+						auto = "self"
 					case a.Automated && a.Paused:
 						auto = "paused"
 					case a.Automated:
@@ -121,6 +123,9 @@ func printApp(w io.Writer, a *controller.AppStatus) {
 	}
 	if a.Paused {
 		auto += " (paused: " + a.PausedReason + ")"
+	}
+	if a.Self {
+		auto += " (composecd itself: not synced by composecd)"
 	}
 	fmt.Fprintf(w, "Sync:       %s, %s\n", a.Sync.Status, auto)
 	if a.Sync.ChartRef != "" {

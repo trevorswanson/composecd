@@ -45,6 +45,9 @@ type Options struct {
 	Log      *slog.Logger
 	// Notify receives events (failed syncs, degraded apps, ...); nil drops them.
 	Notify Notifier
+	// SelfContainer is the ID of the container composecd runs in (see
+	// ContainerID), or "" when it doesn't run in one.
+	SelfContainer string
 }
 
 // Controller reconciles every Application.
@@ -82,10 +85,15 @@ type Controller struct {
 	checkouts map[string]int
 	windows   []*windows.Window
 	// orphans are, per host, releases left behind that weren't pruned.
-	orphans  map[string][]string
-	timers   map[string]*timer
-	metrics  map[metricKey]*opMetric
-	watchers map[string]*watcher
+	orphans map[string][]string
+	// selfFound is, per host, the compose project composecd's own container
+	// is in there ("" if it doesn't run there); selfPinned is, per host, the
+	// Applications marked spec.self. See detectSelf.
+	selfFound  map[string]string
+	selfPinned map[string]string
+	timers     map[string]*timer
+	metrics    map[metricKey]*opMetric
+	watchers   map[string]*watcher
 }
 
 // watcher streams one host's container events.
@@ -284,7 +292,7 @@ func (c *Controller) watch(ctx context.Context, h *hosts.Host) {
 // onEvent reconciles the app a container event on host is about, shortly.
 func (c *Controller) onEvent(host, project string) {
 	app, err := c.application(project)
-	if err != nil || app.Spec.Destination.Host != host {
+	if err != nil || app.Spec.Destination.Host != host || c.isSelf(host, project) {
 		return
 	}
 	c.mu.Lock()
@@ -381,6 +389,7 @@ func (c *Controller) RefreshAll(ctx context.Context) {
 		}()
 	}
 	wg.Wait()
+	c.detectSelf(ctx, objs)
 	c.restoreEmptyGuards()
 
 	// The root was fetched by loadRoot; fetch every other source repository once.
@@ -565,6 +574,7 @@ func (c *Controller) Apps() []AppStatus {
 	c.mu.RUnlock()
 	for i := range out {
 		out[i] = c.maskStatus(c.withRunning(out[i]))
+		out[i].Self = c.isSelf(out[i].Host, out[i].Name)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
@@ -582,7 +592,9 @@ func (c *Controller) App(name string) (AppStatus, error) {
 		st = s.status
 	}
 	c.mu.RUnlock()
-	return c.maskStatus(c.withRunning(st)), nil
+	st = c.maskStatus(c.withRunning(st))
+	st.Self = c.isSelfApp(a)
+	return st, nil
 }
 
 // withRunning shows st's running operation, if any, as its last one: status
@@ -621,7 +633,8 @@ func (c *Controller) HostStatuses() []HostStatus {
 	c.mu.RUnlock()
 	var out []HostStatus
 	for _, h := range c.pruneHosts() {
-		hs := HostStatus{Status: h.Status(), Apps: counts[h.Name()], Orphans: orphans[h.Name()], Retired: c.Hosts.Get(h.Name()) == nil}
+		hs := HostStatus{Status: h.Status(), Apps: counts[h.Name()], Orphans: orphans[h.Name()], Retired: c.Hosts.Get(h.Name()) == nil,
+			Self: c.selfRelease(h.Name())}
 		if st, err := c.Store.HostState(h.Name()); err == nil {
 			hs.Maintenance, hs.MaintenanceReason = st.Maintenance, st.MaintenanceReason
 		}
