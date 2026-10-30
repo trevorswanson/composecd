@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"strings"
 
@@ -81,6 +82,9 @@ type objectInput struct {
 	live bool
 	// inspect looks a network or volume up on the host; nil skips the check.
 	inspect func(kind, name string) (map[string]interface{}, error)
+	// details is the last health check result of each container whose check
+	// hasn't passed, by container name (see healthDetails).
+	details map[string]string
 }
 
 // buildObjects lists an app's objects from its desired and deployed
@@ -168,6 +172,7 @@ func buildObjects(in objectInput) ([]Object, error) {
 		case KindService:
 			cts := byService[o.Name]
 			o.Health, o.Message = serviceHealth(cts)
+			o.Message = withDetails(o.Message, cts, in.details)
 			switch {
 			case o.Sync == ObjectPrune:
 			case driftOf[o.Name] == action.DriftMissing, in.live && len(cts) == 0 && o.Desired != "":
@@ -207,6 +212,7 @@ func buildObjects(in objectInput) ([]Object, error) {
 			}
 			objs[svc] = &Object{ID: svc, Kind: KindService, Name: ct.Service, Sync: sync, Image: ct.Image}
 			objs[svc].Health, objs[svc].Message = serviceHealth(byService[ct.Service])
+			objs[svc].Message = withDetails(objs[svc].Message, byService[ct.Service], in.details)
 		}
 		o := &Object{ID: "containers/" + ct.Name, Kind: KindContainer, Name: ct.Name, Parent: svc, LiveName: ct.Name,
 			Image: ct.Image, Sync: ObjectSynced}
@@ -214,6 +220,7 @@ func buildObjects(in objectInput) ([]Object, error) {
 		if o.Message == "" {
 			o.Message = ct.Status
 		}
+		o.Message = withDetails(o.Message, []compose.Container{ct}, in.details)
 		switch driftOf[o.ID] {
 		case action.DriftChanged:
 			o.Sync = ObjectOutOfSync
@@ -372,6 +379,69 @@ func serviceHealth(cts []compose.Container) (health.Status, string) {
 		return "", ""
 	}
 	return health.Assess(true, cts)
+}
+
+// failingCheck says whether a container's health check hasn't passed.
+func failingCheck(c compose.Container) bool {
+	return c.State == "running" && (c.Health == "starting" || c.Health == "unhealthy")
+}
+
+// healthDetails reads the last health check result of each container whose
+// check hasn't passed, by container name. A container that can't be inspected
+// is left out.
+func healthDetails(inspect func(kind, name string) (map[string]interface{}, error), cts []compose.Container) map[string]string {
+	out := map[string]string{}
+	if inspect == nil {
+		return out
+	}
+	for _, c := range cts {
+		if !failingCheck(c) {
+			continue
+		}
+		in, err := inspect(KindContainer, c.Name)
+		if err != nil {
+			continue
+		}
+		out[c.Name] = lastCheck(in)
+	}
+	return out
+}
+
+// lastCheck describes the newest entry of State.Health.Log in one line.
+func lastCheck(inspected map[string]interface{}) string {
+	v, _ := lookup(inspected, []string{"State", "Health", "Log"})
+	log, _ := v.([]interface{})
+	if len(log) == 0 {
+		return "no health check result yet"
+	}
+	e, _ := log[len(log)-1].(map[string]interface{})
+	code, _ := e["ExitCode"].(float64)
+	out, _ := e["Output"].(string)
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	out = strings.TrimSpace(lines[len(lines)-1])
+	if len(out) > 200 {
+		out = out[:200] + "…"
+	}
+	msg := fmt.Sprintf("last health check exited %d", int(code))
+	if out != "" {
+		msg += ": " + out
+	}
+	return msg
+}
+
+// withDetails adds the health check results of cts to a health message.
+func withDetails(msg string, cts []compose.Container, details map[string]string) string {
+	var parts []string
+	for _, c := range cts {
+		if d := details[c.Name]; d != "" {
+			parts = append(parts, c.Name+": "+d)
+		}
+	}
+	sort.Strings(parts)
+	if len(parts) == 0 {
+		return msg
+	}
+	return msg + " (" + strings.Join(parts, "; ") + ")"
 }
 
 // objectsFor builds st's objects, looking networks and volumes up on the host.

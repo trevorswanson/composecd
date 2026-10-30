@@ -69,6 +69,7 @@ $COMPOSECD_TOKEN); "composecd login" saves both.`,
 	fs.StringVar(&cf.token, "token", envOr("COMPOSECD_TOKEN", saved.Token), "API token [$COMPOSECD_TOKEN, or as saved by login]")
 	root.AddCommand(
 		newServerCmd(),
+		newSelfApplyCmd(),
 		newValidateCmd(),
 		newAppCmd(cf),
 		newAppSetCmd(cf),

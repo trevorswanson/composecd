@@ -48,6 +48,9 @@ type Options struct {
 	// SelfContainer is the ID of the container composecd runs in (see
 	// ContainerID), or "" when it doesn't run in one.
 	SelfContainer string
+	// Helpers run the container that updates composecd itself; nil leaves
+	// composecd's own Application alone.
+	Helpers Helpers
 }
 
 // Controller reconciles every Application.
@@ -91,9 +94,19 @@ type Controller struct {
 	// Applications marked spec.self. See detectSelf.
 	selfFound  map[string]string
 	selfPinned map[string]string
-	timers     map[string]*timer
-	metrics    map[metricKey]*opMetric
-	watchers   map[string]*watcher
+	// selfImage is the image ID of composecd's own container, which helpers run.
+	selfImage string
+	// selfUpdating is the self app while it is being updated; other
+	// operations wait.
+	selfUpdating string
+	// selfRecovered is set once recoverSelf has run.
+	selfRecovered bool
+	// watchedHelpers are helper containers no operation waits for, which
+	// sweepHelpers waits for; until they exit, no operation starts.
+	watchedHelpers map[string]bool
+	timers         map[string]*timer
+	metrics        map[metricKey]*opMetric
+	watchers       map[string]*watcher
 }
 
 // watcher streams one host's container events.
@@ -390,6 +403,8 @@ func (c *Controller) RefreshAll(ctx context.Context) {
 	}
 	wg.Wait()
 	c.detectSelf(ctx, objs)
+	c.recoverSelf(ctx, objs)
+	c.sweepHelpers(ctx)
 	c.restoreEmptyGuards()
 
 	// The root was fetched by loadRoot; fetch every other source repository once.
@@ -424,9 +439,15 @@ func (c *Controller) RefreshAll(ctx context.Context) {
 	c.mu.Unlock()
 
 	// Reconcile in dependency waves, so an app synced in this refresh unblocks
-	// the apps that depend on it in the same refresh.
+	// the apps that depend on it in the same refresh. composecd itself goes
+	// last: updating it restarts composecd.
+	var self []*config.Application
 	for _, wave := range objs.Waves() {
 		for _, a := range wave {
+			if c.isSelfApp(a) {
+				self = append(self, a)
+				continue
+			}
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
@@ -436,6 +457,9 @@ func (c *Controller) RefreshAll(ctx context.Context) {
 			}()
 		}
 		wg.Wait()
+	}
+	for _, a := range self {
+		c.reconcile(ctx, a, fetchErrs[sourceRepo(a)], true)
 	}
 	c.prune(ctx, objs, fresh)
 	c.pruneCheckouts(sha)
@@ -575,6 +599,7 @@ func (c *Controller) Apps() []AppStatus {
 	for i := range out {
 		out[i] = c.maskStatus(c.withRunning(out[i]))
 		out[i].Self = c.isSelf(out[i].Host, out[i].Name)
+		out[i].SelfUpdatable = out[i].Self && c.canUpdateSelf()
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
@@ -594,6 +619,7 @@ func (c *Controller) App(name string) (AppStatus, error) {
 	c.mu.RUnlock()
 	st = c.maskStatus(c.withRunning(st))
 	st.Self = c.isSelfApp(a)
+	st.SelfUpdatable = st.Self && c.canUpdateSelf()
 	return st, nil
 }
 

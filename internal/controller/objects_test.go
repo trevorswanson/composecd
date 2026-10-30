@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/trevorswanson/composetpl/pkg/action"
@@ -85,5 +86,52 @@ secrets:
 	}
 	if got["networks/front"].LiveName != "app_front" {
 		t.Errorf("front = %+v", got["networks/front"])
+	}
+}
+
+func TestHealthDetails(t *testing.T) {
+	inspected := map[string]map[string]interface{}{
+		"app-web-1": {"State": map[string]interface{}{"Health": map[string]interface{}{"Log": []interface{}{
+			map[string]interface{}{"ExitCode": float64(0), "Output": "ok"},
+			map[string]interface{}{"ExitCode": float64(1), "Output": "checking\nunbound-control: connection refused\n"},
+		}}}},
+		"app-db-1": {"State": map[string]interface{}{"Health": map[string]interface{}{"Log": nil}}},
+	}
+	asked := []string{}
+	inspect := func(kind, name string) (map[string]interface{}, error) {
+		asked = append(asked, kind+"/"+name)
+		return inspected[name], nil
+	}
+	cts := []compose.Container{
+		{Name: "app-web-1", Service: "web", State: "running", Health: "unhealthy"},
+		{Name: "app-db-1", Service: "db", State: "running", Health: "starting"},
+		{Name: "app-ok-1", Service: "ok", State: "running", Health: "healthy"},
+		{Name: "app-job-1", Service: "job", State: "exited"},
+	}
+	d := healthDetails(inspect, cts)
+	if len(asked) != 2 {
+		t.Errorf("inspected %v, want only the two containers with a failing check", asked)
+	}
+	if want := "last health check exited 1: unbound-control: connection refused"; d["app-web-1"] != want {
+		t.Errorf("web = %q, want %q", d["app-web-1"], want)
+	}
+	if d["app-db-1"] != "no health check result yet" {
+		t.Errorf("db = %q", d["app-db-1"])
+	}
+	if got := withDetails("app-web-1 is unhealthy", cts[:1], d); got != "app-web-1 is unhealthy (app-web-1: last health check exited 1: unbound-control: connection refused)" {
+		t.Errorf("message = %q", got)
+	}
+	if got := withDetails("x", cts[2:], d); got != "x" {
+		t.Errorf("healthy container changed message: %q", got)
+	}
+
+	objs, err := buildObjects(objectInput{project: "app", desired: "name: app\nservices:\n  web: {image: nginx}\n", live: true, containers: cts[:1], details: d})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, o := range objs {
+		if (o.ID == "services/web" || o.ID == "containers/app-web-1") && !strings.Contains(o.Message, "connection refused") {
+			t.Errorf("%s message = %q", o.ID, o.Message)
+		}
 	}
 }
