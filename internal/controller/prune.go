@@ -43,6 +43,8 @@ func (c *Controller) prune(ctx context.Context, objs *config.Objects, fresh bool
 			ws := c.windows
 			c.mu.RUnlock()
 			switch {
+			case c.isSelf(h.Name(), name):
+				reason = "it runs composecd itself"
 			case c.setPruneGuard(rel.Labels[LabelApplicationSet]) != "":
 				reason = c.setPruneGuard(rel.Labels[LabelApplicationSet])
 			case rel.Labels[LabelPrune] != "true":
@@ -129,6 +131,9 @@ func (c *Controller) DeleteRelease(host, name, user string) (*store.Operation, e
 	}
 	if rel == nil {
 		return nil, fmt.Errorf("orphaned release %q on %s: %w", name, host, ErrNotFound)
+	}
+	if c.isSelf(host, name) {
+		return nil, fmt.Errorf("release %q on %s: %w, and deleting it would stop composecd", name, host, ErrSelf)
 	}
 	if rel.Status.IsPending() {
 		return nil, fmt.Errorf("release %q on %s: a composetpl operation is pending", name, host)

@@ -352,6 +352,7 @@ a.name:hover { color: var(--mf-accent); }
   background: var(--mf-idle-soft); color: var(--mf-idle); font-size: 10px; font-weight: 600; letter-spacing: .05em;
   text-transform: uppercase; white-space: nowrap; }
 .tag.auto { background: var(--mf-accent-soft); color: var(--mf-accent); }
+.tag.self { background: var(--mf-warn-soft); color: var(--mf-warn); }
 .tag.added { background: var(--mf-ok-soft); color: var(--mf-ok); }
 .tag.changed { background: var(--mf-warn-soft); color: var(--mf-warn); }
 .tag.removed { background: var(--mf-bad-soft); color: var(--mf-bad); }

@@ -467,3 +467,43 @@ func TestHostsEventsReuseDiscovery(t *testing.T) {
 		t.Fatalf("rescan ran discovery %d times", got-1)
 	}
 }
+
+// selfStub's only app, and its only release on nas, run composecd itself.
+type selfStub struct{ stub }
+
+func (s *selfStub) Apps() []controller.AppStatus {
+	apps := s.stub.Apps()
+	apps[0].Self = true
+	return apps
+}
+func (s *selfStub) App(name string) (controller.AppStatus, error) {
+	if _, err := s.stub.App(name); err != nil {
+		return controller.AppStatus{}, err
+	}
+	return s.Apps()[0], nil
+}
+func (s *selfStub) Unmanaged(_ context.Context, _ string) (*controller.Unmanaged, error) {
+	return &controller.Unmanaged{Releases: []controller.UnmanagedRelease{{Name: "media", Revision: 1, Orphaned: true, Self: true}}}, nil
+}
+
+func TestWebDisablesActionsOnSelf(t *testing.T) {
+	a := newAuthn(t, "secret")
+	srv := httptest.NewServer(New(&selfStub{}, Options{Auth: a}))
+	defer srv.Close()
+	for path, want := range map[string]string{
+		"/apps":                   `<span class="tag self"`,
+		"/apps/media":             `disabled title="composecd can't sync itself yet`,
+		"/apps/media?tab=history": "composecd can't roll itself back",
+		"/hosts/nas":              "composecd itself",
+	} {
+		status, body := do(t, srv, "GET", path, "secret", "")
+		if status != 200 || !strings.Contains(body, want) {
+			t.Errorf("%s: %d, missing %s", path, status, want)
+		}
+		for _, action := range []string{"/sync\"", "/rollback\"", "/delete-release\""} {
+			if strings.Contains(body, action) {
+				t.Errorf("%s offers %s", path, action)
+			}
+		}
+	}
+}

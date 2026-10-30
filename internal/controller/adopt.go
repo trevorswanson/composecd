@@ -38,6 +38,8 @@ type UnmanagedRelease struct {
 	ChartRef   string `json:"chartRef,omitempty"`
 	ProjectDir string `json:"projectDir,omitempty"`
 	Orphaned   bool   `json:"orphaned,omitempty"`
+	// Self is true for the release composecd itself runs as; it can't be deleted.
+	Self bool `json:"self,omitempty"`
 	// Blocked explains why an Application cannot be suggested for this release.
 	Blocked string `json:"blocked,omitempty"`
 }
@@ -109,7 +111,8 @@ func (c *Controller) Unmanaged(ctx context.Context, host string) (*Unmanaged, er
 			continue
 		}
 		out.Releases = append(out.Releases, UnmanagedRelease{Name: rel.Name, Revision: rel.Revision, Status: string(rel.Status), ChartRef: rel.Chart.Ref,
-			ProjectDir: rel.ProjectDir, Orphaned: rel.Labels[LabelManagedBy] == ManagedBy, Blocked: c.adoptionBlocked(rel.Name, rel)})
+			ProjectDir: rel.ProjectDir, Orphaned: rel.Labels[LabelManagedBy] == ManagedBy, Self: c.isSelf(host, rel.Name),
+			Blocked: c.adoptionBlocked(rel.Name, rel)})
 	}
 	projects, err := cfg.Compose.Ls(ctx)
 	if err != nil {

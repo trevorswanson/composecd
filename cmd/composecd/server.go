@@ -129,6 +129,9 @@ func runServer(parent context.Context, boot *config.Bootstrap, log *slog.Logger)
 		Registry: registry.New(os.Stderr),
 		Log:      log,
 		Notify:   notifier,
+		// Finds the Application that runs composecd itself, which it must not
+		// sync from inside its own container.
+		SelfContainer: controller.ContainerID(),
 	})
 	authn := &auth.Authenticator{Store: st, AdminToken: token, Disabled: boot.Auth.Disabled}
 	if boot.Auth.OIDC != nil {

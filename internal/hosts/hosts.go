@@ -157,6 +157,12 @@ func (h *Host) Configuration(env []string, log io.Writer) *action.Configuration 
 	}
 }
 
+// Inspect returns `docker <kind> inspect <name>` on the engine, or an empty map
+// if it doesn't exist.
+func (h *Host) Inspect(ctx context.Context, kind, name string) (map[string]interface{}, error) {
+	return h.backend.Runner(h, h.Env(), io.Discard).Inspect(ctx, kind, name)
+}
+
 // Ping checks the engine and records the result in Status.
 func (h *Host) Ping(ctx context.Context) Status {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)

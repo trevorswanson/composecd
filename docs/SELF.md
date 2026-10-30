@@ -89,14 +89,16 @@ This is the same approach Portainer uses to update itself. It needs four pieces:
 
 At startup and on every refresh, composecd works out which Application is self:
 
-1. **Find our own container ID.** Read `/proc/self/mountinfo` and find the `/etc/hostname` bind mount, whose
-   path contains `/containers/<id>/`. Don't rely on `os.Hostname()`, because a chart can set `hostname:`. If
-   no ID is found, composecd isn't running in a container, so there's no self.
-2. **Inspect the container** on the local engine (the default engine, or `DOCKER_HOST`). Record its
-   `com.docker.compose.project` label, its image ID and the engine ID from `docker info`.
-3. **Match an Application.** Self is the Application whose name equals the project label, and whose Host
-   reports the same engine ID. Compare engine IDs, not URLs, so that a Host such as `ssh://nas.lan` that points
-   at the same machine still matches.
+1. **Find our own container ID.** Read `/proc/self/mountinfo` and find a bind mount whose source path
+   contains `containers/<64-hex id>/`, such as the one for `/etc/hostname` (Docker and Podman). Don't rely on
+   `os.Hostname()`, because a chart can set `hostname:`. If no ID is found, composecd isn't running in a
+   container, so there's no self. (`controller.ContainerID`, called once at startup.)
+2. **Look for that container on every Host** that is up, with `docker container inspect <id>`. Container IDs
+   are random 256-bit values, so finding ours on a Host means that Host reaches our engine, whatever its URL
+   (`ssh://nas.lan` pointing at the same machine still matches). Record its `com.docker.compose.project`
+   label for that Host. This replaced the planned comparison of engine IDs from `docker info`, because it
+   needs no new backend call. A Host that's down, or that couldn't be asked, keeps its last result.
+3. **Match an Application.** Self is the Application whose name equals the project label on its Host.
 
 An explicit override is available for unusual setups:
 
@@ -104,32 +106,39 @@ An explicit override is available for unusual setups:
 kind: Application
 metadata: {name: composecd}
 spec:
-  self: true          # optional; validated against detection, error if it contradicts it
+  self: true          # optional; an error on the app if it contradicts detection
 ```
 
-**If our container has no compose project label** (for example after `docker run`, as the README quick start
-shows), there's no self. If an Application with the chart's name targets our engine, composecd sets a
-`SelfUnmanaged` condition and doesn't sync that app automatically. Syncing it would start a second composecd
-that fights the first one over the port and the data volume. See [Bootstrap](#bootstrap).
+An app marked `self: true` is remembered for the life of the process, so prune keeps protecting it after it
+leaves Git. If detection found composecd under a different project on that Host, the app shows an error, and
+both apps get the guards.
 
-The result is exposed as `AppStatus.Self bool` and shown as a badge in the UI and the CLI.
+**If our container has no compose project label** (for example after `docker run`, as the README quick start
+shows), there's no self. An Application for the composecd chart would then start a second composecd that
+fights the first one over the port and the data volume. The planned `SelfUnmanaged` condition was dropped:
+nothing reliably tells such an Application apart from any other. [Bootstrap](#bootstrap) covers switching to
+the chart first.
+
+The result is exposed as `AppStatus.Self`, shown as a "self" badge in the UI and as `self` in the AUTO column
+of `composecd app list`. `HostStatus.Self` and `UnmanagedRelease.Self` name the self release on each host.
 
 ---
 
 ## 2. Guards
 
 These guards apply even before the helper exists. With only these in place, you can safely keep composecd's
-Application in Git with manual sync, and get diffs and drift for it.
+Application in Git, and get diffs and drift for it. (Delivered in step A.)
 
 | Area | Guard | Where |
 | --- | --- | --- |
-| Prune | Never uninstall the self release, whether its Application left Git or moved to another host. Set a `PruneSkipped` condition and send a notification instead. | `prune`, `pruneOne` in [prune.go](../internal/controller/prune.go) |
-| Delete orphan | `DeleteRelease` refuses the self release (409). Hide the button in the UI. | `DeleteRelease` in [prune.go](../internal/controller/prune.go) |
-| Volumes | Never remove the self project's volumes, whatever the options. This matters most for `data`, which holds the SQLite DB and the admin token. | `uninstall` |
-| Docker events | Ignore events from the self project. Our own stop and start during an update must not start a reconcile. | [events.go](../internal/events/events.go), or the event handler in the controller |
-| Sync, Repair, Rollback | Until the helper ships, the self app can't sync automatically or self-heal. A manual sync or rollback returns an error that explains why. Once the helper ships, these go through it (section 4). | `runSync`, `Sync`, `Rollback` in [operations.go](../internal/controller/operations.go) |
-| Ordering | Reconcile self last in each pass, after everything else in `dependsOn` order. Other apps finish syncing before we restart. | reconcile loop |
+| Prune | Never uninstall the self release, whether its Application left Git or moved to another host. It's listed as an orphan on its host instead. No notification: one would repeat on every refresh. | `prune` in [prune.go](../internal/controller/prune.go) |
+| Delete orphan | `DeleteRelease` refuses the self release with `ErrSelf` (409). The hosts page shows "composecd itself" in place of the Delete button. | `DeleteRelease` in [prune.go](../internal/controller/prune.go) |
+| Volumes | Covered by the two guards above: prune and delete are the only paths that uninstall, and they keep volumes anyway (`--keep-history`, no `-v`). | none |
+| Docker events | Ignore events from the self project. Our own stop and start during an update must not start a reconcile. | `onEvent` in [controller.go](../internal/controller/controller.go) |
+| Sync, Repair, Rollback | Until the helper ships, the self app can't sync automatically or self-heal: it shows as blocked. A manual sync or rollback returns `ErrSelf` (409). The UI disables Sync and hides Roll back. Once the helper ships, these go through it (section 4). | `gate` in [automation.go](../internal/controller/automation.go), `manualAllowed` in [operations.go](../internal/controller/operations.go) |
 | Pause and maintenance | Work as usual. Pausing self, or putting its host in maintenance, holds back self-updates. | none |
+
+Reconciling self last in each pass moved to step C: while self never syncs, the order doesn't matter.
 
 ---
 
@@ -273,9 +282,9 @@ first. The README quick start gets a "Managing composecd with composecd" section
 
 | Step | Content | Depends on |
 | --- | --- | --- |
-| A | Detecting self, the guards, `AppStatus.Self`, UI badge. Self app is manual-only and sync is refused. | none |
+| A (delivered) | Detecting self, the guards, `AppStatus.Self`, UI badge. Sync of the self app is refused. | none |
 | B | composetpl `Prepare`, `Apply` and `Abandon`, released as v0.3.0 | none (separate repo) |
-| C | `self-apply`, starting the helper, drain, boot recovery, `helper` column | A, B |
+| C | `self-apply`, starting the helper, drain, boot recovery, `helper` column, reconciling self last | A, B |
 | D | README bootstrap section, example Application in `examples/gitops` | C |
 
 A and B can run in parallel. A ships on its own and is useful without the rest.

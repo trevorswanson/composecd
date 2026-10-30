@@ -164,6 +164,7 @@ spec:
   destination:
     host: nas
   dependsOn: [traefik]            # auto-sync only once these are Synced and Healthy
+  # self: true                    # this app runs composecd itself (normally detected; see below)
   syncPolicy:
     automated:                    # omit for manual sync
       prune: true                 # uninstall when removed from Git (keeps volumes and history)
@@ -197,6 +198,13 @@ gone. Pruning uninstalls the release with `composetpl uninstall --keep-history`,
 stay. It never happens when the root can't be read, or when the root suddenly defines no applications at all.
 Releases that are left behind and not pruned show as orphaned releases on their host, where an admin can
 delete one by hand: the same uninstall, recorded as a manual prune operation.
+
+**composecd's own Application** is the one whose compose project composecd's container belongs to, on a Host
+that reaches the engine it runs on. composecd finds it by itself; `self: true` marks it when it can't (for
+example, when `/proc/self/mountinfo` doesn't show the container's ID). composecd shows it with a "self" badge
+and never syncs, self-heals, rolls back, prunes or deletes it, because recreating its own container from
+inside that container would stop composecd halfway through. Upgrade it with `composetpl upgrade` on the host.
+See [docs/SELF.md](docs/SELF.md) for the plan to let composecd update itself.
 
 ### SyncWindow
 
