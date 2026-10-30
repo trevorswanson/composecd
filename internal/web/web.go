@@ -51,6 +51,7 @@ type Controller interface {
 	Resume(string) error
 	RefreshApp(string) error
 	SetMaintenance(string, bool, string) error
+	DeleteRelease(host, name, user string) (*store.Operation, error)
 	Subscribe() (<-chan controller.Update, func())
 	Logs(context.Context, string, string, int, bool, io.Writer) error
 	Mask(string, string) string
@@ -204,6 +205,10 @@ type Data struct {
 	// object's live state.
 	Mode    string
 	Objects []ObjectDiff
+	// Files are the compose file's resources side by side; Full shows every
+	// one in whole rather than only the changed lines.
+	Files   []FileDiff
+	Full    bool
 	Filters url.Values
 }
 
@@ -505,6 +510,12 @@ func (s *Server) data(r *http.Request, p *auth.Principal) (*Data, error) {
 		for i := range d.App.Sync.Changes {
 			d.App.Sync.Changes[i].Diff = s.C.Mask(d.Name, d.App.Sync.Changes[i].Diff)
 		}
+		if d.Tab == "diff" && d.Mode == "" {
+			// The compact box sends full=0 ahead of a hidden full=1, so
+			// unticking it leaves full=1.
+			d.Full = r.URL.Query().Get("full") == "1"
+			d.Files = fileDiffs(d.App, d.Full)
+		}
 	case "applicationsets":
 		d.ApplicationSets = s.C.ApplicationSets()
 	case "hosts", "host":
@@ -694,6 +705,15 @@ func (s *Server) Action(w http.ResponseWriter, r *http.Request) {
 			}
 			s.inventories([]string{name}, true, false)
 			message = "Rescan started"
+		case "delete-release":
+			op, err = s.C.DeleteRelease(name, r.FormValue("release"), p.Name)
+			if err == nil {
+				// Rescan once it's gone, so the release leaves the list.
+				go func(host string, id int64) {
+					_ = s.C.FollowOperation(context.Background(), id, io.Discard)
+					s.inventories([]string{host}, true, false)
+				}(name, op.ID)
+			}
 		default:
 			err = controller.ErrNotFound
 		}
@@ -739,7 +759,7 @@ func (s *Server) Action(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if op != nil {
-		message = fmt.Sprintf("%s #%d started", map[string]string{"sync": "Sync", "rollback": "Rollback"}[action], op.ID)
+		message = fmt.Sprintf("%s #%d started", map[string]string{"sync": "Sync", "rollback": "Rollback", "delete-release": "Delete"}[action], op.ID)
 	}
 	if r.Header.Get("HX-Request") == "true" {
 		render(w, 200, "result", &Data{Message: message, Token: token, Op: op})

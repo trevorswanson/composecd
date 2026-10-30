@@ -123,3 +123,35 @@ func TestHostState(t *testing.T) {
 		t.Errorf("off = %+v", st)
 	}
 }
+
+func TestHelperOperationsSurviveRestart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "composecd.db")
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	helped := &Operation{App: "composecd", Kind: KindSync, Trigger: TriggerAuto}
+	plain := &Operation{App: "web", Kind: KindSync, Trigger: TriggerAuto}
+	for _, op := range []*Operation{helped, plain} {
+		if err := s.StartOperation(op); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.SetHelper(helped.ID, "composecd-self-apply-1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if s, err = Open(path); err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ops, err := s.HelperOperations()
+	if err != nil || len(ops) != 1 || ops[0].ID != helped.ID || ops[0].Helper != "composecd-self-apply-1" || ops[0].Phase != PhaseRunning {
+		t.Errorf("helper operations = %+v, %v", ops, err)
+	}
+	if got, _ := s.Operation(plain.ID); got.Phase != PhaseFailed {
+		t.Errorf("an operation without a helper wasn't marked interrupted: %+v", got)
+	}
+}

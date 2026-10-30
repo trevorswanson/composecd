@@ -352,6 +352,7 @@ a.name:hover { color: var(--mf-accent); }
   background: var(--mf-idle-soft); color: var(--mf-idle); font-size: 10px; font-weight: 600; letter-spacing: .05em;
   text-transform: uppercase; white-space: nowrap; }
 .tag.auto { background: var(--mf-accent-soft); color: var(--mf-accent); }
+.tag.self { background: var(--mf-warn-soft); color: var(--mf-warn); }
 .tag.added { background: var(--mf-ok-soft); color: var(--mf-ok); }
 .tag.changed { background: var(--mf-warn-soft); color: var(--mf-warn); }
 .tag.removed { background: var(--mf-bad-soft); color: var(--mf-bad); }
@@ -390,6 +391,20 @@ a.name:hover { color: var(--mf-accent); }
 .diff .added { background: var(--mf-ok-soft); }
 .diff .removed { background: var(--mf-bad-soft); }
 .diff .hunk { color: var(--mf-prog); }
+/* A side-by-side diff: line number and text for each side, deployed then Git. */
+.sbs { display: grid; grid-template-columns: auto minmax(0, 1fr) auto minmax(0, 1fr); padding-bottom: 8px; background: var(--mf-code-bg);
+  font: 400 12px/20px var(--mf-mono); }
+.sbs-head { grid-column: span 2; padding: 6px 16px; border-bottom: 1px solid var(--mf-line); color: var(--mf-text-2);
+  font: 500 12px/18px var(--mf-font); }
+.sbs-head + .sbs-head, .sbs span:nth-of-type(4n+3) { border-left: 1px solid var(--mf-line); }
+.sbs .ln { min-width: 40px; padding: 0 8px; text-align: right; color: var(--mf-text-3); user-select: none; }
+.sbs .code { min-height: 20px; padding: 0 12px 0 4px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.sbs .removed { background: var(--mf-bad-soft); }
+.sbs .added { background: var(--mf-ok-soft); }
+.sbs .none { background: var(--mf-surface-2); }
+.sbs-fold { grid-column: 1 / -1; padding: 2px 16px; background: var(--mf-surface-2); color: var(--mf-text-3);
+  border-block: 1px solid var(--mf-line); }
+.check-toggle label { display: inline-flex; align-items: center; gap: 6px; height: 38px; font-size: 13px; cursor: pointer; }
 .log, .output { max-height: 420px; overflow: auto; padding: 8px 16px; background: var(--mf-code-bg);
   font: 400 12px/20px var(--mf-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
 .log span { display: block; }

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -37,6 +38,10 @@ type Bootstrap struct {
 	SOPSAgeKeyFile string `yaml:"sopsAgeKeyFile,omitempty"`
 	// Infisical lets Applications read secrets from Infisical.
 	Infisical *Infisical `yaml:"infisical,omitempty"`
+
+	// Path is the absolute path the file was read from, when LoadBootstrap
+	// read it.
+	Path string `yaml:"-" json:"-"`
 }
 
 // Infisical connects composecd to an Infisical server. Set clientID with
@@ -169,6 +174,9 @@ func LoadBootstrap(file string) (*Bootstrap, error) {
 	b, err := ParseBootstrap(data)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", file, err)
+	}
+	if b.Path, err = filepath.Abs(file); err != nil {
+		return nil, err
 	}
 	return b, nil
 }

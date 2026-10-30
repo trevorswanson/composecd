@@ -92,6 +92,10 @@ func New(c Controller, o Options) http.Handler {
 		out, err := c.Adopt(r.Context(), r.PathValue("name"), r.PathValue("release"))
 		return http.StatusOK, out, err
 	})
+	act("DELETE /api/v1/hosts/{name}/releases/{release}", func(r *http.Request, p *auth.Principal) (int, interface{}, error) {
+		op, err := c.DeleteRelease(r.PathValue("name"), r.PathValue("release"), p.Name)
+		return http.StatusAccepted, op, err
+	})
 	act("POST /api/v1/hosts/{name}/maintenance", func(r *http.Request, p *auth.Principal) (int, interface{}, error) {
 		var body struct {
 			Enabled bool   `json:"enabled"`
@@ -238,7 +242,8 @@ func (s *server) json(need auth.Role, h handler) http.HandlerFunc {
 				status = http.StatusNotFound
 			case errors.Is(err, store.ErrExists):
 				status = http.StatusConflict
-			case errors.Is(err, controller.ErrBusy), errors.Is(err, controller.ErrBlocked), errors.Is(err, controller.ErrAdoptionBlocked):
+			case errors.Is(err, controller.ErrBusy), errors.Is(err, controller.ErrBlocked), errors.Is(err, controller.ErrAdoptionBlocked),
+				errors.Is(err, controller.ErrSelf):
 				status = http.StatusConflict
 			default:
 				status = http.StatusInternalServerError

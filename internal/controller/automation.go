@@ -111,7 +111,7 @@ func (c *Controller) automate(ctx context.Context, app *config.Application, st *
 		if err != nil {
 			return false
 		}
-		c.runSync(ctx, p, op)
+		c.sync(ctx, p, op)
 		c.finishOperation(name, op)
 		c.mu.Lock()
 		if op.Phase == store.PhaseFailed {
@@ -130,7 +130,7 @@ func (c *Controller) automate(ctx context.Context, app *config.Application, st *
 		if err != nil {
 			return false
 		}
-		c.runHeal(ctx, p, op, driftSummary(st.Sync.Drift))
+		c.heal(ctx, p, op, driftSummary(st.Sync.Drift))
 		c.finishOperation(name, op)
 	}
 	return true
@@ -149,6 +149,9 @@ func retryStatus(r *config.Retry, s *appState) *RetryStatus {
 
 // gate returns why automation may not run kind for app now, or "".
 func (c *Controller) gate(app *config.Application, kind string) string {
+	if c.isSelfApp(app) && !c.canUpdateSelf() {
+		return selfBlocked
+	}
 	host := app.Spec.Destination.Host
 	if hs, err := c.Store.HostState(host); err == nil && hs.Maintenance {
 		return fmt.Sprintf("host %s is in maintenance (%s)", host, hs.MaintenanceReason)

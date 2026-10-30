@@ -2,7 +2,9 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"time"
 
@@ -41,6 +43,8 @@ func (c *Controller) prune(ctx context.Context, objs *config.Objects, fresh bool
 			ws := c.windows
 			c.mu.RUnlock()
 			switch {
+			case c.isSelf(h.Name(), name):
+				reason = "it runs composecd itself"
 			case c.setPruneGuard(rel.Labels[LabelApplicationSet]) != "":
 				reason = c.setPruneGuard(rel.Labels[LabelApplicationSet])
 			case rel.Labels[LabelPrune] != "true":
@@ -96,13 +100,68 @@ func (c *Controller) leftovers(h *hosts.Host, objs *config.Objects) []*release.R
 
 // pruneOne uninstalls rel from h, keeping its history and named volumes.
 func (c *Controller) pruneOne(ctx context.Context, h *hosts.Host, rel *release.Release) bool {
-	name := rel.Name
-	op, err := c.startOperation(name, store.KindPrune, store.TriggerAuto, rel.Labels[LabelSourceRevision], "")
+	op, err := c.startOperation(rel.Name, store.KindPrune, store.TriggerAuto, rel.Labels[LabelSourceRevision], "")
 	if err != nil {
 		return false
 	}
+	c.Log.Info("pruning", "app", rel.Name, "host", h.Name())
+	c.uninstall(ctx, h, rel, op, "the Application is no longer in Git for this host")
+	return op.Phase == store.PhaseSucceeded
+}
+
+// DeleteRelease uninstalls an orphaned release from host on request, as prune
+// would: a release composecd deployed whose Application is no longer in Git
+// for that host. Its history and named volumes are kept.
+func (c *Controller) DeleteRelease(host, name, user string) (*store.Operation, error) {
+	h := c.Hosts.Get(host)
+	if h == nil {
+		return nil, fmt.Errorf("host %q: %w", host, ErrNotFound)
+	}
+	c.mu.RLock()
+	objs := c.objects
+	c.mu.RUnlock()
+	if objs == nil {
+		return nil, errors.New("the root has not been read from Git yet")
+	}
+	var rel *release.Release
+	for _, r := range c.leftovers(h, objs) {
+		if r.Name == name {
+			rel = r
+		}
+	}
+	if rel == nil {
+		return nil, fmt.Errorf("orphaned release %q on %s: %w", name, host, ErrNotFound)
+	}
+	if c.isSelf(host, name) {
+		return nil, fmt.Errorf("release %q on %s: %w, and deleting it would stop composecd", name, host, ErrSelf)
+	}
+	if rel.Status.IsPending() {
+		return nil, fmt.Errorf("release %q on %s: a composetpl operation is pending", name, host)
+	}
+	op, err := c.startOperation(name, store.KindPrune, store.TriggerManual, rel.Labels[LabelSourceRevision], user)
+	if err != nil {
+		return nil, err
+	}
+	c.ops.Add(1)
+	go func() {
+		defer c.ops.Done()
+		c.Log.Info("deleting orphaned release", "app", name, "host", host, "user", user)
+		c.uninstall(c.baseContext(), h, rel, op, "deleted by "+user)
+		if op.Phase != store.PhaseSucceeded {
+			return
+		}
+		c.mu.Lock()
+		c.orphans[host] = slices.DeleteFunc(slices.Clone(c.orphans[host]), func(n string) bool { return n == name })
+		c.mu.Unlock()
+	}()
+	return op, nil
+}
+
+// uninstall removes rel from h, keeping its history and named volumes, and
+// finishes op saying why.
+func (c *Controller) uninstall(ctx context.Context, h *hosts.Host, rel *release.Release, op *store.Operation, why string) {
+	name := rel.Name
 	defer c.lockApp(name)()
-	c.Log.Info("pruning", "app", name, "host", h.Name())
 	func() {
 		defer h.Use()()
 		if _, err := c.releaseHistory(h, name); err != nil {
@@ -120,11 +179,10 @@ func (c *Controller) pruneOne(ctx context.Context, h *hosts.Host, rel *release.R
 			return
 		}
 		op.Phase = store.PhaseSucceeded
-		op.Message = fmt.Sprintf("uninstalled from %s: the Application is no longer in Git for this host (history and volumes kept)", h.Name())
+		op.Message = fmt.Sprintf("uninstalled from %s: %s (history and volumes kept)", h.Name(), why)
 	}()
 	op.ReleaseRevision = rel.Revision
 	c.finishOperation(name, op)
-	return op.Phase == store.PhaseSucceeded
 }
 
 // Operation metrics, by kind, trigger and phase.

@@ -144,6 +144,27 @@ func TestRedactedProjectionMatchesDesired(t *testing.T) {
 	}
 }
 
+<<<<<<< HEAD
+=======
+func TestWildcardHostIPMatchesLive(t *testing.T) {
+	d := normalizeDesired(KindService, parseYAML(`ports:
+- {host_ip: 0.0.0.0, published: "80", target: 80, protocol: tcp}
+- "0.0.0.0:443:443"
+- {host_ip: 192.168.1.253, published: "636", target: 636, protocol: tcp}
+`), "/p")
+	live := projectContainer(map[string]interface{}{"HostConfig": map[string]interface{}{"PortBindings": map[string]interface{}{
+		"80/tcp":  []interface{}{map[string]interface{}{"HostIp": "", "HostPort": "80"}},
+		"443/tcp": []interface{}{map[string]interface{}{"HostIp": "0.0.0.0", "HostPort": "443"}},
+		"636/tcp": []interface{}{map[string]interface{}{"HostIp": "192.168.1.253", "HostPort": "636"}},
+	}}}, nil, "p")
+	want, _ := encodeYAML(map[string]interface{}{"ports": d["ports"]})
+	got, _ := encodeYAML(map[string]interface{}{"ports": live["ports"]})
+	if got != want {
+		t.Errorf("live ports\n%s\ndesired ports\n%s", got, want)
+	}
+}
+
+>>>>>>> origin/main
 func TestFoldInspectKeepsFailingHealthLog(t *testing.T) {
 	for status, folded := range map[string]bool{"healthy": true, "starting": false, "unhealthy": false} {
 		in := map[string]interface{}{"State": map[string]interface{}{"Health": map[string]interface{}{

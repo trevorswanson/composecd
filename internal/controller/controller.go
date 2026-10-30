@@ -45,6 +45,12 @@ type Options struct {
 	Log      *slog.Logger
 	// Notify receives events (failed syncs, degraded apps, ...); nil drops them.
 	Notify Notifier
+	// SelfContainer is the ID of the container composecd runs in (see
+	// ContainerID), or "" when it doesn't run in one.
+	SelfContainer string
+	// Helpers run the container that updates composecd itself; nil leaves
+	// composecd's own Application alone.
+	Helpers Helpers
 }
 
 // Controller reconciles every Application.
@@ -82,10 +88,25 @@ type Controller struct {
 	checkouts map[string]int
 	windows   []*windows.Window
 	// orphans are, per host, releases left behind that weren't pruned.
-	orphans  map[string][]string
-	timers   map[string]*timer
-	metrics  map[metricKey]*opMetric
-	watchers map[string]*watcher
+	orphans map[string][]string
+	// selfFound is, per host, the compose project composecd's own container
+	// is in there ("" if it doesn't run there); selfPinned is, per host, the
+	// Applications marked spec.self. See detectSelf.
+	selfFound  map[string]string
+	selfPinned map[string]string
+	// selfImage is the image ID of composecd's own container, which helpers run.
+	selfImage string
+	// selfUpdating is the self app while it is being updated; other
+	// operations wait.
+	selfUpdating string
+	// selfRecovered is set once recoverSelf has run.
+	selfRecovered bool
+	// watchedHelpers are helper containers no operation waits for, which
+	// sweepHelpers waits for; until they exit, no operation starts.
+	watchedHelpers map[string]bool
+	timers         map[string]*timer
+	metrics        map[metricKey]*opMetric
+	watchers       map[string]*watcher
 }
 
 // watcher streams one host's container events.
@@ -284,7 +305,7 @@ func (c *Controller) watch(ctx context.Context, h *hosts.Host) {
 // onEvent reconciles the app a container event on host is about, shortly.
 func (c *Controller) onEvent(host, project string) {
 	app, err := c.application(project)
-	if err != nil || app.Spec.Destination.Host != host {
+	if err != nil || app.Spec.Destination.Host != host || c.isSelf(host, project) {
 		return
 	}
 	c.mu.Lock()
@@ -381,6 +402,9 @@ func (c *Controller) RefreshAll(ctx context.Context) {
 		}()
 	}
 	wg.Wait()
+	c.detectSelf(ctx, objs)
+	c.recoverSelf(ctx, objs)
+	c.sweepHelpers(ctx)
 	c.restoreEmptyGuards()
 
 	// The root was fetched by loadRoot; fetch every other source repository once.
@@ -415,9 +439,15 @@ func (c *Controller) RefreshAll(ctx context.Context) {
 	c.mu.Unlock()
 
 	// Reconcile in dependency waves, so an app synced in this refresh unblocks
-	// the apps that depend on it in the same refresh.
+	// the apps that depend on it in the same refresh. composecd itself goes
+	// last: updating it restarts composecd.
+	var self []*config.Application
 	for _, wave := range objs.Waves() {
 		for _, a := range wave {
+			if c.isSelfApp(a) {
+				self = append(self, a)
+				continue
+			}
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
@@ -427,6 +457,9 @@ func (c *Controller) RefreshAll(ctx context.Context) {
 			}()
 		}
 		wg.Wait()
+	}
+	for _, a := range self {
+		c.reconcile(ctx, a, fetchErrs[sourceRepo(a)], true)
 	}
 	c.prune(ctx, objs, fresh)
 	c.pruneCheckouts(sha)
@@ -565,6 +598,8 @@ func (c *Controller) Apps() []AppStatus {
 	c.mu.RUnlock()
 	for i := range out {
 		out[i] = c.maskStatus(c.withRunning(out[i]))
+		out[i].Self = c.isSelf(out[i].Host, out[i].Name)
+		out[i].SelfUpdatable = out[i].Self && c.canUpdateSelf()
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
@@ -582,7 +617,10 @@ func (c *Controller) App(name string) (AppStatus, error) {
 		st = s.status
 	}
 	c.mu.RUnlock()
-	return c.maskStatus(c.withRunning(st)), nil
+	st = c.maskStatus(c.withRunning(st))
+	st.Self = c.isSelfApp(a)
+	st.SelfUpdatable = st.Self && c.canUpdateSelf()
+	return st, nil
 }
 
 // withRunning shows st's running operation, if any, as its last one: status
@@ -621,7 +659,8 @@ func (c *Controller) HostStatuses() []HostStatus {
 	c.mu.RUnlock()
 	var out []HostStatus
 	for _, h := range c.pruneHosts() {
-		hs := HostStatus{Status: h.Status(), Apps: counts[h.Name()], Orphans: orphans[h.Name()], Retired: c.Hosts.Get(h.Name()) == nil}
+		hs := HostStatus{Status: h.Status(), Apps: counts[h.Name()], Orphans: orphans[h.Name()], Retired: c.Hosts.Get(h.Name()) == nil,
+			Self: c.selfRelease(h.Name())}
 		if st, err := c.Store.HostState(h.Name()); err == nil {
 			hs.Maintenance, hs.MaintenanceReason = st.Maintenance, st.MaintenanceReason
 		}

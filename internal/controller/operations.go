@@ -30,6 +30,9 @@ func (c *Controller) startOperation(app, kind, trigger, revision, user string) (
 	if c.running[app] != 0 {
 		return nil, ErrBusy
 	}
+	if (c.selfUpdating != "" && c.selfUpdating != app) || len(c.watchedHelpers) > 0 {
+		return nil, fmt.Errorf("%w: composecd is updating itself", ErrBusy)
+	}
 	op := &store.Operation{App: app, Kind: kind, Trigger: trigger, SourceRevision: revision, User: user}
 	if err := c.Store.StartOperation(op); err != nil {
 		return nil, err
@@ -119,11 +122,28 @@ func deployOptions(o config.SyncOptions) action.DeployOptions {
 func (c *Controller) runSync(ctx context.Context, p *plan, op *store.Operation) {
 	defer p.host.Use()()
 	name := p.app.Metadata.Name
-	o := p.app.Spec.SyncPolicy.Options
 	log := c.opLog(op)
 	cfg := p.host.Configuration(p.prep.Env, log)
 	cfg.Registry = c.Registry
+	u := c.newUpgrade(cfg, p, op)
 
+	op.SourceRevision = p.prep.Revision
+	rel, err := u.Run(ctx, name, p.prep.ChartRef, p.prep.Values)
+	if rel != nil {
+		op.ReleaseRevision = rel.Revision
+	}
+	op.Log = log.String()
+	if err != nil {
+		op.Phase, op.Message = store.PhaseFailed, err.Error()
+		return
+	}
+	op.Phase, op.Message = store.PhaseSucceeded, rel.Description
+}
+
+// newUpgrade is the upgrade (or install) that syncs p as operation op.
+func (c *Controller) newUpgrade(cfg *action.Configuration, p *plan, op *store.Operation) *action.Upgrade {
+	name := p.app.Metadata.Name
+	o := p.app.Spec.SyncPolicy.Options
 	u := action.NewUpgrade(cfg)
 	u.Install, u.ResetValues = true, true
 	u.DeployOptions = deployOptions(o)
@@ -150,18 +170,7 @@ func (c *Controller) runSync(ctx context.Context, p *plan, op *store.Operation) 
 	// Compose may need the project directory to exist where it runs; on a remote
 	// host this creates an empty directory on the controller, which is harmless.
 	_ = os.MkdirAll(u.ProjectDir, 0o755)
-
-	op.SourceRevision = p.prep.Revision
-	rel, err := u.Run(ctx, name, p.prep.ChartRef, p.prep.Values)
-	if rel != nil {
-		op.ReleaseRevision = rel.Revision
-	}
-	op.Log = log.String()
-	if err != nil {
-		op.Phase, op.Message = store.PhaseFailed, err.Error()
-		return
-	}
-	op.Phase, op.Message = store.PhaseSucceeded, rel.Description
+	return u
 }
 
 // Sync starts syncing app to Git (fetching its repository first) and returns
@@ -192,7 +201,7 @@ func (c *Controller) Sync(name, user string) (*store.Operation, error) {
 			c.setStatus(st)
 			return
 		}
-		c.runSync(ctx, p, op)
+		c.sync(ctx, p, op)
 		p.done()
 		c.finishOperation(name, op)
 		c.mu.Lock()
@@ -208,8 +217,12 @@ func (c *Controller) Sync(name, user string) (*store.Operation, error) {
 	return op, nil
 }
 
-// manualAllowed checks the sync windows for a manual operation on app.
+// manualAllowed checks the sync windows for a manual operation on app, and
+// refuses one on composecd itself.
 func (c *Controller) manualAllowed(app *config.Application) error {
+	if c.isSelfApp(app) && !c.canUpdateSelf() {
+		return fmt.Errorf("%w: %s", ErrSelf, selfBlocked)
+	}
 	c.mu.RLock()
 	ws := c.windows
 	c.mu.RUnlock()
@@ -245,6 +258,14 @@ func (c *Controller) Rollback(name string, revision int, user string) (*store.Op
 		defer c.ops.Done()
 		ctx := c.baseContext()
 		defer c.lockApp(name)()
+		if c.isSelfApp(app) {
+			c.runSelfRollback(ctx, app, h, op, revision)
+			c.finishOperation(name, op)
+			st, p := c.assess(ctx, app, nil)
+			p.done()
+			c.setStatus(st)
+			return
+		}
 		func() {
 			defer h.Use()()
 			log := c.opLog(op)

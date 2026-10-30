@@ -65,3 +65,8 @@ document.addEventListener('click', function (event) {
 document.addEventListener('close', function (event) {
   if (event.target.id === 'dialog') { document.getElementById('dialog-body').replaceChildren(); }
 }, true);
+// Forms marked data-autosubmit apply as soon as one of their inputs changes.
+document.addEventListener('change', function (event) {
+  var form = event.target.closest('form[data-autosubmit]');
+  if (form) { form.requestSubmit(); }
+});

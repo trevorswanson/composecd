@@ -82,6 +82,9 @@ type AppSpec struct {
 	// DependsOn names Applications that must be Synced and Healthy before this
 	// one is synced automatically, like Argo CD's sync waves across apps.
 	DependsOn []string `yaml:"dependsOn,omitempty" json:"dependsOn,omitempty"`
+	// Self marks the Application that runs composecd itself, for setups where
+	// composecd can't find its own container. composecd normally detects it.
+	Self bool `yaml:"self,omitempty" json:"self,omitempty"`
 }
 
 // AppSource is where an Application's chart and values come from: a chart
