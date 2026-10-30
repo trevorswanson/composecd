@@ -492,8 +492,8 @@ func TestWebDisablesActionsOnSelf(t *testing.T) {
 	defer srv.Close()
 	for path, want := range map[string]string{
 		"/apps":                   `<span class="tag self"`,
-		"/apps/media":             `disabled title="composecd can't sync itself yet`,
-		"/apps/media?tab=history": "composecd can't roll itself back",
+		"/apps/media":             `disabled title="composecd can't update itself here`,
+		"/apps/media?tab=history": "composecd can't roll itself back here",
 		"/hosts/nas":              "composecd itself",
 	} {
 		status, body := do(t, srv, "GET", path, "secret", "")

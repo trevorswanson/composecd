@@ -17,8 +17,9 @@ import (
 // halfway through.
 var ErrSelf = errors.New("this is composecd itself")
 
-// selfBlocked is why automation and manual operations leave the self app alone.
-const selfBlocked = "composecd can't sync itself yet: run composetpl upgrade on the host instead"
+// selfBlocked is why automation and manual operations leave the self app alone
+// when composecd can't start a helper to update itself.
+const selfBlocked = "composecd can't update itself here, because it didn't find its own container: run composetpl upgrade on the host instead"
 
 // labelComposeProject is the label compose puts on every container it creates.
 const labelComposeProject = "com.docker.compose.project"
@@ -65,6 +66,11 @@ func (c *Controller) detectSelf(ctx context.Context, objs *config.Objects) {
 				var obj map[string]interface{}
 				if obj, err = h.Inspect(ctx, "container", id); err == nil {
 					found[h.Name()] = composeProject(obj)
+					if img, _ := obj["Image"].(string); img != "" {
+						c.mu.Lock()
+						c.selfImage = img
+						c.mu.Unlock()
+					}
 					continue
 				}
 				c.Log.Debug("looking for composecd's own container", "host", h.Name(), "error", err)

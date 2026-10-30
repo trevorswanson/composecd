@@ -121,10 +121,11 @@ func runServer(parent context.Context, boot *config.Bootstrap, log *slog.Logger)
 	}
 	go notifier.Run(ctx)
 
+	backend := &hosts.CLI{DataDir: boot.DataDir, HelperImage: os.Getenv("COMPOSECD_HELPER_IMAGE")}
 	ctrl := controller.New(controller.Options{
 		Boot:     boot,
 		Git:      gitcache.New(filepath.Join(boot.DataDir, "git"), boot.Credentials),
-		Hosts:    hosts.NewRegistry(&hosts.CLI{DataDir: boot.DataDir, HelperImage: os.Getenv("COMPOSECD_HELPER_IMAGE")}),
+		Hosts:    hosts.NewRegistry(backend),
 		Store:    st,
 		Registry: registry.New(os.Stderr),
 		Log:      log,
@@ -132,6 +133,8 @@ func runServer(parent context.Context, boot *config.Bootstrap, log *slog.Logger)
 		// Finds the Application that runs composecd itself, which it must not
 		// sync from inside its own container.
 		SelfContainer: controller.ContainerID(),
+		// Starts the container that updates composecd itself.
+		Helpers: backend,
 	})
 	authn := &auth.Authenticator{Store: st, AdminToken: token, Disabled: boot.Auth.Disabled}
 	if boot.Auth.OIDC != nil {

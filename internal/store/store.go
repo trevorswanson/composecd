@@ -42,12 +42,16 @@ type Operation struct {
 	// SourceRevision is the Git commit synced ("" for an oci:// chart or a rollback).
 	SourceRevision string `json:"sourceRevision,omitempty"`
 	// ReleaseRevision is the composetpl revision the operation created.
-	ReleaseRevision int        `json:"releaseRevision,omitempty"`
-	Phase           string     `json:"phase"`
-	Message         string     `json:"message,omitempty"`
-	Log             string     `json:"log,omitempty"`
-	StartedAt       time.Time  `json:"startedAt"`
-	FinishedAt      *time.Time `json:"finishedAt,omitempty"`
+	ReleaseRevision int    `json:"releaseRevision,omitempty"`
+	Phase           string `json:"phase"`
+	Message         string `json:"message,omitempty"`
+	Log             string `json:"log,omitempty"`
+	// Helper is the container applying composecd's own release, for an
+	// operation on composecd itself. It outlives this process, so the next one
+	// finishes the operation.
+	Helper     string     `json:"helper,omitempty"`
+	StartedAt  time.Time  `json:"startedAt"`
+	FinishedAt *time.Time `json:"finishedAt,omitempty"`
 }
 
 // AppState is what composecd remembers about an application between restarts.
@@ -113,7 +117,8 @@ CREATE TABLE IF NOT EXISTS app_state (
 `
 
 // Open opens (creating if needed) the database at path. Operations left
-// running by a previous process are marked failed.
+// running by a previous process are marked failed, except those a helper
+// container is still running (HelperOperations).
 func Open(path string) (*Store, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, err
@@ -137,7 +142,7 @@ func Open(path string) (*Store, error) {
 		return nil, err
 	}
 	s := &Store{db: db}
-	if _, err := db.Exec(`UPDATE operations SET phase = ?, message = ?, finished_at = ? WHERE phase = ?`,
+	if _, err := db.Exec(`UPDATE operations SET phase = ?, message = ?, finished_at = ? WHERE phase = ? AND helper = ''`,
 		PhaseFailed, "interrupted: composecd restarted during the operation", formatTime(time.Now()), PhaseRunning); err != nil {
 		db.Close()
 		return nil, err
@@ -153,6 +158,11 @@ func migrate(db *sql.DB) error {
 	}
 	if !cols["user"] {
 		if _, err := db.Exec(`ALTER TABLE operations ADD COLUMN user TEXT NOT NULL DEFAULT ''`); err != nil {
+			return err
+		}
+	}
+	if !cols["helper"] {
+		if _, err := db.Exec(`ALTER TABLE operations ADD COLUMN helper TEXT NOT NULL DEFAULT ''`); err != nil {
 			return err
 		}
 	}
@@ -203,6 +213,18 @@ func (s *Store) FinishOperation(op *Operation) error {
 	return err
 }
 
+// SetHelper records the helper container running operation id.
+func (s *Store) SetHelper(id int64, helper string) error {
+	_, err := s.db.Exec(`UPDATE operations SET helper = ? WHERE id = ?`, helper, id)
+	return err
+}
+
+// HelperOperations returns the running operations a helper container is
+// carrying out, oldest first.
+func (s *Store) HelperOperations() ([]*Operation, error) {
+	return s.query(false, `WHERE phase = ? AND helper != '' ORDER BY id`, PhaseRunning)
+}
+
 // Operation returns one operation, with its log.
 func (s *Store) Operation(id int64) (*Operation, error) {
 	ops, err := s.query(true, `WHERE id = ?`, id)
@@ -245,7 +267,7 @@ func (s *Store) query(withLog bool, where string, args ...interface{}) ([]*Opera
 	}
 	// logCol and where are constants from this file; values are bound parameters.
 	rows, err := s.db.Query(`SELECT id, app, kind, trigger, user, source_revision, release_revision, phase, message, `+logCol+ //nolint:gosec // see above
-		`, started_at, finished_at FROM operations `+where, args...)
+		`, helper, started_at, finished_at FROM operations `+where, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -256,7 +278,7 @@ func (s *Store) query(withLog bool, where string, args ...interface{}) ([]*Opera
 		var started string
 		var finished sql.NullString
 		if err := rows.Scan(&op.ID, &op.App, &op.Kind, &op.Trigger, &op.User, &op.SourceRevision, &op.ReleaseRevision,
-			&op.Phase, &op.Message, &op.Log, &started, &finished); err != nil {
+			&op.Phase, &op.Message, &op.Log, &op.Helper, &started, &finished); err != nil {
 			return nil, err
 		}
 		if op.StartedAt, err = parseTime(started); err != nil {

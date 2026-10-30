@@ -35,8 +35,11 @@ type AppStatus struct {
 	Origin    string `json:"origin,omitempty"`
 	Automated bool   `json:"automated"`
 	// Self is true for the Application that runs composecd itself, which
-	// composecd doesn't sync, prune or self-heal.
+	// composecd never prunes.
 	Self bool `json:"self,omitempty"`
+	// SelfUpdatable is true when composecd can sync, heal and roll back
+	// itself, through a helper container (docs/SELF.md).
+	SelfUpdatable bool `json:"selfUpdatable,omitempty"`
 	// Paused stops automatic sync, e.g. after a rollback.
 	Paused       bool         `json:"paused,omitempty"`
 	PausedReason string       `json:"pausedReason,omitempty"`

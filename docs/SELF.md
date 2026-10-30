@@ -151,35 +151,36 @@ composecd renders and stores the release, and the helper only applies what's sto
 composetpl gains a two-step API. The existing `Run` methods become wrappers around it, so the CLI and current
 callers don't change.
 
-```go
-// Prepare renders the chart, validates it with `compose config`, and saves the
-// release with status pending-install or pending-upgrade. It runs no hooks and
-// touches no containers.
-func (u *Upgrade) Prepare(ctx context.Context, name, chartPath string, values map[string]interface{}) (*release.Release, error)
+Delivered in [composetpl#4](https://github.com/trevorswanson/composetpl/pull/4):
 
-// Apply deploys a release saved by Prepare (or a pending rollback): it runs the
-// pre hooks, compose up, and the post hooks, then marks the release deployed, or
-// marks it failed and, if Atomic is set, rolls back to the last deployed revision.
-// Applying a revision that is no longer pending is an error.
+```go
+// Install.Prepare and Upgrade.Prepare render the chart, check it with `compose
+// config`, and save the revision as pending-install or pending-upgrade. They run
+// no hooks and touch no containers.
+func (u *Upgrade) Prepare(ctx context.Context, name, chartPath string, values map[string]interface{}) (*release.Release, error)
+func (i *Install) Prepare(ctx context.Context, name, chartPath string, values map[string]interface{}) (*release.Release, error)
+
+// Apply deploys the latest revision, which must be pending install or upgrade:
+// pre hooks, compose up, post hooks, then deployed; or failed, and with Atomic
+// torn down (install) or rolled back to the last deployed revision (upgrade).
 type Apply struct {
-    DeployOptions            // Wait, Timeout, Pull, ...
-    Atomic     bool
-    Timeout    time.Duration // hooks
-    HistoryMax int
+    DeployOptions // Wait, Timeout (also for hooks), Pull, ...
+    Atomic      bool
+    HistoryMax  int
+    Description string
 }
 func NewApply(cfg *Configuration) *Apply
 func (a *Apply) Run(ctx context.Context, name string, revision int) (*release.Release, error)
 
-// Abandon marks a pending release failed without touching containers, for
-// recovery when the process applying it died.
+// Abandon marks a pending revision failed without touching containers.
 func Abandon(cfg *Configuration, name string, revision int, reason string) error
 ```
 
-`Upgrade.Run` becomes `Prepare` followed by `Apply`. `Install` and `Rollback` get the same `Prepare` and `Apply`
-pair. `Repair` doesn't create a new revision, so it gets a separate mode instead: `Apply` with `ForceRecreate`
-on the deployed revision, flagged as a repair so that it doesn't change status.
+`Install.Run` and `Upgrade.Run` are now `Prepare` followed by `Apply`, so the CLI's behavior doesn't change.
+**Change from the plan:** Rollback and Repair aren't split. They render nothing and only read stored
+revisions, so the helper runs `Rollback.Run` and `Repair.Run` whole.
 
-This ships as composetpl v0.3.0. The change is additive, and composecd raises its required version.
+Until composetpl v0.3.0 is tagged, composecd's `go.mod` requires the PR's commit as a pseudo-version.
 
 ---
 
@@ -187,63 +188,70 @@ This ships as composetpl v0.3.0. The change is additive, and composecd raises it
 
 ### `composecd self-apply`
 
-A hidden subcommand that runs in the helper container:
+A hidden subcommand that runs in the helper container ([selfapply.go](../internal/selfapply/selfapply.go)):
 
 ```
-composecd self-apply --release composecd --revision N \
-  --project-root /opt/composecd --storage volume --wait-timeout 5m [--rollback-to M | --repair]
+composecd self-apply --release composecd --storage volume --wait=true --timeout 5m --history-max 10 \
+  (--revision N --description "composecd sync to abc1234" | --rollback-to M --label k=v | --repair) \
+  [--env KEY=VALUE ...] [--local-dir DIR] [--pull P] [--force-recreate]
 ```
 
-- It only talks to the local engine, through the mounted socket. It doesn't load `composecd.yaml`, open SQLite
-  or start a server.
-- It calls `action.Apply` with `Wait: true` and `Atomic: true`. With `--wait`, compose waits for the image's
-  `HEALTHCHECK` (`/healthz`) to report healthy. A container that fails its health check, or never starts,
-  counts as a failure and triggers the rollback.
-- Logs go to stdout, which `docker logs` keeps. The exit code is 0 for deployed, 1 for failed and rolled back,
-  and 2 for failed with the rollback also failed.
+- It doesn't load `composecd.yaml`, open SQLite or start a server. It builds a composetpl configuration for
+  one engine and its release storage, and runs `Apply` (with `Atomic: true`), `Rollback` or `Repair`.
+- `--wait` is always on for the self app, whatever the Application's `options.wait`. compose then waits for the
+  image's `HEALTHCHECK` (`/healthz`), so a new version that never turns healthy fails and is rolled back.
+- `--env` carries the Host's and Application's `env` for compose's `${VAR}` interpolation, as a normal sync
+  passes them.
+- Output goes to stdout, which `docker logs` keeps. The exit code is 0 on success and 1 on failure, whether or
+  not the rollback worked. The operation's message says which, from the helper's last line of output.
 
 ### Starting it
 
-When the reconciler decides to sync, repair or roll back the self app:
+When automation or a user syncs, self-heals or rolls back the self app
+([selfupdate.go](../internal/controller/selfupdate.go)):
 
-1. **Drain.** Stop starting new operations, and wait (bounded, default 2m) for running ones to finish. Each
-   app that's waiting shows `Waiting: composecd is updating itself`. If the drain times out, skip self this
-   pass and try again on the next one.
-2. **Prepare** the release (`Prepare`, or the matching rollback or repair setup). Record the operation as
-   `Running` with `kind=sync`, as usual, plus a new `helper` column holding the helper's container name.
-3. **Start the helper:**
+1. **Drain.** No new operation starts on any other app (`ErrBusy`: "composecd is updating itself"). composecd
+   waits up to 2 minutes for running ones to finish. If they don't, the self operation fails, and automation
+   tries again later.
+2. **Prepare** the revision, for a sync. A self-heal or rollback has nothing to prepare.
+3. **Start the helper,** after recording its name in the operation's new `helper` column:
    ```
-   docker run -d --name composecd-self-apply-<opID> \
-     --label composecd.self-apply=<opID> \
-     -v /var/run/docker.sock:/var/run/docker.sock \
-     <our current image ID> self-apply ...
+   docker run --detach --name composecd-self-apply-<opID> --label composecd.self-apply=<opID> \
+     --volumes-from <our container> [--env DOCKER_HOST=... | --env DOCKER_CONTEXT=...] \
+     -- <our image ID> self-apply ...
    ```
    - The helper uses our **current image ID**, not the new tag. The old image is known to work and is already
-     pulled, so a broken new image can't break the process that's meant to roll it back.
-   - The helper gets the socket path and env from our own container's inspect data, so a non-default socket
-     mount still works.
-   - Don't pass `--rm`, because we need its exit code and logs.
-4. **Follow the helper** by streaming `docker logs -f` into the operation log, so the UI shows progress. At some
-   point the old composecd is stopped. That's expected.
+     present, so a broken new image can't break the process that's meant to roll it back.
+   - **Change from the plan:** instead of mounting the socket by itself, `--volumes-from` gives the helper every
+     volume composecd has: the socket wherever it's mounted, the data directory (for `storage: local`), and any
+     TLS certificates or SSH keys. The engine is selected as composecd selects it for that Host: its `url` or
+     `context`, or composecd's own `DOCKER_HOST`.
+   - No `--rm`, because composecd needs the exit code and logs.
+4. **Follow the helper:** `docker logs --follow` streams into the operation log, and `docker wait` gets the exit
+   code. Usually the old composecd is stopped before this finishes. If it isn't (for example, when the change
+   didn't touch the composecd service, or failed before `up`), it finishes the operation, reads the release
+   revision the helper left, and removes the helper.
 
 ### Boot recovery
 
-On startup, before the first reconcile, composecd looks for helpers and pending self releases:
+At the first refresh after startup, once self is detected and its host is up, composecd finishes the
+operations helpers ran (`recoverSelf`):
 
 | State found | Action |
 | --- | --- |
-| A helper container is still running | Keep its operation `Running` (don't mark it interrupted). Leave self alone, follow the helper's logs, and wait for it to exit. |
-| A helper container has exited | Read its exit code and logs, finish the operation as `Succeeded` or `Failed`, send a notification, and remove the helper. |
-| The self release is pending and there's no helper | The helper died, for example because the host rebooted. Call `Abandon` on the release, mark the operation failed, and let the normal reconcile decide again. |
-| A helper exists for an operation not in the DB | This can happen after a DB restore. Wait for it to exit, then remove it, and log a warning. |
+| A helper container is still running | Keep its operation `Running`, hold other operations, follow the helper's logs, and wait for it to exit. |
+| A helper container has exited | The same as above, but it's over at once: read its exit code and logs, finish the operation (which sends the usual notification), and remove the helper. |
+| The helper container is gone | Fail the operation, and `Abandon` the self release if its latest revision is still pending. |
+| The self release is pending and no operation has a helper | `Abandon` it, and let the normal reconcile decide again. |
 
-To support this, `store.Open` no longer marks operations interrupted across the board. Operations with a
-`helper` set are skipped and handled by the recovery step above.
+`store.Open` no longer marks operations with a `helper` interrupted; `HelperOperations` lists them. After a
+successful rollback through a helper, an automated self app is paused, as for any rollback.
 
-### Cleanup
+### Not done yet
 
-composecd removes exited helpers whose operation it has finished. As a backstop, it also removes any
-`composecd.self-apply` container older than 24h.
+- A helper container for an operation that isn't in the DB (after a DB restore) is left alone.
+- The 24-hour backstop that removes old `composecd.self-apply` containers isn't there. A helper is removed
+  only when its operation finishes, and not when `docker wait` itself failed.
 
 ---
 
@@ -253,9 +261,10 @@ The chart puts `composecd.yaml` into `configs.content`, so with self-management,
 Git as well. A bad change to `root`, `repositories` or the auth settings can leave the new composecd unable to
 read Git, and then it can't pull the fix.
 
-- **Parse and validation errors are caught.** composecd validates the self app's rendered config with the same
-  code as `composecd validate` before it starts the helper. If the config is invalid, the operation fails
-  before anything restarts.
+- **Parse and validation errors should be caught.** The plan is that composecd validates the self app's
+  rendered config, with the same code as `composecd validate`, before it starts the helper. **Not done yet:**
+  the config is only in the chart's `configs` section, and finding it there needs a convention. Until then, a
+  config that doesn't parse makes the new container fail its health check, and the helper rolls it back.
 - **Errors at runtime aren't caught.** A wrong repo URL or an expired token produces a valid config, the new
   version comes up healthy, and composecd then can't fetch Git. Recovering means editing the config on the host
   and restarting. This is the same as running composecd without self-management, and it's documented.
@@ -283,8 +292,8 @@ first. The README quick start gets a "Managing composecd with composecd" section
 | Step | Content | Depends on |
 | --- | --- | --- |
 | A (delivered) | Detecting self, the guards, `AppStatus.Self`, UI badge. Sync of the self app is refused. | none |
-| B | composetpl `Prepare`, `Apply` and `Abandon`, released as v0.3.0 | none (separate repo) |
-| C | `self-apply`, starting the helper, drain, boot recovery, `helper` column, reconciling self last | A, B |
+| B (in review) | composetpl `Prepare`, `Apply` and `Abandon`, to be released as v0.3.0 | none (separate repo) |
+| C (in review) | `self-apply`, starting the helper, drain, boot recovery, `helper` column, reconciling self last | A, B |
 | D | README bootstrap section, example Application in `examples/gitops` | C |
 
 A and B can run in parallel. A ships on its own and is useful without the rest.
