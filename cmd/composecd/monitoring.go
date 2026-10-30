@@ -9,6 +9,7 @@ import (
 	"sort"
 
 	"github.com/spf13/cobra"
+
 	"github.com/trevorswanson/composecd/internal/appset"
 	"github.com/trevorswanson/composecd/internal/config"
 	"github.com/trevorswanson/composecd/internal/source"

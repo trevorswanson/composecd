@@ -6,10 +6,11 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/trevorswanson/composecd/internal/config"
-	"github.com/trevorswanson/composecd/internal/sops"
 	"github.com/trevorswanson/composetpl/pkg/values"
 	"sigs.k8s.io/yaml"
+
+	"github.com/trevorswanson/composecd/internal/config"
+	"github.com/trevorswanson/composecd/internal/sops"
 )
 
 // MonitoringValues resolves only declarative, non-secret monitoring values from
@@ -25,7 +26,7 @@ func MonitoringValues(app *config.Application, root string) (interface{}, error)
 	if s.Infisical != nil {
 		into := s.Infisical.Into
 		if into == "" || strings.Split(into, ".")[0] == "monitoring" {
-			return nil, fmt.Errorf("Infisical must be scoped outside monitoring (for example into: secrets)")
+			return nil, fmt.Errorf("infisical must be scoped outside monitoring (for example into: secrets)")
 		}
 	}
 	var err error
