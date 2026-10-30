@@ -247,11 +247,19 @@ operations helpers ran (`recoverSelf`):
 `store.Open` no longer marks operations with a `helper` interrupted; `HelperOperations` lists them. After a
 successful rollback through a helper, an automated self app is paused, as for any rollback.
 
-### Not done yet
+### Cleanup
 
-- A helper container for an operation that isn't in the DB (after a DB restore) is left alone.
-- The 24-hour backstop that removes old `composecd.self-apply` containers isn't there. A helper is removed
-  only when its operation finishes, and not when `docker wait` itself failed.
+Every refresh, after boot recovery, composecd lists the `composecd.self-apply` containers on each host its own
+container runs on (`sweepHelpers`). It leaves alone the helpers its operations are waiting for, and handles
+the rest:
+
+| Helper found | Action |
+| --- | --- |
+| Running, and no operation is waiting for it (a restored DB, or an operation whose `docker wait` failed) | It may be replacing composecd right now, so no operation starts until it exits. Then it's removed. |
+| Exited, and no operation is waiting for it | Removed, with a warning if its operation isn't in the DB. |
+| Older than 24 hours, running or not | Removed, by force. A helper finishes within its timeout, so it's stuck or forgotten. An operation waiting for it then fails. |
+
+Helpers carry a second label, `composecd.self-apply.app`, naming the app they update.
 
 ---
 
@@ -261,10 +269,12 @@ The chart puts `composecd.yaml` into `configs.content`, so with self-management,
 Git as well. A bad change to `root`, `repositories` or the auth settings can leave the new composecd unable to
 read Git, and then it can't pull the fix.
 
-- **Parse and validation errors should be caught.** The plan is that composecd validates the self app's
-  rendered config, with the same code as `composecd validate`, before it starts the helper. **Not done yet:**
-  the config is only in the chart's `configs` section, and finding it there needs a convention. Until then, a
-  config that doesn't parse makes the new container fail its health check, and the helper rolls it back.
+- **Parse and validation errors are caught.** After preparing a sync of the self app, composecd looks in the
+  rendered manifest for a compose `config` mounted at the path it read its own configuration from (`--config`,
+  `/etc/composecd/composecd.yaml` in the chart), and parses its `content` as the new composecd will. If that
+  fails, composecd abandons the prepared revision and fails the operation, so nothing restarts. A config that
+  comes from a `file:`, or that's mounted anywhere else, isn't checked. Compose `${VAR}` interpolation in the
+  content isn't applied first (only `$$` is unescaped).
 - **Errors at runtime aren't caught.** A wrong repo URL or an expired token produces a valid config, the new
   version comes up healthy, and composecd then can't fetch Git. Recovering means editing the config on the host
   and restarting. This is the same as running composecd without self-management, and it's documented.

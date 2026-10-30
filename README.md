@@ -205,8 +205,9 @@ example, when `/proc/self/mountinfo` doesn't show the container's ID). It shows 
 composecd never prunes or deletes it. Recreating its own container from inside that container would stop
 composecd halfway through, so syncs, self-heals and rollbacks of it run in a short-lived helper container
 started from composecd's current image (`composecd-self-apply-<operation>`). composecd first lets other
-operations finish. The helper waits for the new composecd to turn healthy, rolls it back if it doesn't, and
-the new composecd records the result when it starts. If composecd can't find its own container (`self: true`
+operations finish, and checks that the configuration the chart mounts at its own `--config` path still
+parses. The helper waits for the new composecd to turn healthy, rolls it back if it doesn't, and the new
+composecd records the result when it starts. Helpers that are left over, or older than a day, are removed. If composecd can't find its own container (`self: true`
 with no container ID), it leaves the app alone: upgrade it with `composetpl upgrade` on the host. See
 [docs/SELF.md](docs/SELF.md).
 

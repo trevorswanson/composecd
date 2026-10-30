@@ -101,9 +101,12 @@ type Controller struct {
 	selfUpdating string
 	// selfRecovered is set once recoverSelf has run.
 	selfRecovered bool
-	timers        map[string]*timer
-	metrics       map[metricKey]*opMetric
-	watchers      map[string]*watcher
+	// watchedHelpers are helper containers no operation waits for, which
+	// sweepHelpers waits for; until they exit, no operation starts.
+	watchedHelpers map[string]bool
+	timers         map[string]*timer
+	metrics        map[metricKey]*opMetric
+	watchers       map[string]*watcher
 }
 
 // watcher streams one host's container events.
@@ -401,6 +404,7 @@ func (c *Controller) RefreshAll(ctx context.Context) {
 	wg.Wait()
 	c.detectSelf(ctx, objs)
 	c.recoverSelf(ctx, objs)
+	c.sweepHelpers(ctx)
 	c.restoreEmptyGuards()
 
 	// The root was fetched by loadRoot; fetch every other source repository once.

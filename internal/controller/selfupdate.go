@@ -2,14 +2,17 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/trevorswanson/composetpl/pkg/action"
+	"gopkg.in/yaml.v3"
 
 	"github.com/trevorswanson/composecd/internal/config"
 	"github.com/trevorswanson/composecd/internal/hosts"
@@ -25,10 +28,19 @@ type Helpers interface {
 	StartHelper(ctx context.Context, h *hosts.Host, spec hosts.HelperSpec) error
 	// WaitHelper blocks until the helper exits and returns its exit code.
 	WaitHelper(ctx context.Context, h *hosts.Host, name string) (int, error)
+	// ListHelpers returns h's containers with label, running or not.
+	ListHelpers(ctx context.Context, h *hosts.Host, label string) ([]hosts.HelperInfo, error)
 }
 
-// labelSelfApply marks a helper container with the operation it carries out.
-const labelSelfApply = "composecd.self-apply"
+// Labels on a helper container: the operation it carries out, and the app.
+const (
+	labelSelfApply    = "composecd.self-apply"
+	labelSelfApplyApp = "composecd.self-apply.app"
+)
+
+// helperMaxAge is how long a helper container may live. A helper finishes
+// within its timeout, so an older one is stuck, or left over.
+var helperMaxAge = 24 * time.Hour
 
 // Before updating itself, composecd waits this long for other operations to
 // finish, since the update restarts it.
@@ -159,12 +171,72 @@ func (c *Controller) runSelfSync(ctx context.Context, p *plan, op *store.Operati
 			c.endSelfUpdate()
 			return
 		}
+		if err := checkSelfConfig(rel.Manifest, c.Boot.Path); err != nil {
+			op.Log = log.String()
+			op.ReleaseRevision = rel.Revision
+			op.Phase, op.Message = store.PhaseFailed, err.Error()
+			if aerr := action.Abandon(cfg, name, rel.Revision, err.Error()); aerr != nil {
+				c.Log.Error("abandoning a revision of composecd with an invalid configuration", "app", name, "error", aerr)
+			}
+			c.endSelfUpdate()
+			return
+		}
 		fmt.Fprintf(log, "Prepared revision %d; a helper container applies it, since composecd restarts.\n", rel.Revision)
 		so := c.helperOptions(p.host, p.app, p.prep.Env)
 		so.Revision, so.Description = rel.Revision, u.Description
 		c.runHelper(ctx, p.host, op, so)
 	}()
 	p.host.Invalidate()
+}
+
+// checkSelfConfig parses the composecd configuration that manifest mounts at
+// path, where this composecd read its own, as the new composecd will read it,
+// so a configuration that won't load fails before composecd restarts. It
+// returns nil when nothing the manifest mounts there can be read from here.
+func checkSelfConfig(manifest, path string) error {
+	if path == "" {
+		return nil
+	}
+	var doc struct {
+		Services map[string]struct {
+			Configs []interface{} `yaml:"configs"`
+		} `yaml:"services"`
+		Configs map[string]struct {
+			Content *string `yaml:"content"`
+		} `yaml:"configs"`
+	}
+	if err := yaml.Unmarshal([]byte(manifest), &doc); err != nil {
+		return nil // compose config has already checked the manifest
+	}
+	for _, svc := range doc.Services {
+		for _, ref := range svc.Configs {
+			var source, target string
+			switch r := ref.(type) {
+			case string:
+				source = r
+			case map[string]interface{}:
+				source, _ = r["source"].(string)
+				target, _ = r["target"].(string)
+			}
+			if target == "" {
+				target = "/" + source
+			}
+			if target != path {
+				continue
+			}
+			cfg, ok := doc.Configs[source]
+			if !ok || cfg.Content == nil {
+				return nil // a file: config isn't readable from here
+			}
+			// Compose unescapes $$ in content.
+			content := strings.ReplaceAll(*cfg.Content, "$$", "$")
+			if _, err := config.ParseBootstrap([]byte(content)); err != nil {
+				return fmt.Errorf("the new composecd configuration (config %q, mounted at %s) is invalid, so composecd didn't update itself: %w", source, path, err)
+			}
+			return nil
+		}
+	}
+	return nil
 }
 
 // runSelfHeal has a helper repair p's drifted containers.
@@ -221,7 +293,7 @@ func (c *Controller) runHelper(ctx context.Context, h *hosts.Host, op *store.Ope
 	c.mu.RUnlock()
 	spec := hosts.HelperSpec{
 		Name: name, Image: image, Args: append([]string{"self-apply"}, o.Args()...), VolumesFrom: c.SelfContainer,
-		Labels: map[string]string{labelSelfApply: fmt.Sprint(op.ID)}, Env: helperEnv(h),
+		Labels: map[string]string{labelSelfApply: fmt.Sprint(op.ID), labelSelfApplyApp: op.App}, Env: helperEnv(h),
 	}
 	c.Log.Info("starting a helper container to update composecd", "app", op.App, "host", h.Name(), "helper", name)
 	if err := c.Helpers.StartHelper(ctx, h, spec); err != nil {
@@ -279,10 +351,96 @@ func (c *Controller) awaitHelper(ctx context.Context, h *hosts.Host, op *store.O
 		op.Phase, op.Message = store.PhaseSucceeded, desc
 	}
 	if err == nil {
-		if rerr := h.Configuration(nil, io.Discard).Compose.RemoveContainer(ctx, op.Helper); rerr != nil {
-			c.Log.Warn("removing the helper container", "helper", op.Helper, "error", rerr)
+		c.removeHelper(ctx, h, op.Helper)
+	}
+}
+
+// removeHelper removes helper container name from h, stopping it if it runs.
+func (c *Controller) removeHelper(ctx context.Context, h *hosts.Host, name string) {
+	if err := h.Configuration(nil, io.Discard).Compose.RemoveContainer(ctx, name); err != nil {
+		c.Log.Warn("removing a helper container", "host", h.Name(), "helper", name, "error", err)
+	}
+}
+
+// sweepHelpers looks after the helper containers on the hosts composecd runs
+// on that no operation of this composecd is waiting for: left by an operation
+// it has no record of (a restored database), or whose wait failed. A running
+// one may be replacing composecd right now, so every operation waits for it to
+// exit; then it's removed, as an exited one is at once. A helper older than
+// helperMaxAge is stuck or forgotten, and is removed, running or not.
+func (c *Controller) sweepHelpers(ctx context.Context) {
+	c.mu.RLock()
+	ready := c.Helpers != nil && c.selfRecovered
+	var on []string
+	for host, project := range c.selfFound {
+		if project != "" {
+			on = append(on, host)
 		}
 	}
+	c.mu.RUnlock()
+	if !ready {
+		return
+	}
+	for _, name := range on {
+		h := c.Hosts.Get(name)
+		if h == nil || h.Status().State != hosts.StateUp {
+			continue
+		}
+		list, err := c.Helpers.ListHelpers(ctx, h, labelSelfApply)
+		if err != nil {
+			c.Log.Warn("listing helper containers", "host", name, "error", err)
+			continue
+		}
+		for _, hi := range list {
+			c.sweepHelper(ctx, h, hi)
+		}
+	}
+}
+
+func (c *Controller) sweepHelper(ctx context.Context, h *hosts.Host, hi hosts.HelperInfo) {
+	id, _ := strconv.ParseInt(hi.Labels[labelSelfApply], 10, 64)
+	app := hi.Labels[labelSelfApplyApp]
+	c.mu.RLock()
+	ours := (id != 0 && app != "" && c.running[app] == id) || c.watchedHelpers[hi.Name]
+	c.mu.RUnlock()
+	switch {
+	case time.Since(hi.Created) > helperMaxAge:
+		// An operation waiting for it then fails.
+		c.Log.Warn("removing a helper container older than "+helperMaxAge.String(), "host", h.Name(), "helper", hi.Name, "running", hi.Running)
+		c.removeHelper(ctx, h, hi.Name)
+	case ours:
+	case hi.Running:
+		c.watchHelper(ctx, h, hi.Name)
+	default:
+		if _, err := c.Store.Operation(id); errors.Is(err, store.ErrNotFound) {
+			c.Log.Warn("removing a helper container left by an operation composecd has no record of", "host", h.Name(), "helper", hi.Name)
+		}
+		c.removeHelper(ctx, h, hi.Name)
+	}
+}
+
+// watchHelper holds every operation until helper container name on h exits,
+// then removes it.
+func (c *Controller) watchHelper(ctx context.Context, h *hosts.Host, name string) {
+	c.mu.Lock()
+	if c.watchedHelpers == nil {
+		c.watchedHelpers = map[string]bool{}
+	}
+	c.watchedHelpers[name] = true
+	c.mu.Unlock()
+	c.Log.Warn("a helper container no operation is waiting for is updating composecd; operations wait until it exits",
+		"host", h.Name(), "helper", name)
+	c.ops.Add(1)
+	go func() {
+		defer c.ops.Done()
+		code, err := c.Helpers.WaitHelper(ctx, h, name)
+		c.Log.Info("a helper container exited", "host", h.Name(), "helper", name, "code", code, "error", err)
+		c.removeHelper(ctx, h, name)
+		c.mu.Lock()
+		delete(c.watchedHelpers, name)
+		c.mu.Unlock()
+		h.Invalidate()
+	}()
 }
 
 // afterSelfOperation pauses an automated app that op rolled back, as Rollback

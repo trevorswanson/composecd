@@ -17,11 +17,33 @@ import (
 )
 
 // fakeHelpers runs self-apply in-process against the test host, as the
-// helper container would, and remembers what it started.
+// helper container would, and remembers what it started. Its containers are
+// gone once the fake engine has removed them.
 type fakeHelpers struct {
 	mu    sync.Mutex
 	specs []hosts.HelperSpec
 	codes map[string]int
+	// listed are containers ListHelpers returns, besides those started.
+	listed []hosts.HelperInfo
+	// block holds WaitHelper for a helper until closed.
+	block  map[string]chan struct{}
+	engine interface{ CallLog() string }
+}
+
+func (f *fakeHelpers) ListHelpers(_ context.Context, _ *hosts.Host, label string) ([]hosts.HelperInfo, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	all := append([]hosts.HelperInfo{}, f.listed...)
+	for _, s := range f.specs {
+		all = append(all, hosts.HelperInfo{Name: s.Name, Labels: s.Labels, Created: time.Now()})
+	}
+	var out []hosts.HelperInfo
+	for _, hi := range all {
+		if _, ok := hi.Labels[label]; ok && !strings.Contains(f.engine.CallLog()+";", "rm "+hi.Name+";") {
+			out = append(out, hi)
+		}
+	}
+	return out, nil
 }
 
 func (f *fakeHelpers) StartHelper(ctx context.Context, h *hosts.Host, spec hosts.HelperSpec) error {
@@ -42,6 +64,12 @@ func (f *fakeHelpers) StartHelper(ctx context.Context, h *hosts.Host, spec hosts
 
 func (f *fakeHelpers) WaitHelper(_ context.Context, _ *hosts.Host, name string) (int, error) {
 	f.mu.Lock()
+	block := f.block[name]
+	f.mu.Unlock()
+	if block != nil {
+		<-block
+	}
+	f.mu.Lock()
 	defer f.mu.Unlock()
 	code, ok := f.codes[name]
 	if !ok {
@@ -61,7 +89,7 @@ func (f *fakeHelpers) last() hosts.HelperSpec {
 func (e *env) updatesSelf(project string) *fakeHelpers {
 	e.runAsSelf(project)
 	e.fake().Objects["container/"+selfID]["Image"] = "sha256:self"
-	f := &fakeHelpers{codes: map[string]int{}}
+	f := &fakeHelpers{codes: map[string]int{}, block: map[string]chan struct{}{}, engine: e.fake()}
 	e.c.Helpers = f
 	return f
 }
@@ -243,5 +271,102 @@ func must(t *testing.T, err error) {
 	t.Helper()
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestCheckSelfConfig(t *testing.T) {
+	const path = "/etc/composecd/composecd.yaml"
+	manifest := func(ref, content string) string {
+		return "services:\n  composecd:\n    image: composecd\n    configs:\n" + ref +
+			"configs:\n  config:\n" + content
+	}
+	long := "      - {source: config, target: " + path + "}\n"
+	valid := "    content: |\n      root: {repoURL: https://git.lan/me/x.git, path: composecd}\n"
+	for _, tc := range []struct {
+		name, manifest, want string
+	}{
+		{"valid", manifest(long, valid), ""},
+		{"escaped dollar", manifest(long, "    content: |\n      root: {repoURL: https://git.lan/$$me/x.git}\n"), ""},
+		{"unknown field", manifest(long, "    content: |\n      roots: {}\n"), `config "config", mounted at ` + path + `) is invalid`},
+		{"not yaml", manifest(long, "    content: \"root: [\"\n"), "is invalid"},
+		{"a file config", manifest(long, "    file: ./composecd.yaml\n"), ""},
+		{"mounted elsewhere", manifest("      - {source: config, target: /other.yaml}\n", "    content: \"roots: {}\"\n"), ""},
+		{"short syntax", "services:\n  c:\n    configs: [etc]\nconfigs:\n  etc: {content: \"roots: {}\"}\n", ""},
+	} {
+		err := checkSelfConfig(tc.manifest, path)
+		if tc.want == "" && err != nil || tc.want != "" && (err == nil || !strings.Contains(err.Error(), tc.want)) {
+			t.Errorf("%s: %v", tc.name, err)
+		}
+	}
+	if err := checkSelfConfig("services:\n  c:\n    configs: [etc]\nconfigs:\n  etc: {content: \"roots: {}\"}\n", "/etc"); err == nil {
+		t.Error("short syntax mounted at the config path: no error")
+	}
+}
+
+func TestSelfSyncChecksTheNewConfig(t *testing.T) {
+	e := newEnv(t)
+	helpers := e.updatesSelf("web")
+	e.refresh()
+	e.c.Boot.Path = "/etc/composecd/composecd.yaml"
+	e.commit(map[string]string{"charts/web/templates/b.yaml": "services:\n  web:\n    configs:\n" +
+		"      - {source: config, target: /etc/composecd/composecd.yaml}\n" +
+		"configs:\n  config:\n    content: \"roots: {}\"\n"})
+	e.refresh()
+	web := e.app("web")
+	if web.Operation.Phase != store.PhaseFailed || !strings.Contains(web.Operation.Message, "is invalid, so composecd didn't update itself") {
+		t.Errorf("operation = %+v", web.Operation)
+	}
+	if len(helpers.specs) != 1 {
+		t.Errorf("%d helpers started, want only the first sync's", len(helpers.specs))
+	}
+	if got := e.history("web"); got != "deployed failed" {
+		t.Errorf("history = %s", got)
+	}
+}
+
+func TestSweepHelpers(t *testing.T) {
+	e := newEnv(t)
+	helpers := e.updatesSelf("web")
+	e.refresh()
+	name := helpers.last().Name
+	if !strings.Contains(e.fake().CallLog(), "rm "+name) {
+		t.Fatal("the first sync's helper wasn't removed")
+	}
+
+	helpers.mu.Lock()
+	helpers.listed = []hosts.HelperInfo{
+		// Exited, from an operation composecd has no record of.
+		{Name: "composecd-self-apply-77", Labels: map[string]string{labelSelfApply: "77", labelSelfApplyApp: "web"}, Created: time.Now()},
+		// Running, but stuck for a day.
+		{Name: "composecd-self-apply-78", Labels: map[string]string{labelSelfApply: "78"}, Running: true, Created: time.Now().Add(-25 * time.Hour)},
+		// Running, and no operation is waiting for it.
+		{Name: "composecd-self-apply-79", Labels: map[string]string{labelSelfApply: "79", labelSelfApplyApp: "web"}, Running: true, Created: time.Now()},
+	}
+	release := make(chan struct{})
+	helpers.block["composecd-self-apply-79"] = release
+	helpers.codes["composecd-self-apply-79"] = 0
+	helpers.mu.Unlock()
+
+	e.c.sweepHelpers(context.Background())
+	log := e.fake().CallLog() + ";"
+	if !strings.Contains(log, "rm composecd-self-apply-77;") || !strings.Contains(log, "rm composecd-self-apply-78;") {
+		t.Errorf("exited and old helpers not removed: %s", log)
+	}
+	if strings.Contains(log, "rm composecd-self-apply-79;") {
+		t.Error("a running helper was removed")
+	}
+	if _, err := e.c.Sync("manual", "admin"); !errors.Is(err, ErrBusy) {
+		t.Errorf("sync while an unknown helper runs: %v", err)
+	}
+	// Seen again at the next refresh, it's still only watched once.
+	e.c.sweepHelpers(context.Background())
+
+	close(release)
+	eventually(t, "the watched helper is removed", func() bool {
+		return strings.Contains(e.fake().CallLog()+";", "rm composecd-self-apply-79;")
+	})
+	e.c.Wait()
+	if _, err := e.c.Sync("manual", "admin"); err != nil {
+		t.Errorf("sync after the helper exited: %v", err)
 	}
 }

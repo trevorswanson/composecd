@@ -30,7 +30,7 @@ func (c *Controller) startOperation(app, kind, trigger, revision, user string) (
 	if c.running[app] != 0 {
 		return nil, ErrBusy
 	}
-	if c.selfUpdating != "" && c.selfUpdating != app {
+	if (c.selfUpdating != "" && c.selfUpdating != app) || len(c.watchedHelpers) > 0 {
 		return nil, fmt.Errorf("%w: composecd is updating itself", ErrBusy)
 	}
 	op := &store.Operation{App: app, Kind: kind, Trigger: trigger, SourceRevision: revision, User: user}

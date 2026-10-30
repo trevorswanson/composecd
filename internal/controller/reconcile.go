@@ -258,8 +258,15 @@ func (c *Controller) assess(ctx context.Context, app *config.Application, fetchE
 		}
 	}
 
+	var details map[string]string
+	if psErr == nil {
+		details = healthDetails(func(kind, n string) (map[string]interface{}, error) {
+			return cfg.Compose.Inspect(ctx, kind, n)
+		}, containers)
+		st.Health.Message = withDetails(st.Health.Message, containers, details)
+	}
 	objs, err := objectsFor(ctx, cfg, objectInput{project: name, desired: manifest, deployed: base, changes: st.Sync.Changes,
-		containers: containers, drift: st.Sync.Drift, live: psErr == nil})
+		containers: containers, drift: st.Sync.Drift, live: psErr == nil, details: details})
 	if err != nil {
 		warnings = append(warnings, "listing objects: "+err.Error())
 	}
