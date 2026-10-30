@@ -271,6 +271,7 @@ host maintenance, a retry or self-heal backoff, or a failed sync waiting for a c
 | `host maintenance NAME on\|off` | While on, nothing on the host is synced, healed or pruned automatically. Manual operations still work. |
 | `window list` | Sync windows, whether they're open, and the apps they match. |
 | `validate DIR` | Check objects offline. |
+| `monitoring export DIR --repo-root CHECKOUT` | Expand local desired-state applications and export only their non-secret `monitoring` values as versioned JSON, without a server. See [offline monitoring](docs/offline-monitoring.md). |
 | `login`, `logout`, `whoami` | Save, forget or check the server and token the CLI uses. |
 | `token create NAME --role R`, `token list`, `token revoke NAME` | API tokens (admin). |
 | `user add NAME --role R`, `user passwd NAME`, `user delete NAME`, `user list` | Local users (admin; anyone can change their own password through the API). |
