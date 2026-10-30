@@ -144,8 +144,6 @@ func TestRedactedProjectionMatchesDesired(t *testing.T) {
 	}
 }
 
-<<<<<<< HEAD
-=======
 func TestWildcardHostIPMatchesLive(t *testing.T) {
 	d := normalizeDesired(KindService, parseYAML(`ports:
 - {host_ip: 0.0.0.0, published: "80", target: 80, protocol: tcp}
@@ -164,7 +162,6 @@ func TestWildcardHostIPMatchesLive(t *testing.T) {
 	}
 }
 
->>>>>>> origin/main
 func TestFoldInspectKeepsFailingHealthLog(t *testing.T) {
 	for status, folded := range map[string]bool{"healthy": true, "starting": false, "unhealthy": false} {
 		in := map[string]interface{}{"State": map[string]interface{}{"Health": map[string]interface{}{
