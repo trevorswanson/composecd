@@ -143,3 +143,23 @@ func TestRedactedProjectionMatchesDesired(t *testing.T) {
 		t.Errorf("live:\n%s\ndesired:\n%s", ly, dy)
 	}
 }
+
+func TestFoldInspectKeepsFailingHealthLog(t *testing.T) {
+	for status, folded := range map[string]bool{"healthy": true, "starting": false, "unhealthy": false} {
+		in := map[string]interface{}{"State": map[string]interface{}{"Health": map[string]interface{}{
+			"Status": status,
+			"Log":    []interface{}{map[string]interface{}{"ExitCode": float64(1), "Output": "boom"}},
+		}}}
+		ins, err := foldInspect("c", KindContainer, in)
+		if err != nil {
+			t.Fatal(err)
+		}
+		has := false
+		for _, f := range ins.Folded {
+			has = has || f.Path == "State.Health.Log"
+		}
+		if has != folded || strings.Contains(ins.YAML, "boom") == folded {
+			t.Errorf("%s: folded=%v, yaml:\n%s", status, has, ins.YAML)
+		}
+	}
+}

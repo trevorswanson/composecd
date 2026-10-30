@@ -279,6 +279,11 @@ var noisy = map[string][]string{
 func foldInspect(name, kind string, in map[string]interface{}) (Inspected, error) {
 	m := deepCopy(in).(map[string]interface{})
 	var folds []Fold
+	// The health check log is the first thing to read when a check hasn't passed.
+	skip := ""
+	if h, _ := lookup(m, []string{"State", "Health", "Status"}); kind == KindContainer && h != nil && h != "healthy" {
+		skip = "State.Health.Log"
+	}
 	add := func(p string, v interface{}) error {
 		y, err := encodeYAML(map[string]interface{}{path.Base(strings.ReplaceAll(p, ".", "/")): v})
 		if err != nil {
@@ -290,6 +295,9 @@ func foldInspect(name, kind string, in map[string]interface{}) (Inspected, error
 	// Top-level bookkeeping folds together; nested noise folds one by one.
 	meta := map[string]interface{}{}
 	for _, p := range noisy[kind] {
+		if p == skip {
+			continue
+		}
 		v, ok := cut(m, strings.Split(p, "."))
 		switch {
 		case !ok:
