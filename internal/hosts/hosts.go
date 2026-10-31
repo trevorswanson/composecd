@@ -52,9 +52,9 @@ type Backend interface {
 	Runner(h *Host, env []string, progress io.Writer) compose.Runner
 	// Store returns a fresh release storage driver for h.
 	Store(h *Host) storage.Driver
-	// Watch calls on with the compose project of every container event on h
+	// Watch reports h's container events and release storage writes to on
 	// until ctx is done or the event stream ends.
-	Watch(ctx context.Context, h *Host, on func(project string)) error
+	Watch(ctx context.Context, h *Host, on events.Handlers) error
 	// Logs streams stdout and stderr until completion or cancellation.
 	Logs(ctx context.Context, h *Host, container string, tail int, follow bool, w io.Writer) error
 }
@@ -70,6 +70,9 @@ type Host struct {
 	mu     sync.Mutex
 	store  storage.Driver
 	status Status
+	// fresh is whether the storage cache can be trusted: nothing but this
+	// process has written releases since it was filled (see MarkStale).
+	fresh bool
 }
 
 // Use marks the start of an operation that reads or writes releases on the
@@ -143,8 +146,31 @@ func (h *Host) Invalidate() bool {
 	defer h.ops.Unlock()
 	h.mu.Lock()
 	h.store = nil
+	h.fresh = true
 	h.mu.Unlock()
 	return true
+}
+
+// MarkStale records that releases may have been changed by another client, or
+// that such a change may have gone unseen, and invalidates the storage cache
+// now if no operation is using the host. Otherwise InvalidateIfStale does it later.
+func (h *Host) MarkStale() {
+	h.mu.Lock()
+	h.fresh = false
+	h.mu.Unlock()
+	h.Invalidate()
+}
+
+// InvalidateIfStale invalidates the storage cache if MarkStale was called since
+// it was last invalidated, or never was. Reading volume storage again is a docker
+// cp, so it isn't done on every refresh.
+func (h *Host) InvalidateIfStale() {
+	h.mu.Lock()
+	fresh := h.fresh
+	h.mu.Unlock()
+	if !fresh {
+		h.Invalidate()
+	}
 }
 
 // Configuration returns a composetpl configuration for one operation on the
@@ -274,7 +300,7 @@ func (c *CLI) Store(h *Host) storage.Driver {
 	return v
 }
 
-func (c *CLI) Watch(ctx context.Context, h *Host, on func(project string)) error {
+func (c *CLI) Watch(ctx context.Context, h *Host, on events.Handlers) error {
 	return events.Watch(ctx, h.Global(), h.Env(), on)
 }
 
