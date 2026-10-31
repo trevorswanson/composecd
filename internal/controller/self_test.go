@@ -15,7 +15,7 @@ func TestContainerIDFrom(t *testing.T) {
 		{"podman", "3 1 0:2 /overlay-containers/" + selfID + "/userdata/hostname /etc/hostname rw - tmpfs tmpfs rw\n", selfID},
 		{"containers on their own filesystem", "1 0 0:1 / / rw - overlay overlay rw,lowerdir=/var/lib/docker/overlay2/" + strings.Repeat("e", 64) + "/diff\n" +
 			"8583 8423 0:52 /" + selfID + "/hostname /etc/hostname rw,relatime - tmpfs tmpfs rw,inode64\n", selfID},
-		{"no container","1 0 0:1 / / rw - ext4 /dev/sda1 rw\n", ""},
+		{"no container", "1 0 0:1 / / rw - ext4 /dev/sda1 rw\n", ""},
 		{"short id", "2 1 254:1 /var/lib/docker/containers/abc123/hostname /etc/hostname rw - ext4 /dev/vda1 rw\n", ""},
 	} {
 		if got := containerIDFrom(strings.NewReader(tc.in)); got != tc.want {
