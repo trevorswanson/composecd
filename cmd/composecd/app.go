@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"strconv"
@@ -12,6 +13,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/trevorswanson/composecd/internal/controller"
+	"github.com/trevorswanson/composecd/internal/images"
 	"github.com/trevorswanson/composecd/internal/store"
 )
 
@@ -24,6 +26,7 @@ func newAppCmd(cf *clientFlags) *cobra.Command {
 	cmd.AddCommand(
 		newAppListCmd(cf), newAppGetCmd(cf), newAppDiffCmd(cf), newAppSyncCmd(cf), newAppRollbackCmd(cf),
 		newAppHistoryCmd(cf), newAppOperationsCmd(cf), newAppPauseCmd(cf), newAppResumeCmd(cf), newAppRefreshCmd(cf),
+		newAppCheckImagesCmd(cf),
 	)
 	return cmd
 }
@@ -183,6 +186,7 @@ func printApp(w io.Writer, a *controller.AppStatus) {
 		}
 		_ = tw.Flush()
 	}
+	printImages(w, a)
 	if len(a.Sync.Drift) > 0 {
 		fmt.Fprintln(w, "\nDRIFT:")
 		tw := tabwriter.NewWriter(w, 0, 8, 2, ' ', 0)
@@ -444,6 +448,64 @@ func newAppRefreshCmd(cf *clientFlags) *cobra.Command {
 			return nil
 		},
 	}
+}
+
+func newAppCheckImagesCmd(cf *clientFlags) *cobra.Command {
+	var all bool
+	cmd := &cobra.Command{
+		Use:   "check-images [NAME]",
+		Short: "Check an application's image tags (or every app's, with --all) against their registries now (admin)",
+		Long: `Check the registries of the tags an application's services use now, instead of on
+imageUpdates.schedule. A new digest for a moving tag makes the app OutOfSync; one
+for a digest pinned in Git is only reported.`,
+		Args: cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if all == (len(args) == 1) {
+				return errors.New("give an application NAME or --all")
+			}
+			name := ""
+			if len(args) == 1 {
+				name = args[0]
+			}
+			if err := cf.client().CheckImages(ctx(cmd), name); err != nil {
+				return err
+			}
+			what := "every application"
+			if name != "" {
+				what = name
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "Image check of %s requested.\n", what)
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&all, "all", false, "check every application")
+	return cmd
+}
+
+// printImages lists a's images and the digests their tags resolve to.
+func printImages(w io.Writer, a *controller.AppStatus) {
+	if len(a.Images) == 0 {
+		return
+	}
+	fmt.Fprintln(w, "\nIMAGES:")
+	tw := tabwriter.NewWriter(w, 0, 8, 2, ' ', 0)
+	fmt.Fprintln(tw, "SERVICE\tIMAGE\tPINNED BY\tDEPLOYED\tLATEST\tUPDATE")
+	for _, im := range a.Images {
+		update := "-"
+		switch {
+		case im.UpdateAvailable && im.Applicable:
+			update = "available: sync to apply"
+		case im.UpdateAvailable:
+			update = "available, not applied: " + im.Note
+		case im.Error != "":
+			update = "check failed: " + im.Error
+		case im.Note != "":
+			update = im.Note
+		}
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", im.Service, im.Image, orDash(im.Pin), orDash(images.Short(im.Deployed)),
+			orDash(images.Short(im.Latest)), update)
+	}
+	_ = tw.Flush()
 }
 
 func orDash(s string) string {

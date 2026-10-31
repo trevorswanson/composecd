@@ -1,5 +1,6 @@
 // Package store keeps composecd's own state in SQLite: the history of sync and
-// rollback operations, and which applications are paused. Desired state lives in
+// rollback operations, which applications are paused, and the image digests
+// registries last served. Desired state lives in
 // Git and release history in composetpl's storage, not here.
 package store
 
@@ -108,6 +109,13 @@ CREATE TABLE IF NOT EXISTS host_state (
 	host               TEXT PRIMARY KEY,
 	maintenance        INTEGER NOT NULL DEFAULT 0,
 	maintenance_reason TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS image_digests (
+	ref         TEXT PRIMARY KEY,
+	digest      TEXT NOT NULL DEFAULT '',
+	resolved_at TEXT,
+	checked_at  TEXT NOT NULL,
+	error       TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS app_state (
 	app           TEXT PRIMARY KEY,
@@ -346,6 +354,67 @@ func (s *Store) SetMaintenance(host string, on bool, reason string) error {
 	_, err := s.db.Exec(`INSERT INTO host_state (host, maintenance, maintenance_reason) VALUES (?, ?, ?)
 		ON CONFLICT (host) DO UPDATE SET maintenance = excluded.maintenance, maintenance_reason = excluded.maintenance_reason`,
 		host, boolInt(on), reason)
+	return err
+}
+
+// ImageDigest is the digest a registry last served for an image tag.
+type ImageDigest struct {
+	// Ref is registry/repository:tag.
+	Ref string `json:"ref"`
+	// Digest is the last digest resolved ("" if none ever was).
+	Digest     string    `json:"digest,omitempty"`
+	ResolvedAt time.Time `json:"resolvedAt,omitzero"`
+	// CheckedAt is the last check, which failed with Error if it is set.
+	CheckedAt time.Time `json:"checkedAt"`
+	Error     string    `json:"error,omitempty"`
+}
+
+// ImageDigests returns every stored image digest, by ref.
+func (s *Store) ImageDigests() (map[string]ImageDigest, error) {
+	rows, err := s.db.Query(`SELECT ref, digest, resolved_at, checked_at, error FROM image_digests`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]ImageDigest{}
+	for rows.Next() {
+		var d ImageDigest
+		var resolved sql.NullString
+		var checked string
+		if err := rows.Scan(&d.Ref, &d.Digest, &resolved, &checked, &d.Error); err != nil {
+			return nil, err
+		}
+		if d.CheckedAt, err = parseTime(checked); err != nil {
+			return nil, err
+		}
+		if resolved.Valid {
+			if d.ResolvedAt, err = parseTime(resolved.String); err != nil {
+				return nil, err
+			}
+		}
+		out[d.Ref] = d
+	}
+	return out, rows.Err()
+}
+
+// SetImageDigest records a successful check of ref.
+func (s *Store) SetImageDigest(ref, digest string, at time.Time) error {
+	_, err := s.db.Exec(`INSERT INTO image_digests (ref, digest, resolved_at, checked_at, error) VALUES (?, ?, ?, ?, '')
+		ON CONFLICT (ref) DO UPDATE SET digest = excluded.digest, resolved_at = excluded.resolved_at,
+		checked_at = excluded.checked_at, error = ''`, ref, digest, formatTime(at), formatTime(at))
+	return err
+}
+
+// SetImageError records a failed check of ref, keeping its last digest.
+func (s *Store) SetImageError(ref, msg string, at time.Time) error {
+	_, err := s.db.Exec(`INSERT INTO image_digests (ref, checked_at, error) VALUES (?, ?, ?)
+		ON CONFLICT (ref) DO UPDATE SET checked_at = excluded.checked_at, error = excluded.error`, ref, formatTime(at), msg)
+	return err
+}
+
+// DeleteImageDigests forgets every stored digest.
+func (s *Store) DeleteImageDigests() error {
+	_, err := s.db.Exec(`DELETE FROM image_digests`)
 	return err
 }
 

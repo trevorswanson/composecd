@@ -7,6 +7,14 @@ dataDir: /var/lib/composecd
 refreshInterval: 3m
 concurrency: 4
 
+# Pin services' moving image tags (nginx:1, :latest) to registry digests, checked
+# on a schedule, so a new image shows as OutOfSync. Turning it on recreates each
+# app's containers once. Applications and services can opt in or out.
+# imageUpdates:
+#   enabled: true
+#   schedule: "0 * * * *"
+#   timeZone: UTC
+
 # Optional SOPS-encrypted valueFiles; mount your own age identity read-only here.
 # sopsAgeKeyFile: /run/secrets/sops-age-key
 

@@ -81,6 +81,10 @@ func New(c Controller, o Options) http.Handler {
 		c.Refresh()
 		return http.StatusAccepted, map[string]string{"status": "refresh requested"}, nil
 	})
+	act("POST /api/v1/images/check", func(*http.Request, *auth.Principal) (int, interface{}, error) {
+		err := c.CheckImages("")
+		return http.StatusAccepted, map[string]string{"status": "image check requested"}, err
+	})
 	read("GET /api/v1/hosts", func(*http.Request, *auth.Principal) (int, interface{}, error) {
 		return http.StatusOK, nonNil(c.HostStatuses()), nil
 	})
@@ -171,6 +175,10 @@ func New(c Controller, o Options) http.Handler {
 	act("POST /api/v1/apps/{name}/refresh", func(r *http.Request, _ *auth.Principal) (int, interface{}, error) {
 		err := c.RefreshApp(r.PathValue("name"))
 		return http.StatusAccepted, map[string]string{"status": "refresh requested"}, err
+	})
+	act("POST /api/v1/apps/{name}/images/check", func(r *http.Request, _ *auth.Principal) (int, interface{}, error) {
+		err := c.CheckImages(r.PathValue("name"))
+		return http.StatusAccepted, map[string]string{"status": "image check requested"}, err
 	})
 	read("GET /api/v1/operations", func(r *http.Request, _ *auth.Principal) (int, interface{}, error) {
 		limit, err := intParam(r, "limit")

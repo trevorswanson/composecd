@@ -124,7 +124,8 @@ repositories:
 		t.Fatal(err)
 	}
 	if b.Listen != ":8080" || b.DataDir != DefaultDataDir || b.RefreshInterval != Duration(DefaultRefreshInterval) ||
-		b.Concurrency != 4 || b.Root.TargetRevision != "HEAD" || b.Root.Path != "composecd" {
+		b.Concurrency != 4 || b.Root.TargetRevision != "HEAD" || b.Root.Path != "composecd" ||
+		b.ImageUpdates.Enabled || b.ImageUpdates.Schedule != DefaultImageSchedule {
 		t.Errorf("defaults: %+v", b)
 	}
 	if c := b.Credentials("https://git.lan/me/homelab.git"); c == nil || c.Username != "me" {
@@ -139,9 +140,31 @@ repositories:
 		"fast":      "root: {repoURL: x}\nrefreshInterval: 1s\n",
 		"both":      "root: {repoURL: x}\nrepositories: [{url: x, passwordFile: a, sshKeyFile: b}]\n",
 		"escape":    "root: {repoURL: x, path: ../y}\n",
+		"schedule":  "root: {repoURL: x}\nimageUpdates: {enabled: true, schedule: often}\n",
+		"zone":      "root: {repoURL: x}\nimageUpdates: {timeZone: Mars/Olympus}\n",
 	} {
 		if _, err := ParseBootstrap([]byte(doc)); err == nil {
 			t.Errorf("%s: expected an error", name)
+		}
+	}
+}
+
+func TestImageUpdatesFor(t *testing.T) {
+	on, off := true, false
+	app := func(v *bool) *Application {
+		a := &Application{}
+		if v != nil {
+			a.Spec.SyncPolicy.ImageUpdates = &AppImageUpdates{Enabled: v}
+		}
+		return a
+	}
+	for _, c := range []struct {
+		global bool
+		app    *bool
+		want   bool
+	}{{false, nil, false}, {true, nil, true}, {false, &on, true}, {true, &off, false}} {
+		if got := ImageUpdatesFor(c.global, app(c.app)); got != c.want {
+			t.Errorf("ImageUpdatesFor(%v, %v) = %v", c.global, c.app, got)
 		}
 	}
 }

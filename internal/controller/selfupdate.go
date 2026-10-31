@@ -164,9 +164,12 @@ func (c *Controller) runSelfSync(ctx context.Context, p *plan, op *store.Operati
 		cfg.Registry = c.Registry
 		u := c.newUpgrade(cfg, p, op)
 		op.SourceRevision = p.prep.Revision
-		rel, err := u.Prepare(ctx, name, p.prep.ChartRef, p.prep.Values)
+		rel, err := c.prepareUpgrade(ctx, cfg, u, p)
 		if err != nil {
 			op.Log = log.String()
+			if rel != nil {
+				op.ReleaseRevision = rel.Revision
+			}
 			op.Phase, op.Message = store.PhaseFailed, err.Error()
 			c.endSelfUpdate()
 			return

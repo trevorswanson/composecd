@@ -27,6 +27,7 @@ import (
 	"github.com/trevorswanson/composecd/internal/controller"
 	"github.com/trevorswanson/composecd/internal/gitcache"
 	"github.com/trevorswanson/composecd/internal/hosts"
+	"github.com/trevorswanson/composecd/internal/images"
 	"github.com/trevorswanson/composecd/internal/notify"
 	"github.com/trevorswanson/composecd/internal/store"
 )
@@ -128,8 +129,10 @@ func runServer(parent context.Context, boot *config.Bootstrap, log *slog.Logger)
 		Hosts:    hosts.NewRegistry(backend),
 		Store:    st,
 		Registry: registry.New(os.Stderr),
-		Log:      log,
-		Notify:   notifier,
+		// Uses the same Docker credentials, and plain-HTTP switch, as charts.
+		ImageResolver: &images.Registry{Log: os.Stderr, PlainHTTP: os.Getenv("COMPOSETPL_PLAIN_HTTP") != ""},
+		Log:           log,
+		Notify:        notifier,
 		// Finds the Application that runs composecd itself, which it must not
 		// sync from inside its own container.
 		SelfContainer: controller.ContainerID(),

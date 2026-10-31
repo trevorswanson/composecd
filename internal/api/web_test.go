@@ -37,6 +37,12 @@ func (s *webStub) App(name string) (controller.AppStatus, error) {
 		{ID: "networks/default", Kind: controller.KindNetwork, Name: "default", Sync: controller.ObjectSynced},
 		{ID: "containers/media-web-1", Kind: controller.KindContainer, Name: "media-web-1", Parent: "services/web", Sync: controller.ObjectSynced},
 	}
+	a.Images = []controller.ImageStatus{
+		{Service: "web", Image: "nginx:1", Ref: "docker.io/library/nginx:1", Pin: controller.PinComposecd, Digest: "sha256:bbbbbbbbbbbbbbbb",
+			Deployed: "sha256:aaaaaaaaaaaaaaaa", Latest: "sha256:bbbbbbbbbbbbbbbb", UpdateAvailable: true, Applicable: true},
+		{Service: "db", Image: "postgres:16@sha256:cccccccccccccccc", Ref: "docker.io/library/postgres:16", Pin: controller.PinGit,
+			Digest: "sha256:cccccccccccccccc", Latest: "sha256:dddddddddddddddd", UpdateAvailable: true, Note: "the digest is pinned in Git; change it there to update"},
+	}
 	return a, err
 }
 func (s *webStub) Subscribe() (<-chan controller.Update, func()) { return s.updates, func() {} }
@@ -65,6 +71,7 @@ func TestWebPagesAndActions(t *testing.T) {
 		"/apps/media?tab=diff&mode=objects": "services/web", "/apps/media?tab=diff&mode=objects&synced=1": "networks/default",
 		"/apps/media?tab=diff": "services/web", "/apps/media?tab=diff&existing": "<strong>cache</strong>: not in Git, would be removed", "/apps/media?tab=history": "Roll back",
 		"/apps/media?tab=operations": "Output",
+		"/apps/media?tab=images":     `disabled title="the digest is pinned in Git; change it there to update">Can't apply</button>`,
 	}
 	for path, want := range cases {
 		t.Run(path, func(t *testing.T) {
@@ -87,23 +94,32 @@ func TestWebPagesAndActions(t *testing.T) {
 		t.Fatalf("CSRF: %d", code)
 	}
 	for path, form := range map[string][2]string{
-		"/ui/apps/media/sync":       {"", `Sync #7 started`},
-		"/ui/apps/media/rollback":   {"revision=1", `sse-connect="/api/v1/apps/media/operations/8/log"`},
-		"/ui/apps/media/pause":      {"", "Action requested"},
-		"/ui/apps/media/resume":     {"", "Action requested"},
-		"/ui/apps/media/refresh":    {"", "Action requested"},
-		"/ui/hosts/nas/maintenance": {"enabled=true", "Action requested"},
+		"/ui/apps/media/sync":         {"", `Sync #7 started`},
+		"/ui/apps/media/rollback":     {"revision=1", `sse-connect="/api/v1/apps/media/operations/8/log"`},
+		"/ui/apps/media/pause":        {"", "Action requested"},
+		"/ui/apps/media/resume":       {"", "Action requested"},
+		"/ui/apps/media/refresh":      {"", "Action requested"},
+		"/ui/apps/media/check-images": {"", "Checking image registries"},
+		"/ui/hosts/nas/maintenance":   {"enabled=true", "Action requested"},
 	} {
 		code, _, body := b.do("POST", path, form[0], map[string]string{"Content-Type": "application/x-www-form-urlencoded", auth.CSRFHeader: b.csrf, "HX-Request": "true"})
 		if code != 200 || !strings.Contains(body, form[1]) {
 			t.Errorf("%s: %d %s", path, code, body)
 		}
 	}
-	for path, want := range map[string]string{"/ui/hosts/nas/rescan": "Rescan started", "/ui/root/refresh": "Fetching the root repository"} {
+	for path, want := range map[string]string{"/ui/hosts/nas/rescan": "Rescan started", "/ui/root/refresh": "Fetching the root repository",
+		"/ui/root/check-images": "Checking image registries"} {
 		code, _, body := b.do("POST", path, "", map[string]string{"Content-Type": "application/x-www-form-urlencoded", auth.CSRFHeader: b.csrf, "HX-Request": "true"})
 		if code != 200 || !strings.Contains(body, want) {
 			t.Errorf("%s: %d %s", path, code, body)
 		}
+	}
+	if !slices.Contains(st.calls, "check-images media") || !slices.Contains(st.calls, "check-images ") {
+		t.Errorf("image checks not requested: %v", st.calls)
+	}
+	_, _, body = b.do("GET", "/apps/media?tab=images", "", nil)
+	if !strings.Contains(body, "sha256:bbbbbbbbbbbb") || !strings.Contains(body, `hx-post="/ui/apps/media/sync"`) || !strings.Contains(body, ">images<span class=\"count warn\">2</span>") {
+		t.Errorf("images tab: %s", body)
 	}
 	if !slices.Contains(st.calls, "refresh all") {
 		t.Errorf("root refresh not requested: %v", st.calls)

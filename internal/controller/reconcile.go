@@ -24,6 +24,7 @@ import (
 	"github.com/trevorswanson/composecd/internal/config"
 	"github.com/trevorswanson/composecd/internal/health"
 	"github.com/trevorswanson/composecd/internal/hosts"
+	"github.com/trevorswanson/composecd/internal/images"
 	"github.com/trevorswanson/composecd/internal/source"
 )
 
@@ -44,6 +45,9 @@ type plan struct {
 	release func()
 	// lookup served the render assess compared, and serves the sync's too.
 	lookup *appLookup
+	// pins are the digests assess pinned services' moving tags to, which the
+	// sync pins too.
+	pins map[string]images.Pin
 }
 
 func (p *plan) done() {
@@ -155,6 +159,9 @@ func (c *Controller) assess(ctx context.Context, app *config.Application, fetchE
 		p.done()
 		return fail(p.prep.RelativeErr(err))
 	}
+	pinned := c.pinImages(ctx, app, manifest, deployed)
+	manifest, p.pins, st.Images = pinned.manifest, pinned.pins, pinned.statuses
+	warnings = append(warnings, pinned.warnings...)
 	c.rememberManifest(name, manifest, true)
 	projectDir := h.ProjectDir(name)
 	var revisions []string
@@ -205,6 +212,7 @@ func (c *Controller) assess(ctx context.Context, app *config.Application, fetchE
 		if len(changes) > 0 {
 			reasons = append(reasons, fmt.Sprintf("%d %s from Git", len(changes), plural(len(changes), "resource differs", "resources differ")))
 		}
+		reasons = append(reasons, pinned.reasons...)
 		if !sameHooks(deployed.Hooks, hks) {
 			reasons = append(reasons, "hooks differ from Git")
 		}

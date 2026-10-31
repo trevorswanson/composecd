@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
+	"time"
 )
 
 func TestOperations(t *testing.T) {
@@ -153,5 +154,45 @@ func TestHelperOperationsSurviveRestart(t *testing.T) {
 	}
 	if got, _ := s.Operation(plain.ID); got.Phase != PhaseFailed {
 		t.Errorf("an operation without a helper wasn't marked interrupted: %+v", got)
+	}
+}
+
+func TestImageDigests(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "composecd.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	const ref = "docker.io/library/nginx:1"
+	now := time.Now()
+	if err := s.SetImageError(ref, "registry down", now); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.ImageDigests(); got[ref].Digest != "" || got[ref].Error != "registry down" || !got[ref].ResolvedAt.IsZero() {
+		t.Errorf("first failure = %+v", got[ref])
+	}
+	if err := s.SetImageDigest(ref, "sha256:aa", now); err != nil {
+		t.Fatal(err)
+	}
+	later := now.Add(time.Hour)
+	if err := s.SetImageError(ref, "registry down", later); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.ImageDigests()
+	d := got[ref]
+	if err != nil || d.Digest != "sha256:aa" || d.Error != "registry down" || !d.CheckedAt.Equal(later) || !d.ResolvedAt.Equal(now) {
+		t.Errorf("after a failure = %+v, %v", d, err)
+	}
+	if err := s.SetImageDigest(ref, "sha256:bb", later); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.ImageDigests(); got[ref].Digest != "sha256:bb" || got[ref].Error != "" {
+		t.Errorf("after success = %+v", got[ref])
+	}
+	if err := s.DeleteImageDigests(); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.ImageDigests(); len(got) != 0 {
+		t.Errorf("after delete = %+v", got)
 	}
 }
