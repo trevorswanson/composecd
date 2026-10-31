@@ -305,6 +305,9 @@ func (c *Controller) checkImages(ctx context.Context, only string) {
 			apps[a] = true
 		}
 	}
+	if len(apps) > 0 {
+		c.bumpGeneration()
+	}
 	for name := range apps {
 		if a, err := c.application(name); err == nil {
 			c.reconcileAsync(a, false)

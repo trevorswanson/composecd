@@ -39,3 +39,9 @@ file/environment/network helpers are not.
 
 Directory/host removals honor the release's recorded prune policy. Zero output
 from a previously populated set is guarded, including after a controller restart.
+
+To update the generated apps a few at a time, add a `RollingSync` strategy.
+`rolling.yaml` updates DNS servers one host at a time, so one keeps serving
+while the other updates, and a failed or unhealthy update halts the rollout.
+Follow it with `composecd appset rollout unbound`. See
+[Rolling sync](../../README.md#rolling-sync).

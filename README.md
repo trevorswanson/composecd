@@ -37,7 +37,7 @@ Every refresh interval (3 minutes by default), or right away when a push webhook
    2. Compares the result with the deployed composetpl release.
    3. Checks the live containers for drift and health.
    4. If the Application is automated, and nothing holds it back (a sync window, a dependency that isn't
-      Synced and Healthy yet, host maintenance):
+      Synced and Healthy yet, host maintenance, its ApplicationSet's [rolling sync](#rolling-sync)):
       - if Git differs from what's deployed, runs `composetpl upgrade --install` on it;
       - if only the containers drifted and `selfHeal` is on, runs `composetpl repair` on it.
 4. Uninstalls releases whose Application left Git (or moved to another host), if they had `prune` on.
@@ -442,7 +442,8 @@ binary; there is no CDN or Node build step.
   latest digests, and whether an update can be synced or is pinned in Git. **Details** shows the source,
   automation policy and retries.
   Admins can sync, pause, resume, refresh and check images; a running sync disables the button and streams its output.
-- **ApplicationSets** (`/applicationsets`): generated apps, counts and expansion/validation errors.
+- **ApplicationSets** (`/applicationsets`): generated apps, counts, expansion/validation errors and each
+  rolling sync's progress, step by step.
 - **Hosts** (`/hosts`): connectivity, Docker/Compose versions, orphaned releases and admin maintenance toggles.
   Lists unmanaged composetpl releases and plain Compose projects with config paths. Admins can use **Adopt** to preview Application YAML, or **Delete** an orphaned release.
 - **Sync windows** (`/windows`): open/closed state, next change, and matching applications.
@@ -571,6 +572,77 @@ restart is possible. Retired hosts appear on the Hosts page, with maintenance co
 Inspect sets with `composecd appset list` (`-o json` / `-o yaml`),
 `GET /api/v1/applicationsets`, or the **ApplicationSets** UI page. These are available to readonly users;
 configuration stays in Git. [The example](examples/applicationsets/README.md) generates apps over `charts/*`.
+
+### Rolling sync
+
+By default a change that reaches every app of a set (a new image tag in a shared chart, say) syncs them
+all at once. A `RollingSync` strategy rolls it out instead: a few apps at a time, in order, each one
+synced **and Healthy** before the next starts. A failed sync or an unhealthy app halts the rollout, so the
+apps not yet updated keep running the old version. For two DNS servers, one at a time:
+
+```yaml
+apiVersion: composecd/v1alpha1
+kind: ApplicationSet
+metadata: {name: unbound}
+spec:
+  generators:
+    - hosts: {selector: {role: dns}}
+  strategy:
+    type: RollingSync
+    rollingSync:
+      maxUpdate: 1            # apps updating at once: a count, or a percentage such as 50%
+      minHealthyTime: 30s     # how long an app must stay Healthy before the next starts
+  template:
+    metadata:
+      name: "unbound-{{ .host.name }}"
+      labels: {host: "{{ .host.name }}"}
+    spec:
+      source: {path: charts/unbound}
+      destination: {host: "{{ .host.name }}"}
+      syncPolicy: {automated: {}}
+```
+
+`unbound-dns1` syncs first (apps go in name order). `unbound-dns2` waits until `unbound-dns1` is Synced and
+has been Healthy for 30s. If `unbound-dns1`'s sync fails, or it turns Degraded, `unbound-dns2` isn't touched.
+Commit a fix and it reaches `unbound-dns1` first, then the rollout carries on.
+
+Steps give an explicit order. Each app belongs to the first step whose `matchExpressions` (on the app's
+labels: `In`, `NotIn`, `Exists`, `DoesNotExist`) all match, and a step starts only once every app of the
+steps before it is Synced and Healthy:
+
+```yaml
+  strategy:
+    type: RollingSync
+    rollingSync:
+      minHealthyTime: 1m
+      steps:
+        - matchExpressions: [{key: host, operator: In, values: [dns-canary]}]
+        - matchExpressions: [{key: host, operator: NotIn, values: [dns-canary]}]
+          maxUpdate: 50%      # half of this step's apps at a time (rounded down, at least 1)
+```
+
+A step's `maxUpdate` defaults to `rollingSync.maxUpdate`, and that defaults to 100% (the whole step at
+once). `maxUpdate: 0` holds a step: its apps don't auto-sync until you raise it. An app that no step
+selects never auto-syncs, so a typo in a label can't roll anything out by surprise. The ApplicationSets page
+and `composecd appset rollout NAME` list these apps.
+
+Within a step, an app counts against `maxUpdate` while it is syncing, not yet Healthy, waiting out
+`minHealthyTime`, or failed. A healthy app waits for a broken sibling even when that sibling wasn't part of
+this change, because updating it could take down the last working copy. Broken apps (unhealthy, failed or
+not yet deployed) go first, so a fix in Git reaches them. Each app's status says why it waits, for example
+`rolling sync: step 1 allows 1 at a time: unbound-dns1 (Degraded)`, and the next app starts within seconds
+of the one before turning Healthy.
+
+The strategy only holds back *automatic* syncs. A manual `app sync` always runs, which is how you push a
+fix past a halted rollout, or update an app no step selects. Self-heal isn't sequenced: it restores
+containers to the version already deployed. Apps of later steps also wait for drifted, paused or manual
+apps of earlier steps to be Synced. Apps in one step that sync in name order wait for one ahead of them
+that a sync window or maintenance holds back.
+
+`minHealthyTime` counts from when composecd last saw the app turn Healthy after a sync. A container
+without a healthcheck is Healthy as soon as it runs, so give services a `healthcheck`, or a
+`minHealthyTime` long enough to catch a crash loop. After composecd restarts, it counts from the first
+time it sees each app Healthy.
 
 ## OCI charts with values from Git
 
@@ -922,6 +994,7 @@ The events are `sync-succeeded`, `sync-failed` (which also covers failed rollbac
 | Self-heal, prune | Same; prune keeps named volumes and release history |
 | Sync windows | `SyncWindow`, with the same allow/deny/manualSync rules, matched by app, host or labels |
 | Sync waves across apps | `dependsOn` |
+| ApplicationSet progressive syncs (`RollingSync`) | Same `strategy.rollingSync.steps` with `matchExpressions` and `maxUpdate`, plus `minHealthyTime`; a failed or unhealthy app halts the rollout |
 | Retry with backoff | `syncPolicy.retry` |
 | Git webhooks, notifications, metrics | Same; native ntfy, Gotify, Discord, Slack and webhook notifiers |
 | — | Host maintenance mode; reconciles on Docker events |
