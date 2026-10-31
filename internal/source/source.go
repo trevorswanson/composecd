@@ -48,7 +48,13 @@ type Prepared struct {
 	// encrypted files' structure, so they are known even when decryption fails,
 	// and let older values at the same keys be found in release history.
 	SecretPaths [][]string `json:"-"`
+	// Stubbed says which secrets PrepareOffline stood in for, as "valueFiles
+	// secrets.sops.yaml" or "source.infisical".
+	Stubbed []string `json:"-"`
 }
+
+// Placeholder is what PrepareOffline puts in place of each encrypted value.
+const Placeholder = "composecd-validate-placeholder"
 
 // Lookup backs the env and expandenv template functions with Env only, so a
 // render doesn't depend on the controller's own environment.
@@ -73,6 +79,22 @@ var depLocks sync.Map
 // inf reads the app's source.infisical secrets; it is nil when the server has
 // no infisical configuration.
 func Prepare(ctx context.Context, app *config.Application, host *config.Host, checkout, revision string, reg *registry.Client, ageKeyFile string, inf ...*infisical.Client) (*Prepared, error) {
+	var c *infisical.Client
+	if len(inf) > 0 {
+		c = inf[0]
+	}
+	return prepare(ctx, app, host, checkout, revision, reg, ageKeyFile, c, false)
+}
+
+// PrepareOffline is Prepare for validating a checkout without its secrets.
+// Without ageKeyFile, each value of an encrypted values file is Placeholder,
+// and source.infisical contributes no values, so charts render as long as they
+// don't depend on what the secrets say. Stubbed lists what was left out.
+func PrepareOffline(ctx context.Context, app *config.Application, host *config.Host, checkout, revision string, reg *registry.Client, ageKeyFile string) (*Prepared, error) {
+	return prepare(ctx, app, host, checkout, revision, reg, ageKeyFile, nil, true)
+}
+
+func prepare(ctx context.Context, app *config.Application, host *config.Host, checkout, revision string, reg *registry.Client, ageKeyFile string, inf *infisical.Client, offline bool) (*Prepared, error) {
 	s := app.Spec.Source
 	p := &Prepared{Env: mergeEnv(host.Spec.Env, s.Env)}
 	vals := map[string]interface{}{}
@@ -124,8 +146,14 @@ func Prepare(ctx context.Context, app *config.Application, host *config.Host, ch
 			return nil, err
 		}
 		if encrypted {
-			p.SecretPaths = append(p.SecretPaths, sops.Paths(data)...)
+			paths := sops.Paths(data)
+			p.SecretPaths = append(p.SecretPaths, paths...)
 			if decryptErr != nil {
+				continue
+			}
+			if offline && ageKeyFile == "" {
+				p.Stubbed = append(p.Stubbed, fmt.Sprintf("valueFiles %q", vf))
+				vals = values.Merge(vals, placeholders(paths))
 				continue
 			}
 			data, err = sops.Decrypt(ctx, f, ageKeyFile)
@@ -149,15 +177,13 @@ func Prepare(ctx context.Context, app *config.Application, host *config.Host, ch
 	if decryptErr != nil {
 		return &Prepared{SecretPaths: p.SecretPaths}, decryptErr
 	}
-	if is := s.Infisical; is != nil {
-		var c *infisical.Client
-		if len(inf) > 0 {
-			c = inf[0]
-		}
-		if c == nil {
+	if is := s.Infisical; is != nil && offline {
+		p.Stubbed = append(p.Stubbed, "source.infisical")
+	} else if is != nil {
+		if inf == nil {
 			return nil, errors.New("source.infisical requires an infisical section in composecd.yaml")
 		}
-		secrets, err := c.Secrets(ctx, is)
+		secrets, err := inf.Secrets(ctx, is)
 		if err != nil {
 			return nil, err
 		}
@@ -182,6 +208,27 @@ func Prepare(ctx context.Context, app *config.Application, host *config.Host, ch
 	}
 	p.Values = values.Merge(vals, inline)
 	return p, nil
+}
+
+// placeholders builds values holding Placeholder at each of paths.
+func placeholders(paths [][]string) map[string]interface{} {
+	root := map[string]interface{}{}
+	for _, path := range paths {
+		if len(path) == 0 {
+			continue
+		}
+		cur := root
+		for _, seg := range path[:len(path)-1] {
+			next, ok := cur[seg].(map[string]interface{})
+			if !ok {
+				next = map[string]interface{}{}
+				cur[seg] = next
+			}
+			cur = next
+		}
+		cur[path[len(path)-1]] = Placeholder
+	}
+	return root
 }
 
 // nest places secrets under the dotted path into, then under their subfolders,

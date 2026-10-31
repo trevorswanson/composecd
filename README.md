@@ -86,7 +86,8 @@ Git, live state is on the hosts, and release history is in composetpl's storage 
      syncPolicy: {automated: {}}
    ```
 
-   Check the objects with `composecd validate composecd/`, for example in your repository's CI.
+   Check the objects with `composecd validate composecd/`, and render every chart with `--render`, for example
+   in your repository's CI: see [Validate in CI](#validate-in-ci).
 
 3. **Run composecd.** It needs the Docker socket, and a volume for its data. Use either the container image or
    the chart in [deploy/chart](deploy/chart):
@@ -304,7 +305,7 @@ host maintenance, a retry or self-heal backoff, or a failed sync waiting for a c
 | `adopt HOST RELEASE` | Export Application YAML with saved user values (admin); warnings go to stderr. |
 | `host maintenance NAME on\|off` | While on, nothing on the host is synced, healed or pruned automatically. Manual operations still work. |
 | `window list` | Sync windows, whether they're open, and the apps they match. |
-| `validate DIR` | Check objects offline. |
+| `validate DIR` | Check objects offline; `--render` also expands ApplicationSets and renders every chart. See [Validate in CI](#validate-in-ci). |
 | `login`, `logout`, `whoami` | Save, forget or check the server and token the CLI uses. |
 | `token create NAME --role R`, `token list`, `token revoke NAME` | API tokens (admin). |
 | `user add NAME --role R`, `user passwd NAME`, `user delete NAME`, `user list` | Local users (admin; anyone can change their own password through the API). |
@@ -548,8 +549,8 @@ Booleans, numbers and durations keep their declared types.
 Generated apps carry `composecd/applicationset: NAME` and a definition such as
 `applicationset stacks (charts/media)`. Explicit and generated apps are validated together: duplicate
 names, invalid destinations, unresolved dependencies and cycles reject the snapshot. `dependsOn` works
-in both directions. `validate` checks definitions locally; the server performs expansion and the final
-reference checks. Generator repositories participate in push webhooks.
+in both directions. `validate` checks definitions locally, and `validate --render` also expands sets whose
+generators read the checkout and runs the final reference checks. Generator repositories participate in push webhooks.
 
 A removed directory or Host selection removes its app; its recorded prune policy controls release
 removal. Changing set ownership or the template's prune flag updates release metadata through sync,
@@ -757,6 +758,55 @@ refresh's renders. If an Application hasn't been reconciled at least once since 
 host is down, for example), the lookup fails. The caller's render then fails and its deployment stays as it
 is. That way, a monitoring config never loses checks just because composecd can't see an app yet. Avoid two
 Applications that feed what each reads into their own labels: each sync of one changes the other's.
+
+## Validate in CI
+
+`composecd validate --render DIR` catches a change that would break composecd before it is merged. It reads
+the objects under DIR, expands the ApplicationSets and renders every Application's chart from the Git
+checkout around DIR, as the server would, without contacting any host:
+
+```text
+$ composecd validate --compose composecd/
+composecd/: 2 hosts, 2 applications and 0 sync windows are valid.
+ok    applicationset web: web-edge, web-nas
+FAIL  web-nas (nas): docker compose config: exit status 1: error while interpolating services.web.healthcheck.retries: failed to cast to expected type: strconv.Atoi: parsing "five": invalid syntax
+FAIL  monitor (nas): rendering: monitor/templates/checks.yaml:12:4: web-edge/web: label "check.url" is required
+ok    web-edge (edge)
+      without secrets from source.infisical
+```
+
+- Every problem is reported, and the command fails when any object, ApplicationSet or chart does.
+- `lookup "composecd/application"` sees the other Applications' renders, so a chart that reads them (a
+  monitoring chart, say) fails here when they'd make it fail on the server. Lookups of Docker objects
+  return `{}`.
+- Without `--sops-age-key-file`, each SOPS-encrypted value renders as `composecd-validate-placeholder`, and
+  `source.infisical` adds no values. Charts render as long as they don't depend on what the secrets say.
+- Applications and `gitDirectories` generators whose repository isn't the checkout are skipped. Pass the
+  checkout's URL with `--repo-url` so ones that name it explicitly are rendered; the scheme, credentials,
+  port and a trailing `.git` are ignored when comparing.
+- `--compose` (implies `--render`) also runs `docker compose config` on each project, which needs the docker
+  CLI and the compose plugin, but no engine. `--output-dir DIR` writes the manifests to `DIR/NAME.yaml`.
+
+The repository ships a GitHub Action that runs it. It works on Gitea and Forgejo Actions too:
+
+```yaml
+# .github/workflows/validate.yaml, or .gitea/workflows/validate.yaml
+on: pull_request
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: https://github.com/trevorswanson/composecd@v0.3.0  # trevorswanson/composecd@v0.3.0 on GitHub
+        with:
+          path: composecd                # the root's path
+          # sops-age-key: ${{ secrets.SOPS_AGE_KEY }}
+```
+
+At a `v*` tag it downloads that release. At a branch or commit it builds composecd from the action's
+source, which needs Go (it runs `actions/setup-go`). Inputs: `path`, `working-directory`, `version`,
+`repo-url` (default: the repository being built), `compose` (`auto`, `true` or `false`), `sops-age-key`
+and `output-dir`. Failures are annotated on the run and written to the job summary.
 
 ## Image updates
 

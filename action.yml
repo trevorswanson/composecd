@@ -1,0 +1,133 @@
+name: composecd validate
+description: Validate a composecd GitOps repository and render every Application's chart, as the server would.
+author: trevorswanson
+branding:
+  icon: check-circle
+  color: blue
+
+inputs:
+  path:
+    description: The directory of composecd objects (the root's path), relative to working-directory.
+    default: composecd
+  working-directory:
+    description: The checkout of the GitOps repository.
+    default: ${{ github.workspace }}
+  version:
+    description: >-
+      The composecd release to run, such as v0.3.0. Defaults to the ref the action is used at:
+      a v* tag downloads that release, anything else (a branch or SHA) builds composecd from the
+      action's own source, which needs Go.
+    default: ""
+  repo-url:
+    description: >-
+      The repository's URL as composecd.yaml's root.repoURL names it, so Applications that name it
+      render from the checkout. Credentials, the scheme, a port and a trailing .git are ignored.
+    default: ${{ github.server_url }}/${{ github.repository }}
+  compose:
+    description: >-
+      Check each rendered project with `docker compose config`: true, false, or auto (when docker
+      compose is installed).
+    default: auto
+  sops-age-key:
+    description: >-
+      An age identity (the key file's contents) to decrypt SOPS values with, from a secret.
+      Without it, encrypted values render as placeholders.
+    default: ""
+  output-dir:
+    description: Write each rendered manifest to this directory as NAME.yaml, for example to upload as an artifact.
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Choose composecd version
+      id: version
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version || github.action_ref }}
+      run: |
+        case "$VERSION" in
+          v[0-9]*) echo "release=$VERSION" >> "$GITHUB_OUTPUT" ;;
+          *) echo "release=" >> "$GITHUB_OUTPUT" ;;
+        esac
+
+    - name: Set up Go to build composecd
+      if: steps.version.outputs.release == ''
+      uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      with:
+        go-version-file: ${{ github.action_path }}/go.mod
+        cache-dependency-path: ${{ github.action_path }}/go.sum
+
+    - name: Install composecd
+      shell: bash
+      env:
+        RELEASE: ${{ steps.version.outputs.release }}
+        ACTION_PATH: ${{ github.action_path }}
+        GH_SERVER: https://github.com
+      run: |
+        set -euo pipefail
+        bin="$RUNNER_TEMP/composecd-bin"
+        mkdir -p "$bin"
+        if [ -z "$RELEASE" ]; then
+          (cd "$ACTION_PATH" && CGO_ENABLED=0 go build -trimpath -ldflags "-X main.version=action-$(git rev-parse --short HEAD 2>/dev/null || echo src)" -o "$bin/composecd" ./cmd/composecd)
+        else
+          case "$(uname -s)" in Linux) os=linux ;; Darwin) os=darwin ;; *) echo "unsupported runner OS $(uname -s)" >&2; exit 1 ;; esac
+          case "$(uname -m)" in x86_64|amd64) arch=amd64 ;; aarch64|arm64) arch=arm64 ;; *) echo "unsupported runner architecture $(uname -m)" >&2; exit 1 ;; esac
+          archive="composecd_${RELEASE#v}_${os}_${arch}.tar.gz"
+          base="$GH_SERVER/trevorswanson/composecd/releases/download/$RELEASE"
+          tmp="$(mktemp -d)"
+          curl -fsSL -o "$tmp/$archive" "$base/$archive"
+          curl -fsSL -o "$tmp/checksums.txt" "$base/checksums.txt"
+          (cd "$tmp" && grep " $archive\$" checksums.txt | sha256sum -c -)
+          tar -xzf "$tmp/$archive" -C "$bin" composecd
+        fi
+        echo "$bin" >> "$GITHUB_PATH"
+        "$bin/composecd" version
+
+    - name: Install SOPS
+      if: inputs.sops-age-key != ''
+      shell: bash
+      run: |
+        set -euo pipefail
+        command -v sops >/dev/null && exit 0
+        case "$(uname -m)" in
+          x86_64|amd64) arch=amd64; sum=e5bec3346a873ae91d871550f3e698c1aad962aff462a080e40f25fde17fef6b ;;
+          aarch64|arm64) arch=arm64; sum=53b0abacd38ef1b12a66d6c100956691b9cefce018d91f81e73ddf7438b94d77 ;;
+          *) echo "unsupported runner architecture $(uname -m)" >&2; exit 1 ;;
+        esac
+        curl -fsSL -o "$RUNNER_TEMP/composecd-bin/sops" "https://github.com/getsops/sops/releases/download/v3.13.3/sops-v3.13.3.linux.$arch"
+        echo "$sum  $RUNNER_TEMP/composecd-bin/sops" | sha256sum -c -
+        chmod 0755 "$RUNNER_TEMP/composecd-bin/sops"
+
+    - name: composecd validate
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        OBJECTS: ${{ inputs.path }}
+        REPO_URL: ${{ inputs.repo-url }}
+        COMPOSE: ${{ inputs.compose }}
+        AGE_KEY: ${{ inputs.sops-age-key }}
+        OUTPUT_DIR: ${{ inputs.output-dir }}
+      run: |
+        set -uo pipefail
+        args=(validate --render --repo-url "$REPO_URL")
+        case "$COMPOSE" in
+          true) args+=(--compose) ;;
+          auto) docker compose version >/dev/null 2>&1 && args+=(--compose) || echo "::notice::docker compose isn't installed; skipping docker compose config" ;;
+        esac
+        if [ -n "$AGE_KEY" ]; then
+          key="$RUNNER_TEMP/composecd-age-key"
+          (umask 077 && printf '%s\n' "$AGE_KEY" > "$key")
+          args+=(--sops-age-key-file "$key")
+        fi
+        [ -n "$OUTPUT_DIR" ] && args+=(--output-dir "$OUTPUT_DIR")
+        composecd "${args[@]}" "$OBJECTS" 2>&1 | tee "$RUNNER_TEMP/composecd-validate.txt"
+        status=${PIPESTATUS[0]}
+        rm -f "$RUNNER_TEMP/composecd-age-key"
+        if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+          { echo '### composecd validate'; echo '```'; cat "$RUNNER_TEMP/composecd-validate.txt"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+        fi
+        while IFS= read -r line; do
+          case "$line" in FAIL*) echo "::error title=composecd validate::${line#FAIL  }" ;; esac
+        done < "$RUNNER_TEMP/composecd-validate.txt"
+        exit "$status"

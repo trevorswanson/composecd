@@ -403,4 +403,18 @@ spec:
 		t.Fatal(err)
 	}
 	expect(t, out, "1 ApplicationSets will be expanded and fully validated by the server")
+	out, err = cliIn(t, "", "validate", "--render", filepath.Join(root, "composecd"))
+	if err != nil {
+		t.Fatal(err, out)
+	}
+	expect(t, out, "ok    applicationset examples: generated-whoami", "ok    generated-whoami (nas)", "rendered.")
+
+	if err := os.WriteFile(filepath.Join(root, "charts", "whoami", "templates", "broken.yaml"), []byte("{{ fail \"broken on purpose\" }}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, err = cliIn(t, "", "validate", "--render", filepath.Join(root, "composecd"))
+	if err == nil || !strings.Contains(err.Error(), "failed") {
+		t.Fatalf("broken chart: %v", err)
+	}
+	expect(t, out, "FAIL  generated-whoami (nas):", "broken on purpose")
 }

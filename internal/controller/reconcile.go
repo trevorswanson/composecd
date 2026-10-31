@@ -501,11 +501,17 @@ func (c *Controller) render(ctx context.Context, cfg *action.Configuration, h *h
 	if err != nil {
 		return "", nil, err
 	}
-	r, err := action.Render(action.RenderOptions{
+	return renderManifest(action.RenderOptions{
 		ChartPath: prep.ChartRef, Version: prep.Version, Registry: c.Registry, Context: ctx,
 		ReleaseName: app.Metadata.Name, Revision: revision, IsUpgrade: revision > 1,
 		UserValues: prep.Values, Env: prep.Lookup, Capabilities: caps, Lookup: l.Func,
 	})
+}
+
+// renderManifest renders o as composetpl's upgrade does and returns the merged
+// manifest (hooks removed), named after the release, and the hooks.
+func renderManifest(o action.RenderOptions) (string, []*release.Hook, error) {
+	r, err := action.Render(o)
 	if err != nil {
 		return "", nil, fmt.Errorf("rendering: %w", err)
 	}
@@ -517,7 +523,7 @@ func (c *Controller) render(ctx context.Context, cfg *action.Configuration, h *h
 	if err != nil {
 		return "", nil, fmt.Errorf("rendering: %w", err)
 	}
-	output.SetName(root, app.Metadata.Name)
+	output.SetName(root, o.ReleaseName)
 	manifest, err := output.Encode(root)
 	if err != nil {
 		return "", nil, err

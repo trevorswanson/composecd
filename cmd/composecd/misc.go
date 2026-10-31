@@ -3,6 +3,8 @@ package main
 import (
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"text/tabwriter"
@@ -10,6 +12,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/trevorswanson/composecd/internal/config"
+	"github.com/trevorswanson/composecd/internal/controller"
 	"github.com/trevorswanson/composecd/internal/source"
 )
 
@@ -194,15 +197,27 @@ func newOperationCmd(cf *clientFlags) *cobra.Command {
 }
 
 func newValidateCmd() *cobra.Command {
-	return &cobra.Command{
+	var render, composeConfig bool
+	var o controller.CheckOptions
+	var outDir string
+	cmd := &cobra.Command{
 		Use:   "validate DIR",
-		Short: "Check composecd objects and ApplicationSet definitions",
+		Short: "Check composecd objects, and render their charts with --render",
 		Long: `Read every composecd object under DIR, as the server reads its root, and report
 every problem. Also checks encrypted values filenames for SOPS metadata, without
-decrypting them. Useful in the GitOps repository's CI. It doesn't render charts
-or contact hosts.`,
+decrypting them. Useful in the GitOps repository's CI. It doesn't contact hosts.
+
+With --render, also expand ApplicationSets and render every Application's chart
+from the Git checkout around DIR, as the server would, so a change that breaks a
+chart fails before it is merged. lookup "composecd/application" sees the other
+Applications' renders, and lookups of Docker objects return {}. Without
+--sops-age-key-file, encrypted values render as placeholders, and
+source.infisical adds no values. Applications whose source is another
+repository are skipped. --compose also checks each rendered project with
+"docker compose config", which needs the docker CLI but no engine.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			out := cmd.OutOrStdout()
 			objs, err := config.LoadDir(args[0])
 			if err != nil {
 				return err
@@ -210,16 +225,80 @@ or contact hosts.`,
 			if err := source.ValidateSecrets(args[0], objs); err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "%s: %d %s, %d %s and %d sync %s are valid.\n", args[0],
+			fmt.Fprintf(out, "%s: %d %s, %d %s and %d sync %s are valid.\n", args[0],
 				len(objs.Hosts), plural(len(objs.Hosts), "host", "hosts"),
 				len(objs.Applications), plural(len(objs.Applications), "application", "applications"),
 				len(objs.SyncWindows), plural(len(objs.SyncWindows), "window", "windows"))
-			if len(objs.ApplicationSets) > 0 {
-				fmt.Fprintf(cmd.OutOrStdout(), "%d ApplicationSets will be expanded and fully validated by the server.\n", len(objs.ApplicationSets))
+			if !render && !composeConfig {
+				if len(objs.ApplicationSets) > 0 {
+					fmt.Fprintf(out, "%d ApplicationSets will be expanded and fully validated by the server.\n", len(objs.ApplicationSets))
+				}
+				return nil
+			}
+			o.Compose = composeConfig
+			results, sets, err := controller.Check(ctx(cmd), args[0], objs, o)
+			failed := 0
+			for _, s := range sets {
+				switch {
+				case s.Err != nil:
+					failed++
+					fmt.Fprintf(out, "FAIL  applicationset %s: %v\n", s.Name, s.Err)
+				case s.Skipped != "":
+					fmt.Fprintf(out, "skip  applicationset %s: %s\n", s.Name, s.Skipped)
+				default:
+					fmt.Fprintf(out, "ok    applicationset %s: %s\n", s.Name, orDash(strings.Join(s.Applications, ", ")))
+				}
+				for _, w := range s.Warnings {
+					fmt.Fprintf(out, "      warning: %s\n", w)
+				}
+			}
+			if err != nil {
+				return err
+			}
+			if outDir != "" {
+				if err := os.MkdirAll(outDir, 0o755); err != nil {
+					return err
+				}
+			}
+			rendered := 0
+			for _, r := range results {
+				where := r.Name + " (" + r.Host + ")"
+				switch {
+				case r.Err != nil:
+					failed++
+					fmt.Fprintf(out, "FAIL  %s: %v\n", where, r.Err)
+				case r.Skipped != "":
+					fmt.Fprintf(out, "skip  %s: %s\n", where, r.Skipped)
+				default:
+					rendered++
+					fmt.Fprintf(out, "ok    %s\n", where)
+					if outDir != "" {
+						if err := os.WriteFile(filepath.Join(outDir, r.Name+".yaml"), []byte(r.Manifest), 0o644); err != nil {
+							return err
+						}
+					}
+				}
+				if len(r.Stubbed) > 0 {
+					fmt.Fprintf(out, "      without secrets from %s\n", strings.Join(r.Stubbed, ", "))
+				}
+				for _, n := range r.Notes {
+					fmt.Fprintf(out, "      note: %s\n", n)
+				}
+			}
+			fmt.Fprintf(out, "%d of %d %s rendered.\n", rendered, len(results), plural(len(results), "application", "applications"))
+			if failed > 0 {
+				return fmt.Errorf("%d %s failed", failed, plural(failed, "check", "checks"))
 			}
 			return nil
 		},
 	}
+	f := cmd.Flags()
+	f.BoolVar(&render, "render", false, "expand ApplicationSets and render every Application's chart")
+	f.BoolVar(&composeConfig, "compose", false, "render, then check each project with docker compose config (implies --render)")
+	f.StringVar(&o.RepoURL, "repo-url", "", "the URL of the repository around DIR, so Applications naming it render from the checkout")
+	f.StringVar(&o.AgeKeyFile, "sops-age-key-file", "", "age identity to decrypt SOPS values with; without it they render as placeholders")
+	f.StringVar(&outDir, "output-dir", "", "write each rendered manifest to DIR/NAME.yaml")
+	return cmd
 }
 
 func plural(n int, one, many string) string {
