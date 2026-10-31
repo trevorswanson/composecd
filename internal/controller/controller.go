@@ -17,6 +17,7 @@ import (
 	"github.com/trevorswanson/composetpl/pkg/registry"
 
 	"github.com/trevorswanson/composecd/internal/config"
+	"github.com/trevorswanson/composecd/internal/events"
 	"github.com/trevorswanson/composecd/internal/gitcache"
 	"github.com/trevorswanson/composecd/internal/health"
 	"github.com/trevorswanson/composecd/internal/hosts"
@@ -285,7 +286,12 @@ func (c *Controller) watch(ctx context.Context, h *hosts.Host) {
 	backoff := time.Second
 	for ctx.Err() == nil {
 		start := time.Now()
-		err := c.Hosts.Backend.Watch(ctx, h, func(project string) { c.onEvent(h.Name(), project) })
+		// Writes to release storage while the stream was down went unseen.
+		h.MarkStale()
+		err := c.Hosts.Backend.Watch(ctx, h, events.Handlers{
+			Project: func(project string) { c.onEvent(h.Name(), project) },
+			Storage: h.MarkStale,
+		})
 		if ctx.Err() != nil {
 			return
 		}
@@ -317,8 +323,11 @@ func (c *Controller) onEvent(host, project string) {
 // rollbacks, app refreshes) has finished.
 func (c *Controller) Wait() { c.ops.Wait() }
 
-// Refresh asks Run to refresh everything now.
+// Refresh asks Run to refresh everything now, release history included.
 func (c *Controller) Refresh() {
+	for _, h := range c.Hosts.All() {
+		h.MarkStale()
+	}
 	select {
 	case c.refreshCh <- struct{}{}:
 	default:
@@ -390,7 +399,8 @@ func (c *Controller) RefreshAll(ctx context.Context) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			h.Invalidate()
+			// Release history is cached until an event shows another client wrote it.
+			h.InvalidateIfStale()
 			prev := h.Status().State
 			defer c.publish("host", h.Name())
 			if s := h.Ping(ctx); s.State != hosts.StateUp {

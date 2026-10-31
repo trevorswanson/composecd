@@ -121,6 +121,37 @@ func TestEventTriggersHeal(t *testing.T) {
 	}
 }
 
+// TestStorageCachedUntilWritten checks that refreshes reuse cached release
+// history (each read of volume storage is a docker cp) until an event shows a
+// write.
+func TestStorageCachedUntilWritten(t *testing.T) {
+	e := newEnv(t)
+	e.apps(app("web", "nas", "  syncPolicy: {automated: {}, options: {wait: false}}\n"))
+	e.refresh()
+	<-e.backend.watching // the watcher has marked the host stale on connecting
+	e.refresh()
+	stores := func() int {
+		e.backend.mu.Lock()
+		defer e.backend.mu.Unlock()
+		return e.backend.stores
+	}
+	n := stores()
+	e.refresh()
+	e.refresh()
+	if got := stores(); got != n {
+		t.Fatalf("idle refreshes rebuilt the storage driver %d times", got-n)
+	}
+
+	e.backend.storage <- struct{}{}
+	eventually(t, "re-reading release history after a write", func() bool {
+		e.refresh()
+		return stores() > n
+	})
+	if e.app("web").Sync.Status != Synced {
+		t.Errorf("app = %+v", e.app("web").Sync)
+	}
+}
+
 func TestPrune(t *testing.T) {
 	e := newEnv(t)
 	rec := &recorder{}

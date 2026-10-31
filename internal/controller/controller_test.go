@@ -16,6 +16,7 @@ import (
 	"github.com/trevorswanson/composetpl/pkg/storage"
 
 	"github.com/trevorswanson/composecd/internal/config"
+	"github.com/trevorswanson/composecd/internal/events"
 	"github.com/trevorswanson/composecd/internal/gitcache"
 	"github.com/trevorswanson/composecd/internal/health"
 	"github.com/trevorswanson/composecd/internal/hosts"
@@ -28,19 +29,28 @@ type fakeBackend struct {
 	mu     sync.Mutex
 	envs   map[string][]string
 	events chan string // container events for host "nas"
+	// storage carries release storage writes on "nas"; watching is closed once
+	// its events are watched.
+	storage  chan struct{}
+	watching chan struct{}
+	watched  sync.Once
+	stores   int // storage drivers built
 }
 
-func (b *fakeBackend) Watch(ctx context.Context, h *hosts.Host, on func(string)) error {
+func (b *fakeBackend) Watch(ctx context.Context, h *hosts.Host, on events.Handlers) error {
 	if h.Name() != "nas" {
 		<-ctx.Done()
 		return ctx.Err()
 	}
+	b.watched.Do(func() { close(b.watching) })
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
+		case <-b.storage:
+			on.Storage()
 		case p := <-b.events:
-			on(p)
+			on.Project(p)
 		}
 	}
 }
@@ -53,6 +63,9 @@ func (b *fakeBackend) Runner(h *hosts.Host, env []string, _ io.Writer) compose.R
 }
 
 func (b *fakeBackend) Store(h *hosts.Host) storage.Driver {
+	b.mu.Lock()
+	b.stores++
+	b.mu.Unlock()
 	return storage.NewLocal(filepath.Join(b.dir, h.Name()))
 }
 
@@ -93,7 +106,7 @@ func newEnv(t *testing.T) *env {
 	})
 	dir := t.TempDir()
 	e.backend = &fakeBackend{dir: filepath.Join(dir, "releases"), fakes: map[string]*composetest.Fake{"nas": composetest.New()},
-		envs: map[string][]string{}, events: make(chan string)}
+		envs: map[string][]string{}, events: make(chan string), storage: make(chan struct{}), watching: make(chan struct{})}
 	st, err := store.Open(filepath.Join(dir, "composecd.db"))
 	if err != nil {
 		t.Fatal(err)
