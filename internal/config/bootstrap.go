@@ -38,11 +38,29 @@ type Bootstrap struct {
 	SOPSAgeKeyFile string `yaml:"sopsAgeKeyFile,omitempty"`
 	// Infisical lets Applications read secrets from Infisical.
 	Infisical *Infisical `yaml:"infisical,omitempty"`
+	// ImageUpdates pins services' moving tags to registry digests, checked on
+	// a schedule, so a new image shows as a change from Git.
+	ImageUpdates ImageUpdates `yaml:"imageUpdates,omitempty"`
 
 	// Path is the absolute path the file was read from, when LoadBootstrap
 	// read it.
 	Path string `yaml:"-" json:"-"`
 }
+
+// ImageUpdates configures image update checks. Each Application and each
+// service can opt in or out; this is the default for the rest.
+type ImageUpdates struct {
+	// Enabled makes every Application take part unless it opts out.
+	Enabled bool `yaml:"enabled,omitempty"`
+	// Schedule is a cron expression for when registries are checked (default
+	// hourly). It runs whenever any Application takes part.
+	Schedule string `yaml:"schedule,omitempty"`
+	// TimeZone is an IANA zone for Schedule (default UTC).
+	TimeZone string `yaml:"timeZone,omitempty"`
+}
+
+// DefaultImageSchedule checks registries hourly.
+const DefaultImageSchedule = "0 * * * *"
 
 // Infisical connects composecd to an Infisical server. Set clientID with
 // clientSecretFile (a machine identity using Universal Auth), or tokenFile
@@ -91,10 +109,12 @@ const (
 	EventHealthDegraded = "health-degraded"
 	EventOutOfSync      = "out-of-sync"
 	EventHostDown       = "host-down"
+	// EventImageUpdate is a new digest for an image tag a service uses.
+	EventImageUpdate = "image-update"
 )
 
 // AllEvents lists every notification event.
-var AllEvents = []string{EventSyncSucceeded, EventSyncFailed, EventHealed, EventPruned, EventHealthDegraded, EventOutOfSync, EventHostDown}
+var AllEvents = []string{EventSyncSucceeded, EventSyncFailed, EventHealed, EventPruned, EventHealthDegraded, EventOutOfSync, EventHostDown, EventImageUpdate}
 
 // DefaultEvents are sent when a notifier lists none.
 var DefaultEvents = []string{EventSyncFailed, EventHealthDegraded, EventHostDown, EventPruned}
@@ -204,6 +224,9 @@ func ParseBootstrap(data []byte) (*Bootstrap, error) {
 	if b.Root.TargetRevision == "" {
 		b.Root.TargetRevision = "HEAD"
 	}
+	if b.ImageUpdates.Schedule == "" {
+		b.ImageUpdates.Schedule = DefaultImageSchedule
+	}
 
 	var errs []error
 	if b.Root.RepoURL == "" {
@@ -219,6 +242,12 @@ func ParseBootstrap(data []byte) (*Bootstrap, error) {
 	}
 	if b.Concurrency < 1 {
 		errs = append(errs, errors.New("concurrency must be at least 1"))
+	}
+	if _, err := ParseSchedule(b.ImageUpdates.Schedule); err != nil {
+		errs = append(errs, fmt.Errorf("imageUpdates.schedule: %w", err))
+	}
+	if _, err := time.LoadLocation(b.ImageUpdates.TimeZone); err != nil {
+		errs = append(errs, fmt.Errorf("imageUpdates.timeZone %q: %w", b.ImageUpdates.TimeZone, err))
 	}
 	for i, r := range b.Repositories {
 		if r.URL == "" {

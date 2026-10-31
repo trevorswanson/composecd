@@ -210,6 +210,8 @@ spec:
       atomic: false               # roll a failed sync back to the last deployed revision
       forceRecreate: false
       historyMax: 10              # revisions composetpl keeps
+    imageUpdates:
+      enabled: true               # pin moving tags to registry digests (default: composecd.yaml's imageUpdates.enabled)
 ```
 
 Values work as in Argo CD's Helm source: the chart's `values.yaml`, then `valueFiles` in order, then `values`.
@@ -270,7 +272,7 @@ Windows apply to automatic syncs, self-heal and prune.
 | Sync | Meaning |
 | --- | --- |
 | `Synced` | The deployed release matches Git, and its containers match the release. |
-| `OutOfSync` | Something differs: not deployed yet, compose resources, hooks, the project directory, or live drift (a container missing, changed or orphaned). `app get` lists the reasons, and `app diff` shows the diffs. |
+| `OutOfSync` | Something differs: not deployed yet, compose resources, hooks, the project directory, a new digest for a moving image tag ([Image updates](#image-updates)), or live drift (a container missing, changed or orphaned). `app get` lists the reasons, and `app diff` shows the diffs. |
 | `Unknown` | composecd couldn't compare: the host is down, the chart doesn't render, the revision isn't in Git, etc. See the app's error. |
 
 | Health | Meaning |
@@ -296,6 +298,7 @@ host maintenance, a retry or self-heal backoff, or a failed sync waiting for a c
 | `app history NAME` | composetpl revisions, with the Git commit each came from. |
 | `app operations NAME`, `operation list`, `operation get ID` | Sync and rollback history, with each operation's output. |
 | `app refresh NAME`, `refresh` | Fetch and reconcile now instead of waiting for the interval. |
+| `app check-images NAME`, `app check-images --all` | Ask registries for image tags' digests now, instead of on `imageUpdates.schedule` (admin). See [Image updates](#image-updates). |
 | `host list` | Reachability, engine versions, maintenance and orphaned releases. |
 | `host unmanaged NAME` | Unmanaged/orphaned releases and plain Compose projects, including config paths. `-o json\|yaml` |
 | `adopt HOST RELEASE` | Export Application YAML with saved user values (admin); warnings go to stderr. |
@@ -322,6 +325,7 @@ Every `/api/v1` endpoint needs `Authorization: Bearer <token>`, or a browser ses
 | `GET /api/v1/apps/{name}/history`, `GET /api/v1/apps/{name}/operations` | History |
 | `POST /api/v1/apps/{name}/sync`, `.../rollback` (`{"revision": N}`) | Start an operation (202, returns it) |
 | `POST /api/v1/apps/{name}/pause` (`{"reason": "..."}`), `.../resume`, `.../refresh` | |
+| `POST /api/v1/apps/{name}/images/check`, `POST /api/v1/images/check` | Check image tags against their registries now (202) |
 | `GET /api/v1/operations`, `GET /api/v1/operations/{id}` | Operations, with output |
 | `GET /api/v1/hosts`, `POST /api/v1/hosts/{name}/maintenance` (`{"enabled": true, "reason": "..."}`) | |
 | `GET /api/v1/hosts/{name}/unmanaged` | Release metadata and plain Compose config paths (readonly) |
@@ -432,9 +436,11 @@ binary; there is no CDN or Node build step.
   containers, each marked Synced, OutOfSync, Missing or Prune with its health (click one for its details, its
   live `docker inspect` state with engine bookkeeping folded away, a live-to-desired diff, and its desired and
   deployed YAML); containers and live log tails; diffs, either of the compose file against the deployed
-  release (side by side, compact or every resource in full) or of each object's live state against Git; release history with rollback; and operations with
-  their output. **Details** shows the source, automation policy and retries.
-  Admins can sync, pause, resume and refresh; a running sync disables the button and streams its output.
+  release (side by side, compact or every resource in full) or of each object's live state against Git; release history with rollback; operations with
+  their output; and, with image updates on, the services' **images**: who pins each digest, the deployed and
+  latest digests, and whether an update can be synced or is pinned in Git. **Details** shows the source,
+  automation policy and retries.
+  Admins can sync, pause, resume, refresh and check images; a running sync disables the button and streams its output.
 - **ApplicationSets** (`/applicationsets`): generated apps, counts and expansion/validation errors.
 - **Hosts** (`/hosts`): connectivity, Docker/Compose versions, orphaned releases and admin maintenance toggles.
   Lists unmanaged composetpl releases and plain Compose projects with config paths. Admins can use **Adopt** to preview Application YAML, or **Delete** an orphaned release.
@@ -752,6 +758,47 @@ host is down, for example), the lookup fails. The caller's render then fails and
 is. That way, a monitoring config never loses checks just because composecd can't see an app yet. Avoid two
 Applications that feed what each reads into their own labels: each sync of one changes the other's.
 
+## Image updates
+
+A service on a moving tag (`nginx:1`, `:latest`, `ghcr.io/me/app:dev`) never changes in Git, so on its own
+composecd never deploys a new image for it. With image updates on, composecd pins each moving tag to the digest
+its registry serves (`image: nginx:1@sha256:…`) in the manifest it compares and deploys. When the registry
+serves a new digest, the app goes OutOfSync with a reason like
+`image nginx:1 (web): sha256:3f1c… → sha256:9ab0…`, and the diff shows the `image:` line. A new digest is then
+deployed like any other change: automatically if `syncPolicy.automated` is set and the sync windows allow it,
+or when you sync. Each deployment is a release revision, so rolling back restores the old digest.
+
+```yaml
+# composecd.yaml
+imageUpdates:
+  enabled: true                   # every Application takes part unless it opts out (default false)
+  schedule: "0 * * * *"           # when registries are checked (cron; default hourly)
+  timeZone: Europe/Berlin         # for schedule (default UTC)
+```
+
+- **Opting in or out.** An Application's `syncPolicy.imageUpdates.enabled` overrides the global setting
+  either way. A service's compose label `composecd.image-updates: "true"` or `"false"` overrides its
+  Application. The schedule runs even when the global setting is off, for the apps and services that opt in.
+- **When registries are asked.** On the schedule, on **Check images** in the UI, on
+  `composecd app check-images NAME|--all`, and on `POST /api/v1/apps/{name}/images/check` or
+  `POST /api/v1/images/check`. A tag composecd hasn't seen before is resolved the first time it renders, so a new
+  app is pinned before its first sync. A refresh never asks a registry otherwise. Checks are `HEAD` requests for
+  the manifest, which Docker Hub doesn't count against pull limits. For a multi-arch image composecd pins the
+  index digest, as docker does. Credentials come from composecd's Docker config, as for pulls and OCI charts.
+- **Digests pinned in Git are never changed.** An image Git already pins (`redis:7@sha256:…` or
+  `redis@sha256:…`) is deployed exactly as written. If its tag now resolves to a different digest, composecd
+  reports an update, in the app's **images** tab, `app get` and notifications, but the app stays Synced. The
+  update can't be applied from composecd (the UI shows a disabled control): change the digest in Git.
+- **When a registry can't be reached**, the last digest it served is kept, and failing that the digest the
+  deployed release pins. A pin is never dropped, so an outage never shows as a change. The error shows on the
+  image until a check succeeds.
+- **Not pinned:** images that use a `${VAR}`, services with `build:`, and hook services.
+
+**Turning image updates on recreates each container once.** Its `image:` gains `@sha256:…` even when the
+digest is the one already running, so compose sees new configuration. Expect one sync of every app that takes
+part. Automated apps do it on their own, within their sync windows. Later syncs only recreate a service when
+its digest changes.
+
 ## Webhooks, notifications and metrics
 
 **Webhooks.** Set `webhook.secretFile` in `composecd.yaml`, then add a push webhook in your Git server that
@@ -776,8 +823,8 @@ notifications:
 ```
 
 The events are `sync-succeeded`, `sync-failed` (which also covers failed rollbacks, heals and prunes),
-`self-healed`, `prune`, `health-degraded` and `out-of-sync`, each sent when an app enters that state, and
-`host-down`.
+`self-healed`, `prune`, `health-degraded` and `out-of-sync`, each sent when an app enters that state,
+`host-down`, and `image-update` (a new digest for a service's tag, including one pinned in Git).
 
 **Metrics.** `GET /metrics` serves Prometheus metrics:
 - `composecd_app_sync_status` and `composecd_app_health_status`, one series per app with its current status;
@@ -833,7 +880,7 @@ The events are `sync-succeeded`, `sync-failed` (which also covers failed rollbac
 | OCI chart with Git values | `valuesFrom` repository, independent chart/values revisions, SOPS and automatic sync |
 | ApplicationSets | Git-directory and Host-label generators, safe templates and zero-result protection |
 | Adoption | Unmanaged discovery and admin Application YAML export; commit and sync to upgrade in place |
-| Image updater | Planned; see [docs/PLAN.md](docs/PLAN.md) |
+| Image updater (digest strategy) | `imageUpdates`: moving tags pinned to registry digests on a schedule; digests pinned in Git are only reported. Writing back to Git is planned; see [docs/PLAN.md](docs/PLAN.md) |
 
 ## Development
 

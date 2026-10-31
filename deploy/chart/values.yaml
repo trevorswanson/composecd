@@ -20,6 +20,10 @@ config:
   #   clientID: YOUR_CLIENT_ID
   #   clientSecretFile: /run/secrets/infisical-client-secret
   refreshInterval: 3m
+  # Pin moving image tags to registry digests, checked hourly (see the README).
+  # imageUpdates:
+  #   enabled: true
+  #   schedule: "0 * * * *"
   root:
     repoURL: https://git.example.lan/me/homelab.git
     targetRevision: main

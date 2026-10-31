@@ -124,6 +124,14 @@ func (s *stub) RefreshApp(name string) error {
 
 func (s *stub) Refresh() { s.calls = append(s.calls, "refresh all") }
 
+func (s *stub) CheckImages(name string) error {
+	if name != "" && name != "media" {
+		return fmt.Errorf("application %q: %w", name, controller.ErrNotFound)
+	}
+	s.calls = append(s.calls, "check-images "+name)
+	return nil
+}
+
 func (s *stub) RefreshRepos(urls []string) bool {
 	for _, u := range urls {
 		if u == "https://git.lan/me/homelab.git" {
@@ -217,6 +225,9 @@ func TestAPI(t *testing.T) {
 		{"POST", "/api/v1/apps/media/resume", "", 200, `resumed`},
 		{"POST", "/api/v1/apps/media/refresh", "", 202, `refresh requested`},
 		{"POST", "/api/v1/refresh", "", 202, `refresh requested`},
+		{"POST", "/api/v1/apps/media/images/check", "", 202, `image check requested`},
+		{"POST", "/api/v1/apps/nope/images/check", "", 404, `not found`},
+		{"POST", "/api/v1/images/check", "", 202, `image check requested`},
 		{"GET", "/api/v1/operations/7", "", 200, `"log": "done"`},
 		{"GET", "/api/v1/operations/9", "", 404, `not found`},
 		{"GET", "/api/v1/operations/x", "", 400, `invalid operation id`},
@@ -232,7 +243,7 @@ func TestAPI(t *testing.T) {
 			t.Errorf("%s %s: %d %s, want %d containing %q", tc.method, tc.path, status, body, tc.status, tc.contains)
 		}
 	}
-	want := "operations media 5;sync media;sync busy;rollback media 2;pause media maintenance (by admin);resume media;refresh media;refresh all;operations  0"
+	want := "operations media 5;sync media;sync busy;rollback media 2;pause media maintenance (by admin);resume media;refresh media;refresh all;check-images media;check-images ;operations  0"
 	if got := strings.Join(st.calls, ";"); got != want {
 		t.Errorf("calls:\n got %s\nwant %s", got, want)
 	}

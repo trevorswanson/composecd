@@ -24,6 +24,7 @@ import (
 	"github.com/trevorswanson/composecd/internal/auth"
 	"github.com/trevorswanson/composecd/internal/controller"
 	"github.com/trevorswanson/composecd/internal/health"
+	"github.com/trevorswanson/composecd/internal/images"
 	"github.com/trevorswanson/composecd/internal/store"
 	"github.com/trevorswanson/composecd/internal/windows"
 )
@@ -50,6 +51,7 @@ type Controller interface {
 	Pause(string, string) error
 	Resume(string) error
 	RefreshApp(string) error
+	CheckImages(string) error
 	SetMaintenance(string, bool, string) error
 	DeleteRelease(host, name, user string) (*store.Operation, error)
 	Subscribe() (<-chan controller.Update, func())
@@ -220,6 +222,18 @@ var templates = template.Must(template.New("web").Funcs(template.FuncMap{
 			return s[:7]
 		}
 		return s
+	},
+	// digest abbreviates an image digest: sha256:0123456789ab.
+	"digest": images.Short,
+	// imageUpdates counts the images with an update available.
+	"imageUpdates": func(ims []controller.ImageStatus) int {
+		n := 0
+		for _, im := range ims {
+			if im.UpdateAvailable {
+				n++
+			}
+		}
+		return n
 	},
 	"shortVersion": shortVersion,
 	"lines":        func(s string) []string { return strings.Split(s, "\n") },
@@ -487,7 +501,7 @@ func (s *Server) data(r *http.Request, p *auth.Principal) (*Data, error) {
 		}
 		d.App = a
 		switch d.Tab {
-		case "graph", "containers":
+		case "graph", "containers", "images":
 		case "diff":
 			d.Mode = r.URL.Query().Get("mode")
 			if d.Mode == "objects" {
@@ -689,6 +703,9 @@ func (s *Server) Action(w http.ResponseWriter, r *http.Request) {
 			err = s.C.Resume(name)
 		case "refresh":
 			err = s.C.RefreshApp(name)
+		case "check-images":
+			err = s.C.CheckImages(name)
+			message = "Checking image registries"
 		default:
 			err = controller.ErrNotFound
 		}
@@ -719,12 +736,16 @@ func (s *Server) Action(w http.ResponseWriter, r *http.Request) {
 		}
 	case strings.HasPrefix(r.URL.Path, "/ui/root/"):
 		target = "/apps"
-		if action != "refresh" {
+		switch action {
+		case "refresh":
+			s.C.Refresh()
+			message = "Fetching the root repository"
+		case "check-images":
+			err = s.C.CheckImages("")
+			message = "Checking image registries"
+		default:
 			err = controller.ErrNotFound
-			break
 		}
-		s.C.Refresh()
-		message = "Fetching the root repository"
 	case strings.HasPrefix(r.URL.Path, "/ui/settings/"):
 		target = "/settings"
 		if s.Auth.Store == nil {

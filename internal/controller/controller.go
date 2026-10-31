@@ -15,12 +15,14 @@ import (
 	"time"
 
 	"github.com/trevorswanson/composetpl/pkg/registry"
+	"golang.org/x/sync/singleflight"
 
 	"github.com/trevorswanson/composecd/internal/config"
 	"github.com/trevorswanson/composecd/internal/events"
 	"github.com/trevorswanson/composecd/internal/gitcache"
 	"github.com/trevorswanson/composecd/internal/health"
 	"github.com/trevorswanson/composecd/internal/hosts"
+	"github.com/trevorswanson/composecd/internal/images"
 	"github.com/trevorswanson/composecd/internal/infisical"
 	"github.com/trevorswanson/composecd/internal/masking"
 	"github.com/trevorswanson/composecd/internal/store"
@@ -52,6 +54,9 @@ type Options struct {
 	// Helpers run the container that updates composecd itself; nil leaves
 	// composecd's own Application alone.
 	Helpers Helpers
+	// ImageResolver resolves image tags to digests for image updates; nil
+	// asks the registries.
+	ImageResolver images.Resolver
 }
 
 // Controller reconciles every Application.
@@ -108,6 +113,8 @@ type Controller struct {
 	timers         map[string]*timer
 	metrics        map[metricKey]*opMetric
 	watchers       map[string]*watcher
+	// imageFlight shares one registry check of a tag among the apps using it.
+	imageFlight singleflight.Group
 }
 
 // watcher streams one host's container events.
@@ -138,6 +145,8 @@ type appState struct {
 	manifest string
 	known    bool
 	reader   bool
+	// images are the images of the app's last render, which CheckImages checks.
+	images []images.Service
 }
 
 // infisicalClient returns the shared client for the bootstrap's infisical
@@ -159,6 +168,9 @@ func (c *Controller) infisicalClient() *infisical.Client {
 func New(o Options) *Controller {
 	if o.Log == nil {
 		o.Log = slog.Default()
+	}
+	if o.ImageResolver == nil {
+		o.ImageResolver = &images.Registry{}
 	}
 	return &Controller{
 		Options:   o,
@@ -233,6 +245,7 @@ func (c *Controller) Run(ctx context.Context) {
 	c.mu.Unlock()
 	t := time.NewTicker(time.Duration(c.Boot.RefreshInterval))
 	defer t.Stop()
+	go c.runImageSchedule(ctx)
 	for {
 		c.RefreshAll(ctx)
 		select {
@@ -607,6 +620,7 @@ func (c *Controller) setStatus(st *AppStatus) {
 		c.notify(Event{Type: config.EventHealthDegraded, App: st.Name, Host: st.Host, Revision: st.Sync.DeployedRevision,
 			Message: fmt.Sprintf("%s is degraded: %s", st.Name, st.Health.Message)})
 	}
+	c.notifyImages(&prev, st)
 	if st.Sync.Status == OutOfSync && prev.Sync.Status == Synced {
 		c.notify(Event{Type: config.EventOutOfSync, App: st.Name, Host: st.Host, Revision: st.Sync.Revision,
 			Message: fmt.Sprintf("%s is out of sync: %s", st.Name, strings.Join(st.Sync.Reasons, "; "))})

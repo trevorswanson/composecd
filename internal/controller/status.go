@@ -48,7 +48,10 @@ type AppStatus struct {
 	// Objects are the app's compose objects and containers, each compared
 	// with Git; the UI draws them as a graph.
 	Objects []Object `json:"objects,omitempty"`
-	Release *Release `json:"release,omitempty"`
+	// Images are the services' images with image updates on, and what their
+	// registries serve for their tags.
+	Images  []ImageStatus `json:"images,omitempty"`
+	Release *Release      `json:"release,omitempty"`
 	// DependsOn are the apps that must be Synced and Healthy first.
 	DependsOn []string `json:"dependsOn,omitempty"`
 	// Blocked says why automation is holding off: a sync window, a dependency,

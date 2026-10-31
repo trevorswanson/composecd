@@ -182,6 +182,13 @@ func TestCLIAgainstServer(t *testing.T) {
 	expect(t, mustCLI(t, srv, "app", "get", "dashboard"), "Depends on: whoami")
 	expect(t, mustCLI(t, srv, "refresh"), "Refresh requested")
 	expect(t, mustCLI(t, srv, "app", "refresh", "whoami"), "Refresh of whoami requested")
+	expect(t, mustCLI(t, srv, "app", "check-images", "whoami"), "Image check of whoami requested")
+	expect(t, mustCLI(t, srv, "app", "check-images", "--all"), "Image check of every application requested")
+	for _, args := range [][]string{{"app", "check-images"}, {"app", "check-images", "whoami", "--all"}, {"app", "check-images", "nope"}} {
+		if _, err := cli(t, srv, args...); err == nil {
+			t.Errorf("%v: expected an error", args)
+		}
+	}
 
 	if _, err := cli(t, srv, "app", "get", "nope"); err == nil || !strings.Contains(err.Error(), "not found") {
 		t.Errorf("unknown app: %v", err)
@@ -192,6 +199,19 @@ func TestCLIAgainstServer(t *testing.T) {
 	if err := cmd.Execute(); err == nil || !strings.Contains(err.Error(), "COMPOSECD_TOKEN") {
 		t.Errorf("bad token: %v", err)
 	}
+}
+
+func TestPrintImages(t *testing.T) {
+	var out bytes.Buffer
+	printImages(&out, &controller.AppStatus{Images: []controller.ImageStatus{
+		{Service: "web", Image: "nginx:1", Pin: controller.PinComposecd, Deployed: "sha256:aaaaaaaaaaaaaaaaaaaa", Latest: "sha256:bbbbbbbbbbbbbbbbbbbb",
+			UpdateAvailable: true, Applicable: true},
+		{Service: "db", Image: "postgres:16@sha256:cc", Pin: controller.PinGit, Latest: "sha256:dddddddddddddddddddd", UpdateAvailable: true,
+			Note: "the digest is pinned in Git; change it there to update"},
+		{Service: "app", Image: "app:${TAG}", Note: "the image uses a variable"},
+	}})
+	expect(t, out.String(), "IMAGES:", "sha256:aaaaaaaaaaaa", "sha256:bbbbbbbbbbbb", "available: sync to apply",
+		"available, not applied: the digest is pinned in Git", "the image uses a variable")
 }
 
 func TestValidateExample(t *testing.T) {

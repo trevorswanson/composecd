@@ -156,6 +156,15 @@ func (c *Client) RefreshApp(ctx context.Context, name string) error {
 	return c.do(ctx, "POST", appPath(name, "/refresh"), nil, nil)
 }
 
+// CheckImages asks the server to check app's image tags against their
+// registries ("" for every app).
+func (c *Client) CheckImages(ctx context.Context, app string) error {
+	if app == "" {
+		return c.do(ctx, "POST", "/api/v1/images/check", nil, nil)
+	}
+	return c.do(ctx, "POST", appPath(app, "/images/check"), nil, nil)
+}
+
 func (c *Client) Refresh(ctx context.Context) error {
 	return c.do(ctx, "POST", "/api/v1/refresh", nil, nil)
 }

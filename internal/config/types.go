@@ -209,6 +209,28 @@ type SyncPolicy struct {
 	Options   SyncOptions `yaml:"options,omitempty" json:"options"`
 	// Retry retries a failed automatic sync.
 	Retry *Retry `yaml:"retry,omitempty" json:"retry,omitempty"`
+	// ImageUpdates overrides composecd.yaml's imageUpdates.enabled for this
+	// Application.
+	ImageUpdates *AppImageUpdates `yaml:"imageUpdates,omitempty" json:"imageUpdates,omitempty"`
+}
+
+// AppImageUpdates opts an Application in or out of image updates.
+type AppImageUpdates struct {
+	// Enabled, when set, overrides the global setting.
+	Enabled *bool `yaml:"enabled,omitempty" json:"enabled,omitempty"`
+}
+
+// LabelImageUpdates is the compose service label ("true" or "false") that
+// overrides the Application's image update setting for one service.
+const LabelImageUpdates = "composecd.image-updates"
+
+// ImageUpdatesFor says whether image updates are on for app, given the
+// global setting.
+func ImageUpdatesFor(global bool, app *Application) bool {
+	if u := app.Spec.SyncPolicy.ImageUpdates; u != nil && u.Enabled != nil {
+		return *u.Enabled
+	}
+	return global
 }
 
 // Automated configures automatic sync.

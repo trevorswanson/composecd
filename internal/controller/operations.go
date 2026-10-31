@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/trevorswanson/composetpl/pkg/action"
+	"github.com/trevorswanson/composetpl/pkg/release"
 
 	"github.com/trevorswanson/composecd/internal/config"
 	"github.com/trevorswanson/composecd/internal/source"
@@ -128,7 +129,13 @@ func (c *Controller) runSync(ctx context.Context, p *plan, op *store.Operation) 
 	u := c.newUpgrade(cfg, p, op)
 
 	op.SourceRevision = p.prep.Revision
-	rel, err := u.Run(ctx, name, p.prep.ChartRef, p.prep.Values)
+	// Upgrade.Run, with the images pinned as assess pinned them in between.
+	rel, err := c.prepareUpgrade(ctx, cfg, u, p)
+	if err == nil {
+		a := action.NewApply(cfg)
+		a.DeployOptions, a.Atomic, a.HistoryMax, a.Description = u.DeployOptions, u.Atomic, u.HistoryMax, u.Description
+		rel, err = a.Run(ctx, name, rel.Revision)
+	}
 	if rel != nil {
 		op.ReleaseRevision = rel.Revision
 	}
@@ -138,6 +145,24 @@ func (c *Controller) runSync(ctx context.Context, p *plan, op *store.Operation) 
 		return
 	}
 	op.Phase, op.Message = store.PhaseSucceeded, rel.Description
+}
+
+// prepareUpgrade saves p's next revision as pending, with its moving tags
+// pinned to p.pins, abandoning it if they can't be.
+func (c *Controller) prepareUpgrade(ctx context.Context, cfg *action.Configuration, u *action.Upgrade, p *plan) (*release.Release, error) {
+	name := p.app.Metadata.Name
+	rel, err := u.Prepare(ctx, name, p.prep.ChartRef, p.prep.Values)
+	if err != nil {
+		return rel, err
+	}
+	if err := pinRelease(ctx, cfg, rel, p.pins); err != nil {
+		err = fmt.Errorf("pinning images: %w", err)
+		if aerr := action.Abandon(cfg, name, rel.Revision, err.Error()); aerr != nil {
+			c.Log.Error("abandoning a revision whose images couldn't be pinned", "app", name, "error", aerr)
+		}
+		return rel, err
+	}
+	return rel, nil
 }
 
 // newUpgrade is the upgrade (or install) that syncs p as operation op.
