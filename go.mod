@@ -9,7 +9,7 @@ require (
 	github.com/go-jose/go-jose/v4 v4.1.6
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/spf13/cobra v1.10.2
-	github.com/trevorswanson/composetpl v0.3.1
+	github.com/trevorswanson/composetpl v0.4.0
 	golang.org/x/crypto v0.58.0
 	golang.org/x/oauth2 v0.37.0
 	golang.org/x/sync v0.24.0
