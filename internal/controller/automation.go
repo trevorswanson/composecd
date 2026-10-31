@@ -68,6 +68,20 @@ func (c *Controller) automate(ctx context.Context, app *config.Application, st *
 		c.mu.Unlock()
 		return false
 	}
+	var rolling bool
+	if kind == store.KindSync {
+		var reason string
+		var wake time.Time
+		reason, wake, rolling = c.rolloutBlockLocked(app, st.generation, now)
+		if !wake.IsZero() {
+			c.scheduleLocked(name, wake)
+		}
+		if reason != "" {
+			st.Blocked = reason
+			c.mu.Unlock()
+			return false
+		}
+	}
 	switch kind {
 	case store.KindSync:
 		if s.attempted == p.key {
@@ -98,6 +112,8 @@ func (c *Controller) automate(ctx context.Context, app *config.Application, st *
 			s.nextHeal = now.Add(healBackoff(s.heals))
 		}
 	}
+	// Hold the app's place in the rollout until its status shows the sync.
+	s.rollingOut = rolling && act
 	c.mu.Unlock()
 	if !act {
 		return false

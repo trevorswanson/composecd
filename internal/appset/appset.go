@@ -34,6 +34,51 @@ type Status struct {
 	// AppErrors are the generated applications that can't be reconciled (a
 	// chart that doesn't render, say), keyed by application name.
 	AppErrors map[string]string `json:"appErrors,omitempty"`
+	// Rollout is the progress of the set's rolling sync, when it has one.
+	Rollout *Rollout `json:"rollout,omitempty"`
+}
+
+// Rollout is where a rolling sync stands, step by step.
+type Rollout struct {
+	Steps []RolloutStep `json:"steps"`
+	// Unselected are the Applications no step selects, which only sync
+	// manually.
+	Unselected []string `json:"unselected,omitempty"`
+}
+
+// RolloutStep is one step's Applications, in the order they update.
+type RolloutStep struct {
+	// MaxUpdate is how many of the step's Applications may update at once.
+	MaxUpdate    int          `json:"maxUpdate"`
+	Applications []RolloutApp `json:"applications"`
+}
+
+// RolloutApp is one Application's part in a rollout: State is Done, Pending,
+// Updating, Stabilizing, Unhealthy, Failed or Unknown.
+type RolloutApp struct {
+	Name    string `json:"name"`
+	State   string `json:"state"`
+	Message string `json:"message,omitempty"`
+}
+
+// Summary says in a few words where r stands: complete, halted by a failed
+// or unhealthy Application, or how far its current step is.
+func (r *Rollout) Summary() string {
+	for i, step := range r.Steps {
+		done := 0
+		for _, a := range step.Applications {
+			switch a.State {
+			case "Done":
+				done++
+			case "Failed", "Unhealthy":
+				return fmt.Sprintf("halted at step %d: %s %s", i+1, a.Name, strings.ToLower(a.State))
+			}
+		}
+		if done < len(step.Applications) {
+			return fmt.Sprintf("step %d of %d: %d of %d done", i+1, len(r.Steps), done, len(step.Applications))
+		}
+	}
+	return "complete"
 }
 
 // Checkout provides a protected, resolved checkout and its release function.

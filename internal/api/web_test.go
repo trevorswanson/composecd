@@ -15,6 +15,7 @@ import (
 	"github.com/trevorswanson/composetpl/pkg/action"
 	"github.com/trevorswanson/composetpl/pkg/compose"
 
+	"github.com/trevorswanson/composecd/internal/appset"
 	"github.com/trevorswanson/composecd/internal/auth"
 	"github.com/trevorswanson/composecd/internal/config"
 	"github.com/trevorswanson/composecd/internal/controller"
@@ -520,6 +521,33 @@ func TestWebDisablesActionsOnSelf(t *testing.T) {
 			if strings.Contains(body, action) {
 				t.Errorf("%s offers %s", path, action)
 			}
+		}
+	}
+}
+
+type appsetRolloutStub struct{ stub }
+
+func (s *appsetRolloutStub) ApplicationSets() []controller.ApplicationSetStatus {
+	return []controller.ApplicationSetStatus{{Name: "unbound", Generated: 3, Ready: true, Applications: []string{"unbound-dns1", "unbound-dns2", "unbound-lab"},
+		Rollout: &appset.Rollout{Steps: []appset.RolloutStep{{MaxUpdate: 1, Applications: []appset.RolloutApp{
+			{Name: "unbound-dns1", State: controller.RolloutFailed, Message: "automatic sync failed: <boom>"},
+			{Name: "unbound-dns2", State: controller.RolloutPending, Message: "waiting"}}}},
+			Unselected: []string{"unbound-lab"}}}}
+}
+
+func TestApplicationSetsPageShowsRollout(t *testing.T) {
+	a := newAuthn(t, "secret")
+	srv := httptest.NewServer(New(&appsetRolloutStub{}, Options{Auth: a}))
+	defer srv.Close()
+	code, body := do(t, srv, "GET", "/api/v1/applicationsets", "secret", "")
+	if code != 200 || !strings.Contains(body, `"rollout"`) || !strings.Contains(body, `"state": "Failed"`) {
+		t.Fatalf("%d %s", code, body)
+	}
+	code, body = do(t, srv, "GET", "/applicationsets", "secret", "")
+	for _, want := range []string{"halted at step 1: unbound-dns1 failed", "Step 1", "(max 1)", `<span class="pill failed">Failed</span> unbound-dns1`,
+		`<span class="pill outofsync">Pending</span> unbound-dns2`, "&lt;boom&gt;", "Not in any step", "/apps/unbound-lab"} {
+		if code != 200 || !strings.Contains(body, want) {
+			t.Errorf("%d missing %s: %s", code, want, body)
 		}
 	}
 }

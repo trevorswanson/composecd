@@ -236,7 +236,24 @@ var templates = template.Must(template.New("web").Funcs(template.FuncMap{
 		return n
 	},
 	"shortVersion": shortVersion,
-	"lines":        func(s string) []string { return strings.Split(s, "\n") },
+	"inc":          func(i int) int { return i + 1 },
+	// rolloutPill is the pill class of a rolling sync state.
+	"rolloutPill": func(state string) string {
+		switch state {
+		case controller.RolloutDone:
+			return "ready"
+		case controller.RolloutUpdating, controller.RolloutStabilizing:
+			return "progressing"
+		case controller.RolloutPending:
+			return "outofsync"
+		case controller.RolloutUnhealthy:
+			return "degraded"
+		case controller.RolloutFailed:
+			return "failed"
+		}
+		return "unknown"
+	},
+	"lines": func(s string) []string { return strings.Split(s, "\n") },
 	"lineClass": func(s string) string {
 		switch {
 		case strings.HasPrefix(s, "@@"):

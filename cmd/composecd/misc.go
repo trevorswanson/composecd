@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"text/tabwriter"
@@ -318,15 +319,50 @@ func newAppSetCmd(cf *clientFlags) *cobra.Command {
 			}
 			return format.write(cmd.OutOrStdout(), sets, func(w io.Writer) {
 				tw := tabwriter.NewWriter(w, 0, 8, 2, ' ', 0)
-				fmt.Fprintln(tw, "NAME\tGENERATED\tREADY\tAPPLICATIONS\tERROR")
+				fmt.Fprintln(tw, "NAME\tGENERATED\tREADY\tROLLOUT\tAPPLICATIONS\tERROR")
 				for _, s := range sets {
-					fmt.Fprintf(tw, "%s\t%d\t%t\t%s\t%s\n", s.Name, s.Generated, s.Ready, orDash(strings.Join(s.Applications, ",")), s.Error)
+					rollout := "-"
+					if s.Rollout != nil {
+						rollout = s.Rollout.Summary()
+					}
+					fmt.Fprintf(tw, "%s\t%d\t%t\t%s\t%s\t%s\n", s.Name, s.Generated, s.Ready, rollout, orDash(strings.Join(s.Applications, ",")), s.Error)
 				}
 				_ = tw.Flush()
 			})
 		}}
 	format.register(list)
+	var rolloutFormat outputFormat
+	rollout := &cobra.Command{Use: "rollout NAME", Short: "Show where an ApplicationSet's rolling sync stands, step by step", Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			sets, err := cf.client().ApplicationSets(ctx(cmd))
+			if err != nil {
+				return err
+			}
+			i := slices.IndexFunc(sets, func(s controller.ApplicationSetStatus) bool { return s.Name == args[0] })
+			if i < 0 {
+				return fmt.Errorf("applicationset %q not found", args[0])
+			}
+			r := sets[i].Rollout
+			if r == nil {
+				return fmt.Errorf("applicationset %q has no rolling sync strategy", args[0])
+			}
+			return rolloutFormat.write(cmd.OutOrStdout(), r, func(w io.Writer) {
+				fmt.Fprintf(w, "%s: %s\n", args[0], r.Summary())
+				tw := tabwriter.NewWriter(w, 0, 8, 2, ' ', 0)
+				fmt.Fprintln(tw, "STEP\tMAX\tAPPLICATION\tSTATE\tMESSAGE")
+				for n, step := range r.Steps {
+					for _, a := range step.Applications {
+						fmt.Fprintf(tw, "%d\t%d\t%s\t%s\t%s\n", n+1, step.MaxUpdate, a.Name, a.State, orDash(a.Message))
+					}
+				}
+				for _, name := range r.Unselected {
+					fmt.Fprintf(tw, "-\t-\t%s\t-\tno step selects it; sync it manually\n", name)
+				}
+				_ = tw.Flush()
+			})
+		}}
+	rolloutFormat.register(rollout)
 	cmd := &cobra.Command{Use: "appset", Aliases: []string{"applicationset", "applicationsets"}, Short: "Inspect ApplicationSets"}
-	cmd.AddCommand(list)
+	cmd.AddCommand(list, rollout)
 	return cmd
 }

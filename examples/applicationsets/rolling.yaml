@@ -1,0 +1,23 @@
+# One app per Host labelled role: dns, updated one host at a time. A host
+# syncs only after the one before it is Synced and has stayed Healthy for 30s;
+# a failed sync or an unhealthy app halts the rollout. Create charts/unbound,
+# with a healthcheck on the service, first.
+apiVersion: composecd/v1alpha1
+kind: ApplicationSet
+metadata: {name: unbound}
+spec:
+  generators:
+    - hosts: {selector: {role: dns}}
+  strategy:
+    type: RollingSync
+    rollingSync:
+      maxUpdate: 1
+      minHealthyTime: 30s
+  template:
+    metadata:
+      name: "unbound-{{ .host.name }}"
+      labels: {host: "{{ .host.name }}"}
+    spec:
+      source: {path: charts/unbound}
+      destination: {host: "{{ .host.name }}"}
+      syncPolicy: {automated: {}}
