@@ -6,6 +6,8 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"path"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -85,6 +87,46 @@ type AppSpec struct {
 	// Self marks the Application that runs composecd itself, for setups where
 	// composecd can't find its own container. composecd normally detects it.
 	Self bool `yaml:"self,omitempty" json:"self,omitempty"`
+	// Permissions grants this Application's chart more than identity and labels
+	// when it reads other Applications with lookup "composecd/application".
+	Permissions *Permissions `yaml:"permissions,omitempty" json:"permissions,omitempty"`
+}
+
+// Permissions lists, per kind of data, the Applications whose data a chart may
+// read through lookup. Each pattern is "app" or "app/service", with path.Match
+// wildcards; "app" covers all of its services.
+type Permissions struct {
+	// Env is services' environment, with secret values masked.
+	Env []string `yaml:"env,omitempty" json:"env,omitempty"`
+	// Configs is the content of the configs services mount, by target.
+	Configs []string `yaml:"configs,omitempty" json:"configs,omitempty"`
+	// Secrets is services' environment unmasked, and the secrets they mount.
+	Secrets []string `yaml:"secrets,omitempty" json:"secrets,omitempty"`
+}
+
+// Grants lists each kind of permission with its patterns.
+func (p *Permissions) Grants() map[string][]string {
+	if p == nil {
+		return nil
+	}
+	return map[string][]string{"env": p.Env, "configs": p.Configs, "secrets": p.Secrets}
+}
+
+// Allows reports whether one of patterns matches service svc of Application app.
+func Allows(patterns []string, app, svc string) bool {
+	for _, p := range patterns {
+		a, s, scoped := strings.Cut(p, "/")
+		if ok, _ := path.Match(a, app); !ok {
+			continue
+		}
+		if !scoped {
+			return true
+		}
+		if ok, _ := path.Match(s, svc); ok {
+			return true
+		}
+	}
+	return false
 }
 
 // AppSource is where an Application's chart and values come from: a chart
