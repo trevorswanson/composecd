@@ -21,6 +21,7 @@ import (
 	"github.com/trevorswanson/composecd/internal/auth"
 	"github.com/trevorswanson/composecd/internal/config"
 	"github.com/trevorswanson/composecd/internal/controller"
+	"github.com/trevorswanson/composecd/internal/events"
 	"github.com/trevorswanson/composecd/internal/gitcache"
 	"github.com/trevorswanson/composecd/internal/hosts"
 	"github.com/trevorswanson/composecd/internal/store"
@@ -47,7 +48,7 @@ type fakeBackend struct {
 
 func (b *fakeBackend) Runner(*hosts.Host, []string, io.Writer) compose.Runner { return b.fake }
 
-func (b *fakeBackend) Watch(ctx context.Context, _ *hosts.Host, _ func(string)) error {
+func (b *fakeBackend) Watch(ctx context.Context, _ *hosts.Host, _ events.Handlers) error {
 	<-ctx.Done()
 	return ctx.Err()
 }

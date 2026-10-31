@@ -15,6 +15,7 @@ import (
 	"github.com/trevorswanson/composetpl/pkg/storage"
 
 	"github.com/trevorswanson/composecd/internal/config"
+	"github.com/trevorswanson/composecd/internal/events"
 )
 
 func host(name string, spec config.HostSpec) *config.Host {
@@ -90,7 +91,7 @@ func (b *pingBackend) Runner(*Host, []string, io.Writer) compose.Runner {
 	return pingRunner{fail: b.fail}
 }
 
-func (b *pingBackend) Watch(context.Context, *Host, func(string)) error { return nil }
+func (b *pingBackend) Watch(context.Context, *Host, events.Handlers) error { return nil }
 
 func (b *pingBackend) Store(h *Host) storage.Driver {
 	b.built++
@@ -129,6 +130,44 @@ func TestPingAndInvalidate(t *testing.T) {
 	h.Store()
 	if b.built != 2 {
 		t.Errorf("store not rebuilt after invalidate: %d", b.built)
+	}
+}
+
+func TestMarkStale(t *testing.T) {
+	b := &pingBackend{dir: t.TempDir()}
+	r := NewRegistry(b)
+	r.Sync([]*config.Host{host("nas", config.HostSpec{URL: "ssh://nas"})})
+	h := r.Get("nas")
+
+	// A new host has never been read, so it's stale; afterwards refreshes reuse the cache.
+	for i := 0; i < 3; i++ {
+		h.InvalidateIfStale()
+		h.Store()
+	}
+	if b.built != 1 {
+		t.Fatalf("store built %d times over three refreshes, want 1", b.built)
+	}
+
+	h.MarkStale()
+	h.Store()
+	if b.built != 2 {
+		t.Errorf("store not rebuilt after MarkStale: %d", b.built)
+	}
+
+	// While an operation uses the host, the invalidation waits for the next refresh.
+	release := h.Use()
+	h.MarkStale()
+	h.Store()
+	release()
+	if b.built != 2 {
+		t.Errorf("store rebuilt under an operation: %d", b.built)
+	}
+	h.InvalidateIfStale()
+	h.Store()
+	h.InvalidateIfStale()
+	h.Store()
+	if b.built != 3 {
+		t.Errorf("store built %d times, want 3: once after the deferred invalidation", b.built)
 	}
 }
 

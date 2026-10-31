@@ -136,9 +136,38 @@ spec:
   # context: pi                   # a docker context instead of url
   # tlsCertPath: /run/secrets/gpu # ca.pem, cert.pem, key.pem for tcp:// (DOCKER_TLS_VERIFY=1)
   projectRoot: /srv/composecd     # default /opt/composecd
-  storage: volume                 # composetpl release storage: volume (default, on the host) or local
+  storage: volume                 # release history: volume (default, on the host) or local (see below)
   env: {TZ: America/Chicago}      # for every docker call; visible to ${VAR} and the env function
 ```
+
+#### Release storage: volume or local
+
+`storage` picks where composetpl's release history for the host lives.
+
+| | `volume` (default) | `local` |
+|---|---|---|
+| Where | The `composetpl-releases` volume on the host | `<dataDir>/hosts/<host>/releases`, next to composecd |
+| Shared with the `composetpl` CLI and other clients | Yes | No: `composetpl --context <host>` can't see it |
+| Survives losing composecd's data volume | Yes | No: back it up with composecd's data |
+| Containers on the host | One stopped accessor, and a short-lived helper when old revisions are deleted | None |
+| Image the host has to pull | `busybox:1.37` (`COMPOSECD_HELPER_IMAGE` overrides it) | None |
+
+The Docker API can't read or write a volume's files, only a container's (`docker cp`), and it can do that for
+a container that was created but never started. So for `volume` storage, composetpl keeps one stopped
+container per host, `composetpl-releases-accessor`, which mounts the volume, and copies history in and out of
+it. It's never started. It shows up in `docker ps -a`, and if `docker container prune` removes it, the next
+operation creates it again. `docker cp` can't delete files, so trimming revisions beyond `historyMax`
+(default 10) runs a short-lived helper container from the same image. Reading and writing history start no
+container, so helpers run only during syncs, never while idle.
+
+composecd caches each host's history. It reads it again only when the host's Docker events show another
+client wrote to the volume, when the event stream reconnects (events may have been missed), and on a manual
+refresh (`composecd refresh`, the web UI, `POST /api/v1/refresh`). An idle host sees one `docker cp` at
+startup and nothing after that.
+
+Choose `local` to avoid the accessor and helper containers entirely. It also suits engines that can't run the
+helper image, such as Windows containers and hosts that can't pull images. The cost is that history is tied
+to composecd's data directory rather than the host.
 
 ### Application
 
@@ -305,8 +334,9 @@ Every `/api/v1` endpoint needs `Authorization: Bearer <token>`, or a browser ses
 
 ## Adopt existing releases
 
-Use the same host connection and release storage as your existing composetpl install. Volume storage
-uses the engine's composetpl release volume. For `storage: local`, migrate the release records into
+Use the same host connection and release storage as your existing composetpl install (see
+[Release storage](#release-storage-volume-or-local)). Volume storage uses the engine's composetpl release
+volume. If the composetpl that wrote it predates the accessor container, composecd creates the accessor. For `storage: local`, migrate the release records into
 `<dataDir>/hosts/<host>/releases` first; composecd cannot discover another client's local state directory.
 
 ```bash

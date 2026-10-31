@@ -107,6 +107,8 @@ func newDockerEnv(t *testing.T, storageKind string) (*env, string) {
 				_ = v.Delete(hist...)
 			}
 			if !existed {
+				// The accessor holds the volume, so it goes first.
+				_ = exec.Command("docker", "rm", "-f", storage.AccessorName(storage.DefaultVolume)).Run()
 				_ = exec.Command("docker", "volume", "rm", "-f", storage.DefaultVolume).Run()
 			}
 		})

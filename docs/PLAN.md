@@ -140,7 +140,7 @@ The bootstrap file `composecd.yaml` (or env vars) holds the root repo, credentia
 5. **Decide**, in this order: paused → host maintenance → sync windows → `dependsOn` healthy → auto-sync (Upgrade) or self-heal (Repair) → retry/backoff. Prune applies when an app disappears from Git and `prune: true`.
 6. **Record** the operation in SQLite (sha, trigger, user, composetpl revision, hook results, logs). Set the release labels. Send notifications.
 
-Triggers: poll timer, Git webhook, Docker `events` stream per host (`die`, `destroy`, `stop`, `start`, `health_status`), and manual actions from the API. One worker per app runs at a time. Host-level concurrency is capped.
+Triggers: poll timer, Git webhook, Docker `events` stream per host (`die`, `destroy`, `stop`, `start`, `health_status`; writes to the release volume re-read its cached history instead), and manual actions from the API. One worker per app runs at a time. Host-level concurrency is capped.
 
 ### Remote paths and files (homelab gotchas the plan must handle)
 - **Relative bind mounts.** Compose resolves `./data` on the *client*, so they'd point at the controller's checkout path, which doesn't exist on the remote host. For remote hosts, `ProjectDir = <host.projectRoot>/<app>`, so relative paths resolve on the remote host. Local hosts keep the chart dir. Lint warnings flag relative paths that point into the chart.
