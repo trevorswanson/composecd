@@ -194,6 +194,8 @@ spec:
     host: nas
   dependsOn: [traefik]            # auto-sync only once these are Synced and Healthy
   # self: true                    # this app runs composecd itself (normally detected; see below)
+  permissions:                    # what lookup may read of other apps beyond labels (see below)
+    env: ["*"]
   syncPolicy:
     automated:                    # omit for manual sync
       prune: true                 # uninstall when removed from Git (keeps volumes and history)
@@ -696,6 +698,60 @@ been reachable again. A failed fetch makes the app's sync state `Unknown`; the e
 server's response. `siteURL` must be `https://` (plain `http://` is allowed for localhost only). As with
 SOPS, deployed values are stored plain on the host. The same masking limits apply.
 
+## Reading other Applications
+
+A chart can read the other Applications in Git with `lookup`, for example to build a monitoring or dashboard
+config from labels on every stack's services:
+
+```gotemplate
+{{- range $app := (lookup "composecd/application" "").items }}
+{{- range $svc, $s := $app.services }}
+{{- if eq (index $s.labels "gatus.enable" | default "") "true" }}
+# {{ $app.name }} on {{ $app.host }}: {{ $svc }}
+{{- end }}
+{{- end }}
+{{- end }}
+```
+
+`lookup "composecd/application" ""` returns every Application except the calling one under `items`, sorted by
+name. `lookup "composecd/application" NAME` returns one Application, or `{}`. Each Application looks like this:
+
+```yaml
+name: jellyfin
+host: nas
+labels: {}                        # the Application's metadata.labels
+services:
+  jellyfin:
+    containerName: jellyfin
+    image: jellyfin/jellyfin:10.10
+    labels: {traefik.enable: "true"}
+    environment: {}               # only with an env or secrets permission
+    configs: {/etc/app.yaml: ...} # only with a configs permission: inline content, by target
+    secrets: {}                   # only with a secrets permission: the mounted secrets' definitions
+```
+
+The data comes from each Application's rendered desired state in Git, or its deployed release until it
+renders, and never from live containers. A service whose container is gone still shows up. Without
+permissions, a chart sees only identity, images and labels. The calling Application grants itself more in
+`spec.permissions`, never in chart values:
+
+```yaml
+spec:
+  permissions:
+    env: ["*"]                    # environment, with SOPS and Infisical values masked
+    configs: ["media-*"]          # inline config content
+    secrets: ["vaultwarden/db"]   # environment unmasked, and mounted secrets
+```
+
+Each pattern is `app` or `app/service`, with `*`, `?` and `[...]` wildcards. A bare `app` covers all of that
+app's services.
+
+Applications that use this lookup are reconciled after all the others in each refresh, so they see that
+refresh's renders. If an Application hasn't been reconciled at least once since composecd started (because its
+host is down, for example), the lookup fails. The caller's render then fails and its deployment stays as it
+is. That way, a monitoring config never loses checks just because composecd can't see an app yet. Avoid two
+Applications that feed what each reads into their own labels: each sync of one changes the other's.
+
 ## Webhooks, notifications and metrics
 
 **Webhooks.** Set `webhook.secretFile` in `composecd.yaml`, then add a push webhook in your Git server that
@@ -750,6 +806,9 @@ The events are `sync-succeeded`, `sync-failed` (which also covers failed rollbac
   behind TLS (a reverse proxy) if it's reachable beyond localhost: browser session cookies are marked `Secure`
   only over HTTPS. `auth.disabled: true` turns authentication off entirely, which only makes sense behind a
   proxy that authenticates.
+- **Permissions** on an Application decide what its chart may read of other Applications through `lookup`.
+  They're in the Application's spec, not chart values, so a chart repository can't grant itself access. But
+  anyone who can edit Applications in the root can grant any access.
 - **Secrets** in values end up in composetpl's release records on each host, and in rendered compose files, as
   with composetpl itself.
 

@@ -133,6 +133,11 @@ type appState struct {
 	// failed one shows as stale.
 	desired *SyncStatus
 	objects []Object
+	// manifest is what lookup "composecd/application" reports for the app, once
+	// known: see rememberManifest. reader is whether its chart uses that lookup.
+	manifest string
+	known    bool
+	reader   bool
 }
 
 // infisicalClient returns the shared client for the bootstrap's infisical
@@ -450,14 +455,12 @@ func (c *Controller) RefreshAll(ctx context.Context) {
 
 	// Reconcile in dependency waves, so an app synced in this refresh unblocks
 	// the apps that depend on it in the same refresh. composecd itself goes
-	// last: updating it restarts composecd.
+	// last: updating it restarts composecd. Apps whose charts read other
+	// Applications go after the rest, so they see this refresh's renders; one
+	// found reading during the waves is reconciled again there.
 	var self []*config.Application
-	for _, wave := range objs.Waves() {
-		for _, a := range wave {
-			if c.isSelfApp(a) {
-				self = append(self, a)
-				continue
-			}
+	run := func(apps []*config.Application) {
+		for _, a := range apps {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
@@ -468,6 +471,25 @@ func (c *Controller) RefreshAll(ctx context.Context) {
 		}
 		wg.Wait()
 	}
+	for _, wave := range objs.Waves() {
+		var now []*config.Application
+		for _, a := range wave {
+			switch {
+			case c.isSelfApp(a):
+				self = append(self, a)
+			case !c.isReader(a.Metadata.Name):
+				now = append(now, a)
+			}
+		}
+		run(now)
+	}
+	var readers []*config.Application
+	for _, a := range objs.Applications {
+		if !c.isSelfApp(a) && c.isReader(a.Metadata.Name) {
+			readers = append(readers, a)
+		}
+	}
+	run(readers)
 	for _, a := range self {
 		c.reconcile(ctx, a, fetchErrs[sourceRepo(a)], true)
 	}

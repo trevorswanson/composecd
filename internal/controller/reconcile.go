@@ -42,6 +42,8 @@ type plan struct {
 	drifted bool
 	// release is the end of the checkout's use; call it when done with prep.
 	release func()
+	// lookup served the render assess compared, and serves the sync's too.
+	lookup *appLookup
 }
 
 func (p *plan) done() {
@@ -116,6 +118,9 @@ func (c *Controller) assess(ctx context.Context, app *config.Application, fetchE
 	// Prepare first: it learns the secret paths that reading history masks.
 	p, err := c.prepare(ctx, app, h)
 	hist, herr := c.releaseHistory(h, name)
+	if herr == nil {
+		c.rememberManifest(name, deployedManifest(hist), false)
+	}
 	if err != nil {
 		return fail(err)
 	}
@@ -143,11 +148,14 @@ func (c *Controller) assess(ctx context.Context, app *config.Application, fetchE
 	if deployed != nil {
 		revision = deployed.Revision
 	}
-	manifest, hks, err := c.render(ctx, cfg, h, app, p.prep, revision)
+	p.lookup = c.newLookup(ctx, cfg, app)
+	manifest, hks, err := c.render(ctx, cfg, h, app, p.prep, revision, p.lookup)
+	c.markReader(name, p.lookup.reads())
 	if err != nil {
 		p.done()
 		return fail(p.prep.RelativeErr(err))
 	}
+	c.rememberManifest(name, manifest, true)
 	projectDir := h.ProjectDir(name)
 	var revisions []string
 	if app.Spec.Source.IsOCI() {
@@ -478,8 +486,9 @@ func (c *Controller) prepare(ctx context.Context, app *config.Application, h *ho
 
 // render renders app's chart the way composetpl's upgrade does, as revision
 // revision, and returns the merged manifest (hooks removed) and the hooks.
-// lookup reads the live engine, as it does during a real sync.
-func (c *Controller) render(ctx context.Context, cfg *action.Configuration, h *hosts.Host, app *config.Application, prep *source.Prepared, revision int) (string, []*release.Hook, error) {
+// lookup reads the live engine and other Applications, as it does during a
+// real sync.
+func (c *Controller) render(ctx context.Context, cfg *action.Configuration, h *hosts.Host, app *config.Application, prep *source.Prepared, revision int, l *appLookup) (string, []*release.Hook, error) {
 	caps, err := capabilities(ctx, cfg, h)
 	if err != nil {
 		return "", nil, err
@@ -487,10 +496,7 @@ func (c *Controller) render(ctx context.Context, cfg *action.Configuration, h *h
 	r, err := action.Render(action.RenderOptions{
 		ChartPath: prep.ChartRef, Version: prep.Version, Registry: c.Registry, Context: ctx,
 		ReleaseName: app.Metadata.Name, Revision: revision, IsUpgrade: revision > 1,
-		UserValues: prep.Values, Env: prep.Lookup, Capabilities: caps,
-		Lookup: func(kind, name string) (map[string]interface{}, error) {
-			return cfg.Compose.Inspect(ctx, kind, name)
-		},
+		UserValues: prep.Values, Env: prep.Lookup, Capabilities: caps, Lookup: l.Func,
 	})
 	if err != nil {
 		return "", nil, fmt.Errorf("rendering: %w", err)

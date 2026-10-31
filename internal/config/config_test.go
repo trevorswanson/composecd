@@ -79,6 +79,9 @@ func TestValidationErrors(t *testing.T) {
 		"version on path": host + "apiVersion: composecd/v1alpha1\nkind: Application\nmetadata: {name: a}\nspec: {source: {path: x, version: '1'}, destination: {host: nas}}\n",
 		"bad pull":        host + "apiVersion: composecd/v1alpha1\nkind: Application\nmetadata: {name: a}\nspec: {source: {path: x}, destination: {host: nas}, syncPolicy: {options: {pull: sometimes}}}\n",
 		"bad timeout":     host + "apiVersion: composecd/v1alpha1\nkind: Application\nmetadata: {name: a}\nspec: {source: {path: x}, destination: {host: nas}, syncPolicy: {options: {timeout: soon}}}\n",
+		"bad permission":  host + "apiVersion: composecd/v1alpha1\nkind: Application\nmetadata: {name: a}\nspec: {source: {path: x}, destination: {host: nas}, permissions: {env: ['a/b/c']}}\n",
+		"bad glob":        host + "apiVersion: composecd/v1alpha1\nkind: Application\nmetadata: {name: a}\nspec: {source: {path: x}, destination: {host: nas}, permissions: {secrets: ['[a']}}\n",
+		"unknown grant":   host + "apiVersion: composecd/v1alpha1\nkind: Application\nmetadata: {name: a}\nspec: {source: {path: x}, destination: {host: nas}, permissions: {volumes: ['*']}}\n",
 		"bad label":       "apiVersion: composecd/v1alpha1\nkind: Host\nmetadata: {name: nas, labels: {'a b': c}}\n",
 	}
 	for name, doc := range cases {
@@ -86,6 +89,26 @@ func TestValidationErrors(t *testing.T) {
 			t.Errorf("%s: expected an error", name)
 		} else if !strings.Contains(err.Error(), "test.yaml") {
 			t.Errorf("%s: error should name the file: %v", name, err)
+		}
+	}
+}
+
+func TestPermissionsAllow(t *testing.T) {
+	for _, c := range []struct {
+		patterns []string
+		app, svc string
+		want     bool
+	}{
+		{nil, "a", "web", false},
+		{[]string{"*"}, "a", "web", true},
+		{[]string{"media-*"}, "media-tv", "db", true},
+		{[]string{"media-*"}, "books", "db", false},
+		{[]string{"vault/db"}, "vault", "db", true},
+		{[]string{"vault/db"}, "vault", "web", false},
+		{[]string{"*/postgres*"}, "x", "postgres-16", true},
+	} {
+		if got := Allows(c.patterns, c.app, c.svc); got != c.want {
+			t.Errorf("Allows(%v, %s, %s) = %v", c.patterns, c.app, c.svc, got)
 		}
 	}
 }

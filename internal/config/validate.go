@@ -150,6 +150,13 @@ func (o *Objects) validate(allowGenerated bool) error {
 				fail(a.Origin, "application %q: dependsOn names itself", name)
 			}
 		}
+		for kind, patterns := range a.Spec.Permissions.Grants() {
+			for _, p := range patterns {
+				if err := validPermission(p); err != nil {
+					fail(a.Origin, "application %q: permissions.%s %q %v", name, kind, p, err)
+				}
+			}
+		}
 	}
 	for _, a := range o.Applications {
 		for _, dep := range a.Spec.DependsOn {
@@ -263,4 +270,22 @@ func hasScheme(u string, schemes ...string) bool {
 // isWindowsAbs reports whether p looks like C:\ or C:/ (a Windows engine).
 func isWindowsAbs(p string) bool {
 	return len(p) >= 3 && p[1] == ':' && (p[2] == '\\' || p[2] == '/')
+}
+
+// validPermission checks a permissions pattern: "app" or "app/service", each
+// part a non-empty path.Match pattern.
+func validPermission(p string) error {
+	parts := strings.Split(p, "/")
+	if len(parts) > 2 {
+		return errors.New(`must be "app" or "app/service"`)
+	}
+	for _, part := range parts {
+		if part == "" {
+			return errors.New(`must be "app" or "app/service"`)
+		}
+		if _, err := path.Match(part, ""); err != nil {
+			return fmt.Errorf("is not a valid pattern: %v", err)
+		}
+	}
+	return nil
 }

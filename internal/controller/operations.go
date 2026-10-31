@@ -149,6 +149,9 @@ func (c *Controller) newUpgrade(cfg *action.Configuration, p *plan, op *store.Op
 	u.DeployOptions = deployOptions(o)
 	u.Atomic, u.HistoryMax = o.Atomic, o.HistoryMaxOrDefault()
 	u.Env, u.ChartVersion = p.prep.Lookup, p.prep.Version
+	if p.lookup != nil {
+		u.Lookup = p.lookup.Func
+	}
 	u.ProjectDir = p.host.ProjectDir(name)
 	u.Description = "composecd sync"
 	if p.prep.Revision != "" {
