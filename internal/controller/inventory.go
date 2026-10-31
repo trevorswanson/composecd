@@ -149,7 +149,7 @@ func (c *Controller) inventory(reader *config.Application) (map[string]interface
 	grants := reader.Spec.Permissions.Grants()
 	out := make(map[string]interface{}, len(entries))
 	for _, e := range entries {
-		item, err := c.inventoryItem(e.app, e.manifest, grants)
+		item, err := inventoryItem(e.app, e.manifest, grants, c.masker(e.app.Metadata.Name).Text)
 		if err != nil {
 			return nil, fmt.Errorf("application %q: %w", e.app.Metadata.Name, err)
 		}
@@ -159,10 +159,9 @@ func (c *Controller) inventory(reader *config.Application) (map[string]interface
 }
 
 // inventoryItem describes app from its compose manifest. Decrypted values are
-// masked everywhere except under a secrets grant.
-func (c *Controller) inventoryItem(app *config.Application, manifest string, grants map[string][]string) (map[string]interface{}, error) {
+// masked, by mask, everywhere except under a secrets grant.
+func inventoryItem(app *config.Application, manifest string, grants map[string][]string, mask func(string) string) (map[string]interface{}, error) {
 	name := app.Metadata.Name
-	m := c.masker(name)
 	var project struct {
 		Services map[string]map[string]interface{} `yaml:"services"`
 		Configs  map[string]map[string]interface{} `yaml:"configs"`
@@ -178,13 +177,13 @@ func (c *Controller) inventoryItem(app *config.Application, manifest string, gra
 	services := map[string]interface{}{}
 	for svcName, svc := range project.Services {
 		s := map[string]interface{}{
-			"labels": maskMap(m.Text, keyValues(svc["labels"])),
+			"labels": maskMap(mask, keyValues(svc["labels"])),
 		}
 		if v, ok := svc["container_name"].(string); ok {
 			s["containerName"] = v
 		}
 		if v, ok := svc["image"].(string); ok {
-			s["image"] = m.Text(v)
+			s["image"] = mask(v)
 		}
 		env := keyValues(svc["environment"])
 		switch {
@@ -192,12 +191,12 @@ func (c *Controller) inventoryItem(app *config.Application, manifest string, gra
 			s["environment"] = env
 			s["secrets"] = mounts(svc["secrets"], project.Secrets, func(def map[string]interface{}) interface{} { return def })
 		case config.Allows(grants["env"], name, svcName):
-			s["environment"] = maskMap(m.Text, env)
+			s["environment"] = maskMap(mask, env)
 		}
 		if config.Allows(grants["configs"], name, svcName) {
 			s["configs"] = mounts(svc["configs"], project.Configs, func(def map[string]interface{}) interface{} {
 				if content, ok := def["content"].(string); ok {
-					return m.Text(content)
+					return mask(content)
 				}
 				return nil
 			})

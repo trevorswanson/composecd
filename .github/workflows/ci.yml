@@ -104,11 +104,24 @@ jobs:
       - name: build the container image
         run: docker build --build-arg VERSION=ci -t composecd:ci . && docker run --rm composecd:ci version && docker run --rm --entrypoint sops composecd:ci --version
 
+  action:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: copy the example GitOps repository into its own checkout
+        run: cp -R examples/gitops "$RUNNER_TEMP/gitops" && git -C "$RUNNER_TEMP/gitops" init --quiet
+      - uses: ./
+        with:
+          working-directory: ${{ runner.temp }}/gitops
+          compose: "true"
+          output-dir: ${{ runner.temp }}/rendered
+      - run: test -s "$RUNNER_TEMP/rendered/whoami.yaml"
+
   # The single check to require in branch protection: matrix job names change
   # with the matrix, this one doesn't.
   ci-ok:
     if: always()
-    needs: [lint, test, integration, govulncheck, release-check, image]
+    needs: [lint, test, integration, govulncheck, release-check, image, action]
     runs-on: ubuntu-latest
     steps:
       - name: All jobs passed
