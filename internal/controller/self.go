@@ -24,10 +24,12 @@ const selfBlocked = "composecd can't update itself here, because it didn't find 
 // labelComposeProject is the label compose puts on every container it creates.
 const labelComposeProject = "com.docker.compose.project"
 
-// containerPath matches a container's directory in a bind-mount source, such as
-// /var/lib/docker/containers/<id>/hostname (Docker) or
-// .../overlay-containers/<id>/userdata/hostname (Podman).
-var containerPath = regexp.MustCompile(`containers/([0-9a-f]{64})/`)
+// containerPath matches a container's directory in the source of the files the
+// engine bind-mounts into it, such as /var/lib/docker/containers/<id>/hostname
+// (Docker), .../overlay-containers/<id>/userdata/hostname (Podman), or
+// /<id>/hostname where /var/lib/docker/containers is a filesystem of its own
+// (Unraid), since mountinfo shows the source relative to its filesystem's root.
+var containerPath = regexp.MustCompile(`/([0-9a-f]{64})/(?:userdata/)?(?:hostname|hosts|resolv\.conf) `)
 
 // ContainerID returns the ID of the container composecd runs in, read from the
 // files the engine bind-mounts into it, or "" outside a container.
