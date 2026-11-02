@@ -112,8 +112,11 @@ func (c *Controller) automate(ctx context.Context, app *config.Application, st *
 			s.nextHeal = now.Add(healBackoff(s.heals))
 		}
 	}
-	// Hold the app's place in the rollout until its status shows the sync.
-	s.rollingOut = rolling && act
+	// Hold the app's place in the rollout until its status shows the sync:
+	// reconcile's endRollout releases it, not a second pass with nothing to do.
+	if rolling && act {
+		s.rollingOut = true
+	}
 	c.mu.Unlock()
 	if !act {
 		return false
