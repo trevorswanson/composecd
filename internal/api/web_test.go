@@ -41,6 +41,8 @@ func (s *webStub) App(name string) (controller.AppStatus, error) {
 	a.Images = []controller.ImageStatus{
 		{Service: "web", Image: "nginx:1", Ref: "docker.io/library/nginx:1", Pin: controller.PinComposecd, Digest: "sha256:bbbbbbbbbbbbbbbb",
 			Deployed: "sha256:aaaaaaaaaaaaaaaa", Latest: "sha256:bbbbbbbbbbbbbbbb", UpdateAvailable: true, Applicable: true},
+		{Service: "app", Image: "ghcr.io/me/app:1.27.1", Ref: "ghcr.io/me/app:1.27.3", Strategy: "semver", Constraint: "~1.27", Tag: "1.27.1",
+			Candidate: "1.27.3", Pin: controller.PinComposecd, Digest: "sha256:eeeeeeeeeeeeeeee", Latest: "sha256:eeeeeeeeeeeeeeee", UpdateAvailable: true, Applicable: true},
 		{Service: "db", Image: "postgres:16@sha256:cccccccccccccccc", Ref: "docker.io/library/postgres:16", Pin: controller.PinGit,
 			Digest: "sha256:cccccccccccccccc", Latest: "sha256:dddddddddddddddd", UpdateAvailable: true, Note: "the digest is pinned in Git; change it there to update"},
 	}
@@ -120,7 +122,8 @@ func TestWebPagesAndActions(t *testing.T) {
 		t.Errorf("image checks not requested: %v", st.calls)
 	}
 	_, _, body = b.do("GET", "/apps/media?tab=images", "", nil)
-	if !strings.Contains(body, "sha256:bbbbbbbbbbbb") || !strings.Contains(body, `hx-post="/ui/apps/media/sync"`) || !strings.Contains(body, ">images<span class=\"count warn\">2</span>") {
+	if !strings.Contains(body, "sha256:bbbbbbbbbbbb") || !strings.Contains(body, `hx-post="/ui/apps/media/sync"`) || !strings.Contains(body, ">images<span class=\"count warn\">3</span>") ||
+		!strings.Contains(body, "semver <code>~1.27</code>") || !strings.Contains(body, "1.27.1 → <strong>1.27.3</strong>") {
 		t.Errorf("images tab: %s", body)
 	}
 	if !slices.Contains(st.calls, "refresh all") {

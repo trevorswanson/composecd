@@ -190,6 +190,22 @@ func migrate(db *sql.DB) error {
 	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS operations_host ON operations (host, id)`); err != nil {
 		return err
 	}
+	// Phase 4b: the tag each service's image update strategy picked.
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS image_tags (
+		app        TEXT NOT NULL,
+		service    TEXT NOT NULL,
+		image      TEXT NOT NULL,
+		policy     TEXT NOT NULL DEFAULT '',
+		tag        TEXT NOT NULL DEFAULT '',
+		digest     TEXT NOT NULL DEFAULT '',
+		picked_at  TEXT,
+		checked_at TEXT NOT NULL,
+		truncated  INTEGER NOT NULL DEFAULT 0,
+		error      TEXT NOT NULL DEFAULT '',
+		PRIMARY KEY (app, service)
+	)`); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -439,6 +455,72 @@ func (s *Store) SetImageDigest(ref, digest string, at time.Time) error {
 func (s *Store) SetImageError(ref, msg string, at time.Time) error {
 	_, err := s.db.Exec(`INSERT INTO image_digests (ref, checked_at, error) VALUES (?, ?, ?)
 		ON CONFLICT (ref) DO UPDATE SET checked_at = excluded.checked_at, error = excluded.error`, ref, formatTime(at), msg)
+	return err
+}
+
+// ImageTag is the tag an image update strategy picked for one service.
+type ImageTag struct {
+	App     string `json:"app"`
+	Service string `json:"service"`
+	// Image is the image Git rendered when the tag was picked, and Policy the
+	// strategy's fingerprint; a pick made for another is redone.
+	Image  string `json:"image"`
+	Policy string `json:"policy"`
+	// Tag is the tag picked ("" if none ever was), and Digest what it resolved to.
+	Tag      string    `json:"tag,omitempty"`
+	Digest   string    `json:"digest,omitempty"`
+	PickedAt time.Time `json:"pickedAt,omitzero"`
+	// CheckedAt is when the repository's tags were last listed.
+	CheckedAt time.Time `json:"checkedAt"`
+	// Truncated is true when the registry listed more tags than were read.
+	Truncated bool `json:"truncated,omitempty"`
+	// Error is the last failed check ("" when it succeeded).
+	Error string `json:"error,omitempty"`
+}
+
+// ImageTags returns app's picked tags, by service.
+func (s *Store) ImageTags(app string) (map[string]ImageTag, error) {
+	rows, err := s.db.Query(`SELECT app, service, image, policy, tag, digest, picked_at, checked_at, truncated, error
+		FROM image_tags WHERE app = ?`, app)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]ImageTag{}
+	for rows.Next() {
+		var t ImageTag
+		var picked sql.NullString
+		var checked string
+		var truncated int
+		if err := rows.Scan(&t.App, &t.Service, &t.Image, &t.Policy, &t.Tag, &t.Digest, &picked, &checked, &truncated, &t.Error); err != nil {
+			return nil, err
+		}
+		if picked.Valid {
+			if t.PickedAt, err = parseTime(picked.String); err != nil {
+				return nil, err
+			}
+		}
+		if t.CheckedAt, err = parseTime(checked); err != nil {
+			return nil, err
+		}
+		t.Truncated = truncated != 0
+		out[t.Service] = t
+	}
+	return out, rows.Err()
+}
+
+// SetImageTag records t, replacing what was stored for its app and service.
+func (s *Store) SetImageTag(t ImageTag) error {
+	var picked interface{}
+	if !t.PickedAt.IsZero() {
+		picked = formatTime(t.PickedAt)
+	}
+	_, err := s.db.Exec(`INSERT INTO image_tags (app, service, image, policy, tag, digest, picked_at, checked_at, truncated, error)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT (app, service) DO UPDATE SET image = excluded.image, policy = excluded.policy, tag = excluded.tag,
+		digest = excluded.digest, picked_at = excluded.picked_at, checked_at = excluded.checked_at,
+		truncated = excluded.truncated, error = excluded.error`,
+		t.App, t.Service, t.Image, t.Policy, t.Tag, t.Digest, picked, formatTime(t.CheckedAt), boolInt(t.Truncated), t.Error)
 	return err
 }
 

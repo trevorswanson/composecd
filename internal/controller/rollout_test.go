@@ -72,13 +72,20 @@ func (e *env) settled(what string, cond func() bool) {
 // quiet waits until no timer is pending and nothing it started still runs.
 func (e *env) quiet() {
 	e.t.Helper()
-	eventually(e.t, "the rollout to settle", func() bool {
+	idle := func() bool {
 		e.c.Wait()
 		e.c.mu.RLock()
 		defer e.c.mu.RUnlock()
 		return len(e.c.timers) == 0
+	}
+	// A timer counts its reconcile as running before it is gone, so after a
+	// second Wait with still no timers, nothing that ran scheduled more.
+	eventually(e.t, "the rollout to settle", func() bool {
+		if !idle() {
+			return false
+		}
+		return idle()
 	})
-	e.c.Wait()
 }
 
 func lastOp(t *testing.T, e *env, name string) *store.Operation {

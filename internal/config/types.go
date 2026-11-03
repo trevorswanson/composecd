@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/trevorswanson/composecd/internal/images"
 )
 
 // APIVersion is the apiVersion of every composecd object.
@@ -258,14 +260,35 @@ type SyncPolicy struct {
 	ImageUpdates *AppImageUpdates `yaml:"imageUpdates,omitempty" json:"imageUpdates,omitempty"`
 }
 
-// AppImageUpdates opts an Application in or out of image updates.
+// AppImageUpdates opts an Application in or out of image updates, and says how
+// its services' tags may move.
 type AppImageUpdates struct {
 	// Enabled, when set, overrides the global setting.
 	Enabled *bool `yaml:"enabled,omitempty" json:"enabled,omitempty"`
+	// Strategy is digest (default: pin each tag to its digest), semver or
+	// newest-build.
+	Strategy string `yaml:"strategy,omitempty" json:"strategy,omitempty"`
+	// Constraint is a semver constraint, such as ~1.27 (default: the current
+	// tag's major version).
+	Constraint string `yaml:"constraint,omitempty" json:"constraint,omitempty"`
+	// AllowTags is a regexp tags must match; newest-build requires it.
+	AllowTags string `yaml:"allowTags,omitempty" json:"allowTags,omitempty"`
+	// IgnoreTags are globs of tags never picked.
+	IgnoreTags []string `yaml:"ignoreTags,omitempty" json:"ignoreTags,omitempty"`
+}
+
+// Policy is the tag policy u sets (the digest strategy for nil).
+func (u *AppImageUpdates) Policy() images.Policy {
+	if u == nil {
+		return images.Policy{}
+	}
+	return images.Policy{Strategy: u.Strategy, Constraint: u.Constraint, AllowTags: u.AllowTags, IgnoreTags: u.IgnoreTags}
 }
 
 // LabelImageUpdates is the compose service label ("true" or "false") that
-// overrides the Application's image update setting for one service.
+// overrides the Application's image update setting for one service. With the
+// suffixes .strategy, .constraint and .allow-tags it overrides the
+// Application's policy.
 const LabelImageUpdates = "composecd.image-updates"
 
 // ImageUpdatesFor says whether image updates are on for app, given the

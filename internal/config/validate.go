@@ -173,6 +173,9 @@ func (o *Objects) validate(allowGenerated bool) error {
 				fail(a.Origin, "application %q: syncPolicy.retry.backoff needs durations >= 0 and a factor >= 1", name)
 			}
 		}
+		if err := a.Spec.SyncPolicy.ImageUpdates.Policy().Validate(); err != nil {
+			fail(a.Origin, "application %q: syncPolicy.imageUpdates: %v", name, strings.ReplaceAll(err.Error(), "\n", "; "))
+		}
 		for _, dep := range a.Spec.DependsOn {
 			if dep == name {
 				fail(a.Origin, "application %q: dependsOn names itself", name)

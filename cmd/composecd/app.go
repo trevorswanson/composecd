@@ -460,8 +460,9 @@ func newAppCheckImagesCmd(cf *clientFlags) *cobra.Command {
 		Use:   "check-images [NAME]",
 		Short: "Check an application's image tags (or every app's, with --all) against their registries now (admin)",
 		Long: `Check the registries of the tags an application's services use now, instead of on
-imageUpdates.schedule. A new digest for a moving tag makes the app OutOfSync; one
-for a digest pinned in Git is only reported.`,
+imageUpdates.schedule. A new digest for a moving tag, or a newer tag picked by a
+semver or newest-build strategy, makes the app OutOfSync; an update to a digest
+pinned in Git is only reported.`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if all == (len(args) == 1) {
@@ -486,14 +487,15 @@ for a digest pinned in Git is only reported.`,
 	return cmd
 }
 
-// printImages lists a's images and the digests their tags resolve to.
+// printImages lists a's images, the digests their tags resolve to and the
+// tags their strategies picked.
 func printImages(w io.Writer, a *controller.AppStatus) {
 	if len(a.Images) == 0 {
 		return
 	}
 	fmt.Fprintln(w, "\nIMAGES:")
 	tw := tabwriter.NewWriter(w, 0, 8, 2, ' ', 0)
-	fmt.Fprintln(tw, "SERVICE\tIMAGE\tPINNED BY\tDEPLOYED\tLATEST\tUPDATE")
+	fmt.Fprintln(tw, "SERVICE\tIMAGE\tSTRATEGY\tTAG\tPINNED BY\tDEPLOYED\tLATEST\tUPDATE")
 	for _, im := range a.Images {
 		update := "-"
 		switch {
@@ -506,8 +508,16 @@ func printImages(w io.Writer, a *controller.AppStatus) {
 		case im.Note != "":
 			update = im.Note
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", im.Service, im.Image, orDash(im.Pin), orDash(images.Short(im.Deployed)),
-			orDash(images.Short(im.Latest)), update)
+		strategy := orDash(im.Strategy)
+		if im.Constraint != "" {
+			strategy += " " + im.Constraint
+		}
+		tag := orDash(im.Tag)
+		if im.Candidate != "" && im.Candidate != im.Tag {
+			tag += " → " + im.Candidate
+		}
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", im.Service, im.Image, strategy, tag, orDash(im.Pin),
+			orDash(images.Short(im.Deployed)), orDash(images.Short(im.Latest)), update)
 	}
 	_ = tw.Flush()
 }

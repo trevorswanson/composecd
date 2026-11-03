@@ -130,6 +130,8 @@ type Controller struct {
 	disks map[string]*diskState
 	// hostOps are the running housekeeping operations, by host.
 	hostOps map[string]int64
+	// buildTimes caches when images were built, by digest, for newest-build.
+	buildTimes sync.Map
 }
 
 // watcher streams one host's container events.
