@@ -1,0 +1,10 @@
+apps:
+    web:
+        image: nginx
+        ports: [80]
+        tag: "1.27.3"
+
+    # the database
+    db:
+        tag: "16"
+other: 1
