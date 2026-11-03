@@ -523,3 +523,35 @@ func TestSyncThatCannotRenderShowsItFailed(t *testing.T) {
 		t.Fatalf("operation = %+v", op)
 	}
 }
+
+func TestSyncFailHookRunsOnFailedSync(t *testing.T) {
+	e := newEnv(t)
+	e.commit(map[string]string{"charts/web/templates/hooks.yaml": `services:
+  alert:
+    image: curlimages/curl
+    x-composetpl: {hook: sync-fail}
+`})
+	e.fake().FailUp = "nginx:1"
+	e.fake().RunOutput = "told the pager\n"
+	e.refresh()
+	web := e.app("web")
+	if web.Operation == nil || web.Operation.Phase != store.PhaseFailed || !strings.Contains(web.Operation.Message, "unhealthy") {
+		t.Fatalf("operation = %+v", web.Operation)
+	}
+	op, err := e.c.Store.Operation(web.Operation.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(e.fake().CallLog(), "run web alert") || !strings.Contains(op.Log, "Running sync-fail hook alert") ||
+		!strings.Contains(op.Log, "told the pager") {
+		t.Errorf("sync-fail hook didn't run into the operation log:\ncalls %s\nlog %s", e.fake().CallLog(), op.Log)
+	}
+
+	// A successful sync doesn't run it.
+	e.fake().FailUp, e.fake().Calls = "", nil
+	e.commit(map[string]string{"charts/web/values.yaml": "tag: '2'\n"})
+	e.refresh()
+	if web := e.app("web"); web.Sync.Status != Synced || strings.Contains(e.fake().CallLog(), "run web alert") {
+		t.Errorf("after fix: %+v calls %s", web.Sync, e.fake().CallLog())
+	}
+}

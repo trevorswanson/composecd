@@ -10,8 +10,6 @@ import (
 	"time"
 
 	"github.com/robfig/cron/v3"
-	"github.com/trevorswanson/composetpl/pkg/action"
-	"github.com/trevorswanson/composetpl/pkg/compose"
 	"github.com/trevorswanson/composetpl/pkg/release"
 
 	"github.com/trevorswanson/composecd/internal/config"
@@ -180,20 +178,6 @@ func (c *Controller) pinImages(ctx context.Context, app *config.Application, ren
 		res.manifest, res.pins, res.reasons = rendered, nil, nil
 	}
 	return res
-}
-
-// pinRelease pins rel, which Upgrade.Prepare saved as pending, as assess
-// pinned the manifest it compared, and saves it again.
-func pinRelease(ctx context.Context, cfg *action.Configuration, rel *release.Release, pins map[string]images.Pin) error {
-	m, err := images.PinManifest(rel.Manifest, pins)
-	if err != nil || m == rel.Manifest {
-		return err
-	}
-	rel.Manifest = m
-	if err := cfg.Compose.Config(ctx, compose.Project{Name: rel.Name, Manifest: []byte(m), Dir: rel.ProjectDir}); err != nil {
-		return err
-	}
-	return cfg.Store.Save(rel)
 }
 
 // rememberImages records app's images, which CheckImages checks.
