@@ -950,16 +950,24 @@ func (s *Server) rescan(ctx context.Context, host string) error {
 
 // imageToast sums up an image check that every registry answered.
 func imageToast(check controller.ImageCheck) string {
+	var msg string
 	switch n := len(check.Updated); {
 	case check.Checked == 0:
 		return "No images to check"
 	case n == 0:
-		return fmt.Sprintf("Checked %s; no new digests", plural(check.Checked, "image"))
+		msg = fmt.Sprintf("Checked %s; no new digests", plural(check.Checked, "image"))
 	case n == 1:
-		return fmt.Sprintf("Checked %s; %s has a new digest", plural(check.Checked, "image"), check.Updated[0])
+		msg = fmt.Sprintf("Checked %s; %s has a new digest", plural(check.Checked, "image"), check.Updated[0])
 	default:
-		return fmt.Sprintf("Checked %s; %d have new digests", plural(check.Checked, "image"), n)
+		msg = fmt.Sprintf("Checked %s; %d have new digests", plural(check.Checked, "image"), n)
 	}
+	switch n := len(check.Moved); {
+	case n == 1:
+		msg += "; new tag for " + check.Moved[0]
+	case n > 1:
+		msg += fmt.Sprintf("; %d new tags", n)
+	}
+	return msg
 }
 
 // imageErr is why the registries failed for an image check's tags, if any did.

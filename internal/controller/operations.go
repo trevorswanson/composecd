@@ -159,10 +159,11 @@ func (c *Controller) newUpgrade(cfg *action.Configuration, p *plan, op *store.Op
 		u.Lookup = p.lookup.Func
 	}
 	u.ProjectDir = p.host.ProjectDir(name)
-	// Pin moving tags as assess pinned them, so what deploys is what it compared.
+	// Pin moving tags, and move tags a strategy picked, as assess did, so what
+	// deploys is what it compared.
 	pins := p.pins
 	u.PostRender = func(m string) (string, error) {
-		m, err := images.PinManifest(m, pins)
+		m, err := images.Override(m, pins)
 		if err != nil {
 			return "", fmt.Errorf("pinning images: %w", err)
 		}

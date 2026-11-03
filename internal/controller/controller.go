@@ -123,6 +123,8 @@ type Controller struct {
 	watchers       map[string]*watcher
 	// imageFlight shares one registry check of a tag among the apps using it.
 	imageFlight singleflight.Group
+	// buildTimes caches when images were built, by digest, for newest-build.
+	buildTimes sync.Map
 }
 
 // watcher streams one host's container events.

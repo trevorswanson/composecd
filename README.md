@@ -213,6 +213,7 @@ spec:
       historyMax: 10              # revisions composetpl keeps
     imageUpdates:
       enabled: true               # pin moving tags to registry digests (default: composecd.yaml's imageUpdates.enabled)
+      strategy: semver            # or newest-build: move to newer tags (default: digest); see Image updates
 ```
 
 Values work as in Argo CD's Helm source: the chart's `values.yaml`, then `valueFiles` in order, then `values`.
@@ -273,7 +274,7 @@ Windows apply to automatic syncs, self-heal and prune.
 | Sync | Meaning |
 | --- | --- |
 | `Synced` | The deployed release matches Git, and its containers match the release. |
-| `OutOfSync` | Something differs: not deployed yet, compose resources, hooks, the project directory, a new digest for a moving image tag ([Image updates](#image-updates)), or live drift (a container missing, changed or orphaned). `app get` lists the reasons, and `app diff` shows the diffs. |
+| `OutOfSync` | Something differs: not deployed yet, compose resources, hooks, the project directory, a new digest for a moving image tag or a newer tag picked by its strategy ([Image updates](#image-updates)), or live drift (a container missing, changed or orphaned). `app get` lists the reasons, and `app diff` shows the diffs. |
 | `Unknown` | composecd couldn't compare: the host is down, the chart doesn't render, the revision isn't in Git, etc. See the app's error. |
 
 | Health | Meaning |
@@ -299,7 +300,7 @@ host maintenance, a retry or self-heal backoff, or a failed sync waiting for a c
 | `app history NAME` | composetpl revisions, with the Git commit each came from. |
 | `app operations NAME`, `operation list`, `operation get ID` | Sync and rollback history, with each operation's output. |
 | `app refresh NAME`, `refresh` | Fetch and reconcile now instead of waiting for the interval. |
-| `app check-images NAME`, `app check-images --all` | Ask registries for image tags' digests now, instead of on `imageUpdates.schedule` (admin). See [Image updates](#image-updates). |
+| `app check-images NAME`, `app check-images --all` | Ask registries for image tags' digests, and strategies' newer tags, now instead of on `imageUpdates.schedule` (admin). See [Image updates](#image-updates). |
 | `host list` | Reachability, engine versions, maintenance and orphaned releases. |
 | `host unmanaged NAME` | Unmanaged/orphaned releases and plain Compose projects, including config paths. `-o json\|yaml` |
 | `adopt HOST RELEASE` | Export Application YAML with saved user values (admin); warnings go to stderr. |
@@ -896,6 +897,7 @@ serves a new digest, the app goes OutOfSync with a reason like
 `image nginx:1 (web): sha256:3f1c… → sha256:9ab0…`, and the diff shows the `image:` line. A new digest is then
 deployed like any other change: automatically if `syncPolicy.automated` is set and the sync windows allow it,
 or when you sync. Each deployment is a release revision, so rolling back restores the old digest.
+A strategy can also move a service to a newer tag ([Strategies](#strategies)).
 
 ```yaml
 # composecd.yaml
@@ -922,6 +924,44 @@ imageUpdates:
   deployed release pins. A pin is never dropped, so an outage never shows as a change. The error shows on the
   image until a check succeeds.
 - **Not pinned:** images that use a `${VAR}`, services with `build:`, and hook services.
+
+### Strategies
+
+By default (`strategy: digest`) a service stays on the tag Git names. `semver` and `newest-build` move it to
+another tag of the same repository, pinned to its digest as above:
+
+```yaml
+syncPolicy:
+  imageUpdates:
+    enabled: true
+    strategy: semver                # digest (default) | semver | newest-build
+    constraint: "~1.27"             # semver only; default: the major version of Git's tag (1.x)
+    allowTags: '^\d+\.\d+\.\d+$'    # regexp tags must match (semver and newest-build)
+    ignoreTags: ["*-rc*"]           # globs of tags never picked
+```
+
+- **semver** picks the highest tag that parses as a semantic version, matches the constraint, `allowTags` and
+  no `ignoreTags`, and is newer than Git's tag. Prereleases (`1.28.0-rc.1`) are picked only when the constraint
+  names one (`>=1.28.0-0`). A tag that isn't a semantic version (`latest`) is only pinned to its digest, with a
+  note on the image.
+- **newest-build** picks, among the tags matching `allowTags` (required) and Git's own, the one whose image
+  config says it was built last. It reads one config per tag, so it looks at the 50 newest tags by name
+  (`main-1042` before `main-998`), and caches build times by digest.
+- **Per service.** The compose labels `composecd.image-updates.strategy`, `composecd.image-updates.constraint`
+  and `composecd.image-updates.allow-tags` beat the Application. A label naming another strategy starts from
+  that strategy's defaults. Invalid labels fall back to the digest strategy, with a note on the image.
+- **When tags are listed.** On the schedule and on **Check images** (and the CLI and API equivalents), never on
+  a refresh. A service whose strategy hasn't picked yet for the image and policy Git has (a new app, a changed
+  tag in Git) is checked the first time it renders, as a new tag is. Registries list tags a page at a time;
+  composecd reads up to 10,000 and notes on the image when there are more.
+- **Applying a pick.** The tag is changed in memory only: Git keeps the tag it had, and the deployed manifest
+  has `image: nginx:1.27.3@sha256:…`. The app goes OutOfSync with a reason like
+  `image nginx (web): 1.27.1 → 1.27.3`, and notifications read `nginx (web): 1.27.3 available (semver ~1.27)`.
+  The **images** tab, `app get` and the API show each image's strategy, the deployed tag and the candidate.
+  Rolling back restores the old tag and pauses auto-sync, so the pick isn't deployed again until you resume.
+- **Never moved:** digests pinned in Git (still reported), `${VAR}` images, `build:` services and hooks.
+
+[The example](examples/image-updates/README.md) follows patch releases of whoami.
 
 **Turning image updates on recreates each container once.** Its `image:` gains `@sha256:…` even when the
 digest is the one already running, so compose sees new configuration. Expect one sync of every app that takes
@@ -953,7 +993,8 @@ notifications:
 
 The events are `sync-succeeded`, `sync-failed` (which also covers failed rollbacks, heals and prunes),
 `self-healed`, `prune`, `health-degraded` and `out-of-sync`, each sent when an app enters that state,
-`host-down`, and `image-update` (a new digest for a service's tag, including one pinned in Git).
+`host-down`, and `image-update` (a new digest for a service's tag, including one pinned in Git, or a newer tag
+its strategy picked).
 
 **Metrics.** `GET /metrics` serves Prometheus metrics:
 - `composecd_app_sync_status` and `composecd_app_health_status`, one series per app with its current status;
@@ -1010,7 +1051,7 @@ The events are `sync-succeeded`, `sync-failed` (which also covers failed rollbac
 | OCI chart with Git values | `valuesFrom` repository, independent chart/values revisions, SOPS and automatic sync |
 | ApplicationSets | Git-directory and Host-label generators, safe templates and zero-result protection |
 | Adoption | Unmanaged discovery and admin Application YAML export; commit and sync to upgrade in place |
-| Image updater (digest strategy) | `imageUpdates`: moving tags pinned to registry digests on a schedule; digests pinned in Git are only reported. Writing back to Git is planned; see [docs/PLAN.md](docs/PLAN.md) |
+| Image updater | `imageUpdates`: moving tags pinned to registry digests on a schedule, and `semver` or `newest-build` strategies that move to newer tags in memory; digests pinned in Git are only reported. Writing back to Git is planned; see [docs/PLAN.md](docs/PLAN.md) |
 
 ## Development
 

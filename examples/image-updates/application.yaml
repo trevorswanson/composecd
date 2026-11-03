@@ -1,0 +1,20 @@
+# whoami-semver runs the whoami chart from examples/gitops and follows new
+# patch releases of traefik/whoami: Git says v1.10, composecd deploys the
+# highest v1.10.x the registry has, pinned to its digest.
+apiVersion: composecd/v1alpha1
+kind: Application
+metadata: {name: whoami-semver}
+spec:
+  source:
+    path: charts/whoami
+    values:
+      port: 8082
+  destination: {host: nas}
+  syncPolicy:
+    automated: {}
+    imageUpdates:
+      enabled: true
+      strategy: semver
+      constraint: "~1.10"             # default: the same major version as Git's tag
+      allowTags: '^v\d+\.\d+\.\d+$'   # only full versions, not v1.10 or latest
+      ignoreTags: ["*-rc*"]
