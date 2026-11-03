@@ -139,6 +139,9 @@ spec:
   projectRoot: /srv/composecd     # default /opt/composecd
   storage: volume                 # release history: volume (default, on the host) or local (see below)
   env: {TZ: America/Chicago}      # for every docker call; visible to ${VAR} and the env function
+  housekeeping:                   # optional; see Housekeeping below
+    imagePrune: {schedule: "0 4 * * 0", until: 168h}
+    diskWarning: {percent: 85}
 ```
 
 #### Release storage: volume or local
@@ -169,6 +172,46 @@ startup and nothing after that.
 Choose `local` to avoid the accessor and helper containers entirely. It also suits engines that can't run the
 helper image, such as Windows containers and hosts that can't pull images. The cost is that history is tied
 to composecd's data directory rather than the host.
+
+#### Housekeeping
+
+Images and build cache pile up on a host that composecd keeps updating. With a `housekeeping` section, composecd
+prunes them on a schedule and watches the disk:
+
+```yaml
+spec:
+  housekeeping:
+    imagePrune:
+      schedule: "0 4 * * 0"       # cron; without one, images are pruned only on request
+      timeZone: Europe/Berlin     # IANA zone for the schedule (default UTC)
+      until: 168h                 # spare images created in the last week
+      all: false                  # true also removes unused tagged images, not just dangling ones
+    builderPrune: {schedule: "0 4 * * 0", keepStorage: 10GB}
+    diskWarning: {percent: 85}
+```
+
+- **Pruning** runs `docker image prune --force --filter until=…` (with `--all` when set) and `docker builder
+  prune --force --keep-storage …`. It first waits, up to 15 minutes, for operations running on the host to
+  finish, and holds new ones back while it runs, so it never removes an image a sync is about to start.
+  Scheduled prunes skip hosts that are down or in maintenance, and a prune missed while composecd was down
+  isn't caught up. Each prune is recorded as an `image-prune` or `builder-prune` operation of the host, with
+  docker's output; the host page and `composecd host operations NAME` list them.
+- **Manual prunes** (admin): `composecd host prune NAME [--all] [--build-cache]`, `POST
+  /api/v1/hosts/{name}/prune` or the host page's buttons. They use the section's options (`--all` adds
+  `all`), and work without a schedule or in maintenance, like other manual operations.
+- **`image prune` never removes an image a container uses, running or stopped.** That keeps every deployed
+  app's images, and the `busybox` image of composetpl's stopped volume accessor. With `all: true` it does remove
+  the images of earlier revisions, so **a rollback has to pull its old image again**; if the registry no longer
+  has it, the rollback fails. Keep `all: false` (only dangling images, such as tags a newer pull replaced) if
+  that matters.
+- **Disk usage.** On a host ping, at most every 10 minutes, composecd runs `docker system df` (images,
+  containers, volumes and build cache, with what pruning could reclaim) and, for free space on the engine's
+  data root, a short-lived helper container from the volume accessor's image that runs `df` on `DockerRootDir`
+  mounted read-only (a `storage: local` host pulls that image the first time). The host page, `GET
+  /api/v1/hosts` and the metrics show it. Hosts without a `housekeeping` section aren't measured; an empty
+  one (`housekeeping: {}`) only measures.
+- **`diskWarning.percent`**: past it, the host shows a warning and composecd sends a `host-disk` notification,
+  once per crossing; it is sent again only after usage has dropped below the threshold and crossed it again.
 
 ### Application
 
@@ -305,6 +348,7 @@ host maintenance, a retry or self-heal backoff, or a failed sync waiting for a c
 | `host unmanaged NAME` | Unmanaged/orphaned releases and plain Compose projects, including config paths. `-o json\|yaml` |
 | `adopt HOST RELEASE` | Export Application YAML with saved user values (admin); warnings go to stderr. |
 | `host maintenance NAME on\|off` | While on, nothing on the host is synced, healed or pruned automatically. Manual operations still work. |
+| `host prune NAME [--all] [--build-cache]`, `host operations NAME` | Prune a host's unused images (or build cache) now (admin), and list its prunes. See [Housekeeping](#housekeeping). |
 | `window list` | Sync windows, whether they're open, and the apps they match. |
 | `validate DIR` | Check objects offline; `--render` also expands ApplicationSets and renders every chart. See [Validate in CI](#validate-in-ci). |
 | `login`, `logout`, `whoami` | Save, forget or check the server and token the CLI uses. |
@@ -334,6 +378,8 @@ Every `/api/v1` endpoint needs `Authorization: Bearer <token>`, or a browser ses
 | `GET /api/v1/hosts`, `POST /api/v1/hosts/{name}/maintenance` (`{"enabled": true, "reason": "..."}`) | |
 | `GET /api/v1/hosts/{name}/unmanaged` | Release metadata and plain Compose config paths (readonly) |
 | `GET /api/v1/hosts/{name}/adopt/{release}` | Application YAML and warnings as JSON (admin; contains plaintext user values) |
+| `POST /api/v1/hosts/{name}/prune` (`{"kind": "image-prune" or "builder-prune", "all": false}`) | Prune unused images or build cache (admin; 202, returns the operation) |
+| `GET /api/v1/hosts/{name}/operations` | The host's prunes (readonly) |
 | `DELETE /api/v1/hosts/{name}/releases/{release}` | Uninstall an orphaned release, keeping its history and named volumes (admin; returns the operation) |
 | `GET /api/v1/windows`, `GET /api/v1/root`, `POST /api/v1/refresh`, `GET /api/v1/version` | |
 | `GET /api/v1/me` | Who you are, your role, and how you signed in |
@@ -454,6 +500,8 @@ binary; there is no CDN or Node build step.
   point at one to see its links. **Everything** draws every object boxed by its stack. Click a stack or a shared
   object, or pick one under **Focus**, to see just it and what it is connected to.
   Lists unmanaged composetpl releases and plain Compose projects with config paths. Admins can use **Adopt** to preview Application YAML, or **Delete** an orphaned release.
+  **Housekeeping** shows disk usage, a warning past `diskWarning`, the next scheduled prunes and past ones;
+  admins can prune images or build cache now.
 - **Sync windows** (`/windows`): open/closed state, next change, and matching applications.
 - **Operations** (`/operations`): the latest 50 operations across applications, including who acted and output.
 - **Settings** (`/settings`): your identity; admins can create/revoke tokens and add/delete users or change
@@ -985,7 +1033,7 @@ notifications:
     type: ntfy                    # ntfy, gotify, discord, slack or webhook (JSON POST of the event)
     url: https://ntfy.example.lan/homelab
     tokenFile: /run/secrets/ntfy-token
-    events: [sync-failed, health-degraded, host-down, prune]   # the default
+    events: [sync-failed, health-degraded, host-down, prune, host-disk]   # the default
   - name: chat
     type: discord
     urlFile: /run/secrets/discord-webhook
@@ -995,13 +1043,15 @@ notifications:
 
 The events are `sync-succeeded`, `sync-failed` (which also covers failed rollbacks, heals and prunes),
 `self-healed`, `prune`, `health-degraded` and `out-of-sync`, each sent when an app enters that state,
-`host-down`, and `image-update` (a new digest for a service's tag, including one pinned in Git, or a newer tag
-its strategy picked).
+`host-down`, `host-disk` (a host's disk past `housekeeping.diskWarning`), and `image-update` (a new digest for a
+service's tag, including one pinned in Git, or a newer tag its strategy picked).
 
 **Metrics.** `GET /metrics` serves Prometheus metrics:
 - `composecd_app_sync_status` and `composecd_app_health_status`, one series per app with its current status;
 - `composecd_app_paused` and `composecd_app_blocked`;
 - `composecd_host_up`, `composecd_host_maintenance` and `composecd_host_orphaned_releases`;
+- `composecd_host_disk_used_ratio` and `composecd_host_reclaimable_bytes{kind}` (images, containers, volumes,
+  build-cache), for hosts with `housekeeping`;
 - `composecd_operations_total` and `composecd_operation_duration_seconds_total`, by kind, trigger and phase;
 - `composecd_root_error`, `composecd_root_last_refresh_timestamp_seconds` and `composecd_sync_window_open`.
 

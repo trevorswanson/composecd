@@ -179,6 +179,20 @@ func (c *Client) SetMaintenance(ctx context.Context, host string, on bool, reaso
 	return c.do(ctx, "POST", "/api/v1/hosts/"+url.PathEscape(host)+"/maintenance", body, nil)
 }
 
+// PruneHost starts pruning host's unused images (kind image-prune) or build
+// cache (builder-prune).
+func (c *Client) PruneHost(ctx context.Context, host, kind string, all bool) (*store.Operation, error) {
+	out := &store.Operation{}
+	body := map[string]interface{}{"kind": kind, "all": all}
+	return out, c.do(ctx, "POST", "/api/v1/hosts/"+url.PathEscape(host)+"/prune", body, out)
+}
+
+// HostOperations lists host's housekeeping operations, newest first.
+func (c *Client) HostOperations(ctx context.Context, host string, limit int) ([]*store.Operation, error) {
+	var out []*store.Operation
+	return out, c.do(ctx, "GET", "/api/v1/hosts/"+url.PathEscape(host)+"/operations?limit="+strconv.Itoa(limit), nil, &out)
+}
+
 // Wait polls operation id until it finishes or ctx is done.
 func (c *Client) Wait(ctx context.Context, id int64, every time.Duration) (*store.Operation, error) {
 	t := time.NewTicker(every)

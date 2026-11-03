@@ -111,6 +111,32 @@ func New(c Controller, o Options) http.Handler {
 		err := c.SetMaintenance(r.PathValue("name"), body.Enabled, by(body.Reason, "maintenance", p))
 		return http.StatusOK, map[string]bool{"maintenance": body.Enabled}, err
 	})
+	read("GET /api/v1/hosts/{name}/operations", func(r *http.Request, _ *auth.Principal) (int, interface{}, error) {
+		limit, err := intParam(r, "limit")
+		if err != nil {
+			return 0, nil, err
+		}
+		ops, err := c.HostOperations(r.PathValue("name"), limit)
+		return http.StatusOK, nonNil(ops), err
+	})
+	act("POST /api/v1/hosts/{name}/prune", func(r *http.Request, p *auth.Principal) (int, interface{}, error) {
+		var body struct {
+			Kind string `json:"kind"`
+			All  bool   `json:"all"`
+		}
+		if err := decode(r, &body); err != nil {
+			return 0, nil, err
+		}
+		switch body.Kind {
+		case "":
+			body.Kind = store.KindImagePrune
+		case store.KindImagePrune, store.KindBuilderPrune:
+		default:
+			return 0, nil, badRequest("kind must be %s or %s", store.KindImagePrune, store.KindBuilderPrune)
+		}
+		op, err := c.PruneHost(r.PathValue("name"), body.Kind, body.All, p.Name)
+		return http.StatusAccepted, op, err
+	})
 	read("GET /api/v1/windows", func(*http.Request, *auth.Principal) (int, interface{}, error) {
 		return http.StatusOK, nonNil(c.Windows()), nil
 	})
@@ -251,7 +277,7 @@ func (s *server) json(need auth.Role, h handler) http.HandlerFunc {
 			case errors.Is(err, store.ErrExists):
 				status = http.StatusConflict
 			case errors.Is(err, controller.ErrBusy), errors.Is(err, controller.ErrBlocked), errors.Is(err, controller.ErrAdoptionBlocked),
-				errors.Is(err, controller.ErrSelf):
+				errors.Is(err, controller.ErrSelf), errors.Is(err, controller.ErrHostBusy):
 				status = http.StatusConflict
 			default:
 				status = http.StatusInternalServerError

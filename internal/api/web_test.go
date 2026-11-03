@@ -565,3 +565,50 @@ func TestApplicationSetsPageShowsRollout(t *testing.T) {
 		}
 	}
 }
+
+func TestWebHostHousekeeping(t *testing.T) {
+	a := newAuthn(t, "secret")
+	if err := a.AddUser("guest", auth.RoleReadonly, "guest password!"); err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(New(&stub{}, Options{Auth: a}))
+	defer srv.Close()
+	admin := newBrowser(t, srv)
+	admin.login("", "secret")
+	code, _, body := admin.do("GET", "/hosts/nas", "", nil)
+	for _, want := range []string{"nas is running out of disk", "the disk is 87% full (warning at 85%)", "87% used", "13B free of 100B",
+		"<td>images</td>", "2.0GB", `hx-post="/ui/hosts/nas/prune"`, `value="builder-prune"`, `<a href="/hosts/nas">nas</a> · image-prune`,
+		"Total reclaimed space: 1.2GB"} {
+		if code != 200 || !strings.Contains(body, want) {
+			t.Errorf("host page lacks %q: %d", want, code)
+		}
+	}
+	form := map[string]string{"Content-Type": "application/x-www-form-urlencoded", auth.CSRFHeader: admin.csrf, "HX-Request": "true"}
+	code, _, body = admin.do("POST", "/ui/hosts/nas/prune", "kind=image-prune", form)
+	if code != 200 || !strings.Contains(body, "<strong>Image prune #10 running</strong>") || !strings.Contains(body, `sse-connect="/api/v1/hosts/nas/operations/10/log"`) {
+		t.Errorf("prune: %d %s", code, body)
+	}
+	if code, _, _ := admin.do("POST", "/ui/hosts/nas/prune", "kind=volume-prune", form); code != 400 {
+		t.Errorf("bad kind: %d", code)
+	}
+
+	guest := newBrowser(t, srv)
+	guest.login("guest", "guest password!")
+	if code, _, body := guest.do("GET", "/hosts/nas", "", nil); code != 200 || strings.Contains(body, "Prune images") || !strings.Contains(body, "87% used") {
+		t.Errorf("readonly host page: %d", code)
+	}
+	if code, _, _ := guest.do("POST", "/ui/hosts/nas/prune", "kind=image-prune", map[string]string{"Content-Type": "application/x-www-form-urlencoded",
+		auth.CSRFHeader: guest.csrf, "HX-Request": "true"}); code != 403 {
+		t.Errorf("readonly prune: %d", code)
+	}
+
+	// A host operation's output follows under the host, not an app.
+	for path, want := range map[string]int{
+		"/api/v1/hosts/nas/operations/10/log": 200, "/api/v1/hosts/pi/operations/10/log": 404,
+		"/api/v1/apps/media/operations/10/log": 404, "/api/v1/hosts/nas/operations/7/log": 404,
+	} {
+		if code, body := do(t, srv, "GET", path, "secret", ""); code != want || (want == 200 && !strings.Contains(body, "Total reclaimed space")) {
+			t.Errorf("%s: %d %s", path, code, body)
+		}
+	}
+}

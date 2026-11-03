@@ -390,7 +390,11 @@ func printOperations(w io.Writer, ops []*store.Operation, withApp bool) {
 		}
 		app := ""
 		if withApp {
+			// A host's housekeeping operation has no app.
 			app = op.App + "\t"
+			if op.App == "" && op.Host != "" {
+				app = "host " + op.Host + "\t"
+			}
 		}
 		who := op.User
 		if who == "" {

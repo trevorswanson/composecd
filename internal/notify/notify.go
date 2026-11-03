@@ -127,7 +127,7 @@ func Title(e controller.Event) string {
 
 func bad(e controller.Event) bool {
 	switch e.Type {
-	case config.EventSyncFailed, config.EventHealthDegraded, config.EventHostDown:
+	case config.EventSyncFailed, config.EventHealthDegraded, config.EventHostDown, config.EventHostDisk:
 		return true
 	}
 	return false

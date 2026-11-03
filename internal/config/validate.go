@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -57,6 +58,33 @@ func (o *Objects) validate(allowGenerated bool) error {
 		case "", StorageVolume, StorageLocal:
 		default:
 			fail(h.Origin, "host %q: storage %q must be %s or %s", name, s.Storage, StorageVolume, StorageLocal)
+		}
+		if hk := s.Housekeeping; hk != nil {
+			schedule := func(field, sched, tz string) {
+				if sched != "" {
+					if _, err := ParseSchedule(sched); err != nil {
+						fail(h.Origin, "host %q: housekeeping.%s: %v", name, field, err)
+					}
+				}
+				if _, err := time.LoadLocation(tz); err != nil {
+					fail(h.Origin, "host %q: housekeeping.%s timeZone %q: %v", name, field, tz, err)
+				}
+			}
+			if p := hk.ImagePrune; p != nil {
+				schedule("imagePrune", p.Schedule, p.TimeZone)
+				if p.Until < 0 {
+					fail(h.Origin, "host %q: housekeeping.imagePrune.until must not be negative", name)
+				}
+			}
+			if p := hk.BuilderPrune; p != nil {
+				schedule("builderPrune", p.Schedule, p.TimeZone)
+				if p.KeepStorage != "" && !dockerSize.MatchString(p.KeepStorage) {
+					fail(h.Origin, "host %q: housekeeping.builderPrune.keepStorage %q must be a size such as 10GB or 512MiB", name, p.KeepStorage)
+				}
+			}
+			if w := hk.DiskWarning; w != nil && (w.Percent < 1 || w.Percent > 100) {
+				fail(h.Origin, "host %q: housekeeping.diskWarning.percent must be between 1 and 100", name)
+			}
 		}
 	}
 
@@ -206,6 +234,10 @@ func (o *Objects) validate(allowGenerated bool) error {
 	}
 	return errors.Join(errs...)
 }
+
+// dockerSize matches the sizes docker's --keep-storage reads: a number and
+// an optional unit (b, k, kb, kib, ... up to p), case-insensitive.
+var dockerSize = regexp.MustCompile(`(?i)^[0-9]+(\.[0-9]+)?\s*([kmgtp]i?b?|b)?$`)
 
 // ParseSchedule parses a standard five-field cron expression, or a descriptor
 // such as @daily.
