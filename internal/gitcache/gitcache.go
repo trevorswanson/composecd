@@ -191,6 +191,11 @@ func (c *Cache) git(ctx context.Context, url, gitDir string, args ...string) (st
 
 // gitEnv runs git against gitDir (if set) with url's credentials.
 func (c *Cache) gitEnv(ctx context.Context, url, gitDir string, extra []string, args ...string) (string, error) {
+	return c.gitIn(ctx, url, gitDir, extra, nil, args...)
+}
+
+// gitIn is gitEnv with stdin, if not nil.
+func (c *Cache) gitIn(ctx context.Context, url, gitDir string, extra []string, stdin []byte, args ...string) (string, error) {
 	timeout := c.Timeout
 	if timeout <= 0 {
 		timeout = 2 * time.Minute
@@ -206,6 +211,9 @@ func (c *Cache) gitEnv(ctx context.Context, url, gitDir string, extra []string, 
 	}
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Env = append(append(os.Environ(), env...), extra...)
+	if stdin != nil {
+		cmd.Stdin = bytes.NewReader(stdin)
+	}
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	if err := cmd.Run(); err != nil {
