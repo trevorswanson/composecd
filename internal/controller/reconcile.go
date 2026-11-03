@@ -535,6 +535,7 @@ func renderManifest(o action.RenderOptions) (string, []*release.Hook, error) {
 		return "", nil, fmt.Errorf("rendering: %w", err)
 	}
 	output.SetName(root, o.ReleaseName)
+	output.SetContentHashes(root)
 	manifest, err := output.Encode(root)
 	if err != nil {
 		return "", nil, err
