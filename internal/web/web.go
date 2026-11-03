@@ -764,11 +764,12 @@ func (s *Server) Action(w http.ResponseWriter, r *http.Request) {
 		case "delete-release":
 			op, err = s.C.DeleteRelease(name, r.FormValue("release"), p.Name)
 			if err == nil {
-				// Rescan once it's gone, so the release leaves the list.
-				go func(host string, id int64) {
-					_ = s.C.FollowOperation(context.Background(), id, io.Discard)
+				// Rescan once it's gone, so the release leaves the list, even
+				// after this request has ended.
+				go func(ctx context.Context, host string, id int64) {
+					_ = s.C.FollowOperation(ctx, id, io.Discard)
 					s.inventories([]string{host}, true, false)
-				}(name, op.ID)
+				}(context.WithoutCancel(r.Context()), name, op.ID)
 			}
 		default:
 			err = controller.ErrNotFound
