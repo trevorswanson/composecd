@@ -1,0 +1,40 @@
+{{/* sbs is two versions of a file side by side: (list oldHeading newHeading rows). */}}
+{{define "sbs"}}<div class="sbs"><div class="sbs-head">{{index . 0}}</div><div class="sbs-head">{{index . 1}}</div>{{range index . 2}}{{if .Fold}}<div class="sbs-fold">{{.Fold}} unchanged line{{if ne .Fold 1}}s{{end}}</div>{{else}}<span class="ln {{.Old}}">{{if .OldNo}}{{.OldNo}}{{end}}</span><span class="code {{.Old}}">{{.OldText}}</span><span class="ln {{.New}}">{{if .NewNo}}{{.NewNo}}{{end}}</span><span class="code {{.New}}">{{.NewText}}</span>{{end}}{{end}}</div>{{end}}
+
+{{/* edit-actions are the buttons that edit an object's settings: (list $ kind name). */}}
+{{define "edit-actions"}}{{$d := index . 0}}{{if editable $d}}<div class="actions">{{if $d.Editing}}<button type="submit" form="edit-form" class="btn btn-primary">Review changes</button><a class="btn" href="{{query $d.Filters "edit" ""}}{{if not (query $d.Filters "edit" "")}}?{{end}}">Cancel</a>
+{{else}}<a class="btn" href="{{query $d.Filters "edit" "1"}}">Edit</a><a class="btn" href="/edit/{{index . 1}}/{{path (index . 2)}}">Edit YAML</a>{{end}}</div>{{end}}{{end}}
+
+{{/* edit-form opens the settings form of edit mode: (list $ kind name). */}}
+{{define "edit-form"}}{{$d := index . 0}}{{if $d.Editing}}<form id="edit-form" class="edit-form" method="post" action="/ui/edit/plan">{{template "csrf" $d}}<input type="hidden" name="kind" value="{{index . 1}}"><input type="hidden" name="name" value="{{index . 2}}">
+<div class="callout"><div><strong>Editing {{index . 2}}</strong><p>Change any settings below, then review the commit. Nothing changes in Git until you approve its diff. Empty a setting to remove it.</p></div></div>{{end}}{{end}}
+
+{{define "edit-form-end"}}{{if .Editing}}<div class="edit-bar"><button type="submit" class="btn btn-primary">Review changes</button><a class="btn" href="{{query .Filters "edit" ""}}{{if not (query .Filters "edit" "")}}?{{end}}">Cancel</a></div></form>{{end}}{{end}}
+
+{{/* edit is the YAML editor of an object, or of a new one. */}}
+{{define "edit"}}{{with .Edit}}<nav class="crumbs" aria-label="Breadcrumb"><a href="{{.ObjectURL}}">{{if .Name}}{{.Name}}{{else}}{{.Kind}}s{{end}}</a><span aria-hidden="true">/</span><span aria-current="page">{{if .Name}}Edit YAML{{else}}New {{.Kind}}{{end}}</span></nav>
+<div class="page-head"><div class="title"><h1>{{if .Name}}Edit {{.Kind}} {{.Name}}{{else}}New {{.Kind}}{{end}}</h1><p class="subtitle">{{if .Name}}As it is in <code>{{.File}}</code> at the tip of the root's branch.{{else}}A new object in the root repository.{{end}} You review the commit before anything changes in Git.</p></div></div>
+<form method="post" action="/ui/edit/plan" class="card edit-yaml">{{template "csrf" $}}<input type="hidden" name="kind" value="{{.Kind}}">
+{{if .Name}}<input type="hidden" name="mode" value="document"><input type="hidden" name="name" value="{{.Name}}">{{else}}<input type="hidden" name="mode" value="create">
+<div class="field card-body"><label for="e-file">File</label><input id="e-file" name="file" class="mono" value="{{.File}}" required><span class="hint">Under the root's path{{with $.Root.Path}} (<code>{{.}}</code>){{end}}. A new file is created; an existing one gets the object as another document.</span></div>{{end}}
+<label class="sr-only" for="e-doc">YAML</label><textarea id="e-doc" name="document" class="mono yaml" rows="{{len (lines .Document)}}" spellcheck="false" required>{{.Document}}</textarea>
+<div class="edit-bar"><button type="submit" class="btn btn-primary">Review changes</button><a class="btn" href="{{.ObjectURL}}">Cancel</a></div></form>
+{{if .Name}}<section class="card"><div class="card-head"><h2>Delete {{.Name}}</h2></div><form class="card-body form-row" method="post" action="/ui/edit/plan">{{template "csrf" $}}<input type="hidden" name="mode" value="delete"><input type="hidden" name="kind" value="{{.Kind}}"><input type="hidden" name="name" value="{{.Name}}"><p class="reason grow">Removes its document from <code>{{.File}}</code>. You review the commit first.</p><button type="submit" class="btn btn-danger">Review deletion</button></form></section>{{end}}{{end}}{{end}}
+
+{{/* review is an edit's commit, for approval: its diff, its message and where it goes. */}}
+{{define "review"}}{{with .Edit}}<nav class="crumbs" aria-label="Breadcrumb"><a href="{{.ObjectURL}}">{{if .Name}}{{.Name}}{{else}}{{.Kind}}s{{end}}</a><span aria-hidden="true">/</span><span aria-current="page">Review</span></nav>
+<div class="page-head"><div class="title"><h1>Review the commit</h1>{{with .Plan}}<p class="subtitle">To <code>{{.Branch}}</code> of <code>{{.Repo}}</code>, on <code title="{{.Parent}}">{{short .Parent}}</code>.</p>{{end}}</div></div>
+{{with $.Error}}<div class="callout bad" role="alert"><div><strong>{{if $.Edit.Plan}}Review again{{else}}This edit can't be committed{{end}}</strong><p class="detail">{{.}}</p></div></div>{{end}}
+{{with .Plan}}{{range .Warnings}}<div class="callout warn"><div><p>{{.}}</p></div></div>{{end}}
+<section class="card"><div class="card-head"><h2><code>{{.File}}</code>{{if .Removed}}<span class="tag changed">removed</span>{{else if not .Before}}<span class="tag auto">new file</span>{{end}}</h2><span class="diffstat"><span class="add">+{{$.Edit.Stat.Add}}</span><span class="del">−{{$.Edit.Stat.Del}}</span></span></div>
+{{template "sbs" (list "Git now" "After this commit" $.Edit.Rows)}}</section>
+<section class="card"><div class="card-head"><h2>Commit message</h2></div><pre class="output">{{.Message}}
+Composecd-Edited-By: {{$.User.Name}}</pre></section>
+<form method="post" action="/ui/edit/commit" class="edit-bar">{{template "csrf" $}}<input type="hidden" name="request" value="{{$.Edit.Request}}"><input type="hidden" name="token" value="{{.Token}}">
+<button type="submit" class="btn btn-primary">Commit to {{.Branch}}</button><button type="button" class="btn" data-back>Back</button><span class="reason">composecd refreshes after committing; automated apps sync the change as they would any commit.</span></form>
+{{else}}<p><button type="button" class="btn" data-back>Back</button> <a href="{{.ObjectURL}}">Cancel</a></p>{{end}}{{end}}{{end}}
+
+{{/* committed is an edit's outcome. */}}
+{{define "committed"}}{{with .Edit}}<div class="page-head"><div class="title"><h1>Committed</h1></div></div>
+<div class="callout ok"><div><strong>Committed <code title="{{.Commit}}">{{short .Commit}}</code> to {{.Plan.Branch}}</strong><p>{{if .Plan.Removed}}Removed{{else}}Changed{{end}} <code>{{.Plan.File}}</code>. composecd is refreshing from Git; the change deploys as any commit would.</p></div></div>
+<p><a class="btn btn-primary" href="{{.ObjectURL}}">{{if .Plan.Request.Delete}}Back to the list{{else}}Go to {{if .Name}}{{.Name}}{{else}}it{{end}}{{end}}</a></p>{{end}}{{end}}

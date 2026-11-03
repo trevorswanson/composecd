@@ -24,6 +24,7 @@ import (
 	"github.com/trevorswanson/composecd/internal/auth"
 	"github.com/trevorswanson/composecd/internal/config"
 	"github.com/trevorswanson/composecd/internal/controller"
+	"github.com/trevorswanson/composecd/internal/features"
 	"github.com/trevorswanson/composecd/internal/health"
 	"github.com/trevorswanson/composecd/internal/hosts"
 	"github.com/trevorswanson/composecd/internal/images"
@@ -66,6 +67,9 @@ type Controller interface {
 	Mask(string, string) string
 	LiveObject(ctx context.Context, app, id string, all, redact bool) (*controller.Live, error)
 	DecideImage(app, service, choice, user string) (*store.ImageDecision, error)
+	EditSource(ctx context.Context, kind, name string) (file, document string, err error)
+	PlanEdit(context.Context, controller.EditRequest) (*controller.EditPlan, error)
+	ApplyEdit(ctx context.Context, req controller.EditRequest, token, user string) (*controller.EditResult, error)
 	Objects() *config.Objects
 	Bootstrap() *config.Bootstrap
 }
@@ -260,6 +264,10 @@ type Data struct {
 	Show               string
 	// AppSet is the ApplicationSet an applicationset page shows.
 	AppSet controller.ApplicationSetStatus
+	// Editing shows the page's settings as a form (edit=1); Edit is the edit
+	// an edit page shows.
+	Editing bool
+	Edit    *Edit
 }
 
 var templates = template.Must(template.New("web").Funcs(template.FuncMap{
@@ -377,9 +385,16 @@ var templates = template.Must(template.New("web").Funcs(template.FuncMap{
 		return ""
 	},
 	// live reports whether the page takes SSE updates.
-	"live": func(d *Data) bool { return d.Page != "settings" && d.Page != "adopt" },
-	"pair": func(a, b interface{}) []interface{} { return []interface{}{a, b} },
-	"list": func(v ...interface{}) []interface{} { return v },
+	"live": func(d *Data) bool {
+		return d.Page != "settings" && d.Page != "adopt" && !d.Editing && !slices.Contains(editPages, d.Page)
+	},
+	"editable": editable,
+	// inForm reports whether an edit form edits the setting: service labels
+	// are in compose files, not composecd's objects.
+	"inForm":  func(s features.Setting) bool { return s.Scope != features.ServiceLabel && s.Scope != features.Server },
+	"inputID": func(path string) string { return "in-" + strings.NewReplacer(".", "-", "[]", "").Replace(path) },
+	"pair":    func(a, b interface{}) []interface{} { return []interface{}{a, b} },
+	"list":    func(v ...interface{}) []interface{} { return v },
 	// busy is what a button says while an operation of kind runs.
 	"busy": func(kind string) string {
 		switch kind {
@@ -505,6 +520,10 @@ func (s *Server) Register(mux *http.ServeMux) {
 		mux.HandleFunc("GET "+route, s.Page)
 	}
 	mux.HandleFunc("GET /hosts/{name}/adopt/{release}", s.Adopt)
+	mux.HandleFunc("GET /edit/{kind}/{name}", s.EditPage)
+	mux.HandleFunc("GET /new/{kind}", s.EditPage)
+	mux.HandleFunc("POST /ui/edit/plan", s.PlanEdit)
+	mux.HandleFunc("POST /ui/edit/commit", s.CommitEdit)
 	mux.HandleFunc("POST /ui/apps/{name}/{action}", s.Action)
 	mux.HandleFunc("POST /ui/hosts/{name}/{action}", s.Action)
 	mux.HandleFunc("POST /ui/root/{action}", s.Action)
@@ -639,6 +658,7 @@ func (s *Server) data(r *http.Request, p *auth.Principal) (*Data, error) {
 		}
 		set, template, err := s.appSetSettings(d.Name, d.Admin)
 		d.Settings, d.Template = show(set, d.Show, err), show(template, d.Show, err)
+		d.Template.Prefix = templatePrefix
 	case "hosts", "host":
 		live := r.Context().Value(liveKey{}) != nil
 		var scan []string
@@ -711,6 +731,7 @@ func (s *Server) data(r *http.Request, p *auth.Principal) (*Data, error) {
 	default:
 		return nil, controller.ErrNotFound
 	}
+	d.Editing = r.URL.Query().Get("edit") == "1" && editable(d)
 	q := r.URL.Query()
 	q.Set("page", r.URL.Path)
 	d.EventsURL = "/events?" + q.Encode()

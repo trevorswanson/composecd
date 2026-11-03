@@ -222,6 +222,34 @@ func New(c Controller, o Options) http.Handler {
 		d, err := c.DecideImage(r.PathValue("name"), r.PathValue("service"), body.Choice, p.Name)
 		return http.StatusOK, d, err
 	})
+	// Edits to the root repository: plan one to see its diff, then commit
+	// that plan with its token.
+	act("GET /api/v1/edits/{kind}/{name}", func(r *http.Request, _ *auth.Principal) (int, interface{}, error) {
+		file, doc, err := c.EditSource(r.Context(), r.PathValue("kind"), r.PathValue("name"))
+		return http.StatusOK, map[string]string{"file": file, "document": doc}, err
+	})
+	act("POST /api/v1/edits/plan", func(r *http.Request, _ *auth.Principal) (int, interface{}, error) {
+		var req controller.EditRequest
+		if err := decode(r, &req); err != nil {
+			return 0, nil, err
+		}
+		plan, err := c.PlanEdit(r.Context(), req)
+		return http.StatusOK, plan, err
+	})
+	act("POST /api/v1/edits", func(r *http.Request, p *auth.Principal) (int, interface{}, error) {
+		var body struct {
+			Request controller.EditRequest `json:"request"`
+			Token   string                 `json:"token"`
+		}
+		if err := decode(r, &body); err != nil {
+			return 0, nil, err
+		}
+		if body.Token == "" {
+			return 0, nil, badRequest("token is required: plan the edit first")
+		}
+		res, err := c.ApplyEdit(r.Context(), body.Request, body.Token, p.Name)
+		return http.StatusCreated, res, err
+	})
 	read("GET /api/v1/operations", func(r *http.Request, _ *auth.Principal) (int, interface{}, error) {
 		limit, err := intParam(r, "limit")
 		if err != nil {
@@ -286,14 +314,15 @@ func (s *server) json(need auth.Role, h handler) http.HandlerFunc {
 			switch {
 			case errors.As(err, &ae):
 				status = ae.status
-			case errors.As(err, new(*auth.InvalidError)):
+			case errors.As(err, new(*auth.InvalidError)), controller.InvalidEdit(err):
 				status = http.StatusBadRequest
 			case errors.Is(err, controller.ErrNotFound), errors.Is(err, store.ErrNotFound):
 				status = http.StatusNotFound
 			case errors.Is(err, store.ErrExists):
 				status = http.StatusConflict
 			case errors.Is(err, controller.ErrBusy), errors.Is(err, controller.ErrBlocked), errors.Is(err, controller.ErrAdoptionBlocked),
-				errors.Is(err, controller.ErrSelf), errors.Is(err, controller.ErrHostBusy), errors.Is(err, controller.ErrNotHeld):
+				errors.Is(err, controller.ErrSelf), errors.Is(err, controller.ErrHostBusy), errors.Is(err, controller.ErrNotHeld),
+				errors.Is(err, controller.ErrEditStale), errors.Is(err, controller.ErrNoChange):
 				status = http.StatusConflict
 			default:
 				status = http.StatusInternalServerError

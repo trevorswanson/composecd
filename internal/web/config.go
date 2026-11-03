@@ -21,6 +21,8 @@ type Settings struct {
 	Owner string
 	// Error is why they can't be shown.
 	Error string
+	// Prefix is the path of the settings in their object, for a template's.
+	Prefix string
 }
 
 // showFilters are the values of the show query parameter: every setting, or

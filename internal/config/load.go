@@ -9,6 +9,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -48,6 +49,13 @@ func (o *Objects) Application(name string) *Application {
 // set. YAML documents with another apiVersion are ignored, so the directory may
 // hold other files too.
 func LoadDir(dir string) (*Objects, error) {
+	return LoadDirWith(dir, nil)
+}
+
+// LoadDirWith is LoadDir with the files in changed (by slash path under dir)
+// read with those contents instead, or left out where nil: what dir would
+// hold after an edit.
+func LoadDirWith(dir string, changed map[string][]byte) (*Objects, error) {
 	var files []string
 	err := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -67,17 +75,29 @@ func LoadDir(dir string) (*Objects, error) {
 	if err != nil {
 		return nil, err
 	}
+	for rel, data := range changed {
+		if f := filepath.Join(dir, filepath.FromSlash(rel)); data != nil && !slices.Contains(files, f) {
+			files = append(files, f)
+		}
+	}
 	sort.Strings(files)
 
 	objs := &Objects{}
 	var errs []error
 	for _, f := range files {
-		data, err := os.ReadFile(f)
-		if err != nil {
-			return nil, err
-		}
 		rel, _ := filepath.Rel(dir, f)
-		if err := objs.decode(filepath.ToSlash(rel), data); err != nil {
+		rel = filepath.ToSlash(rel)
+		data, ok := changed[rel]
+		if !ok {
+			var err error
+			if data, err = os.ReadFile(f); err != nil {
+				return nil, err
+			}
+		}
+		if data == nil {
+			continue
+		}
+		if err := objs.decode(rel, data); err != nil {
 			errs = append(errs, err)
 		}
 	}

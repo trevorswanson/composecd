@@ -29,7 +29,7 @@ type Commit struct {
 	// branch has moved on since.
 	Parent string
 	// Files are the new contents of the files changed, by path from the
-	// repository's root, with forward slashes.
+	// repository's root, with forward slashes; nil removes the file.
 	Files   map[string][]byte
 	Message string
 	Author  Author
@@ -73,6 +73,13 @@ func (c *Cache) CommitFiles(ctx context.Context, url string, ci Commit) (string,
 	for _, p := range paths {
 		if clean := path.Clean(p); clean != p || path.IsAbs(p) || p == "." || strings.HasPrefix(p, "../") {
 			return "", fmt.Errorf("invalid path %q", p)
+		}
+		if ci.Files[p] == nil {
+			// Mode 0 removes the entry; --force-remove would need a work tree.
+			if _, err := c.gitIn(ctx, url, repo, env, []byte("0 "+strings.Repeat("0", 40)+"\t"+p+"\n"), "update-index", "--index-info"); err != nil {
+				return "", err
+			}
+			continue
 		}
 		blob, err := c.gitIn(ctx, url, repo, nil, ci.Files[p], "hash-object", "-w", "--stdin")
 		if err != nil {

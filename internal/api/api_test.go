@@ -737,3 +737,40 @@ func TestHostPrune(t *testing.T) {
 		t.Errorf("calls:\n got %s\nwant %s", got, want)
 	}
 }
+
+const stubHostYAML = "apiVersion: composecd/v1alpha1\nkind: Host\nmetadata: {name: nas}\nspec:\n  url: ssh://deploy@nas\n"
+
+func (s *stub) EditSource(_ context.Context, kind, name string) (string, string, error) {
+	if kind != config.KindHost || name != "nas" {
+		return "", "", fmt.Errorf("%s %q: %w", kind, name, controller.ErrNotFound)
+	}
+	return "hosts.yaml", stubHostYAML, nil
+}
+
+// PlanEdit plans every edit as the same change, with the token "tok".
+func (s *stub) PlanEdit(_ context.Context, req controller.EditRequest) (*controller.EditPlan, error) {
+	body, _ := json.Marshal(req)
+	s.mu.Lock()
+	s.calls = append(s.calls, "plan "+string(body))
+	s.mu.Unlock()
+	if len(req.Set)+len(req.Unset) == 0 && req.Document == "" && !req.Delete && !req.Create {
+		return nil, controller.ErrNoChange
+	}
+	return &controller.EditPlan{Request: req, Repo: "https://git.example.lan/root.git", Branch: "main", Parent: strings.Repeat("a", 40),
+		File: "composecd/hosts.yaml", Before: stubHostYAML, After: strings.Replace(stubHostYAML, "@nas", "@nas2", 1),
+		Message: "composecd: change spec.url of Host nas\n", Token: "tok"}, nil
+}
+
+func (s *stub) ApplyEdit(ctx context.Context, req controller.EditRequest, token, user string) (*controller.EditResult, error) {
+	if token != "tok" {
+		return nil, controller.ErrEditStale
+	}
+	plan, err := s.PlanEdit(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	s.calls = append(s.calls, "commit by "+user)
+	s.mu.Unlock()
+	return &controller.EditResult{Plan: plan, Commit: strings.Repeat("b", 40)}, nil
+}

@@ -174,3 +174,7 @@ document.addEventListener('change', function (event) {
   var form = event.target.closest('form[data-autosubmit]');
   if (form) { form.requestSubmit(); }
 });
+// Back buttons return to the page before, keeping what was typed there.
+document.addEventListener('click', function (event) {
+  if (event.target.closest('[data-back]')) { history.back(); }
+});
