@@ -5,7 +5,7 @@
 {{define "setting-groups"}}{{$d := index . 0}}{{$prefix := (index . 1).Prefix}}{{with index . 1}}{{with .Error}}<div class="callout warn"><div><strong>Settings unavailable</strong><p>{{.}}</p></div></div>{{end}}
 {{range .Groups}}<section class="card" aria-label="{{.Name}}"><div class="card-head"><h2>{{.Name}}</h2><span class="muted">{{.Count}} of {{.Total}} set</span></div>
 <ul class="settings">{{range .Settings}}<li class="setting {{.State}}">
-<div class="setting-name"><span class="setting-title"><strong>{{.Title}}</strong>{{with .DocURL}}<a class="doc" href="{{.}}" target="_blank" rel="noopener">Docs</a>{{end}}</span>{{if and $d.Editing (inForm .)}}<label for="{{inputID (printf "%s%s" $prefix .Path)}}"><code>{{.Path}}</code></label>{{else}}<code>{{.Path}}</code>{{end}}{{with .Help}}<p class="reason">{{.}}</p>{{end}}</div>
+<div class="setting-name"><span class="setting-title"><strong>{{.Title}}</strong>{{if and $d.Editing (inForm .)}}<label for="{{inputID (printf "%s%s" $prefix .Path)}}"><code>{{.Path}}</code></label>{{else}}<code>{{.Path}}</code>{{end}}{{with .DocURL}}<a class="doc" href="{{.}}" target="_blank" rel="noopener">Docs</a>{{end}}</span>{{with .Help}}<p class="reason">{{.}}</p>{{end}}</div>
 <div class="setting-value">{{if and $d.Editing (inForm .)}}{{template "setting-input" (pair $prefix .)}}{{else if eq .State "set"}}{{if .Block}}<pre class="output">{{.Value}}</pre>{{else}}<code>{{.Value}}</code>{{end}}
 {{else if eq .State "inherited"}}<span><code>{{.Value}}</code> <span class="tag">inherited</span></span><span class="reason">from {{.From}}</span>
 {{else}}<span class="muted">{{with .Default}}Default: {{.}}{{else}}Not set{{end}}</span>{{end}}
