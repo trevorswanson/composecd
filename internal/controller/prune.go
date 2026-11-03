@@ -142,6 +142,8 @@ func (c *Controller) DeleteRelease(host, name, user string) (*store.Operation, e
 	if err != nil {
 		return nil, err
 	}
+	// The caller gets a copy: the operation may finish op before it is encoded.
+	started := *op
 	c.ops.Add(1)
 	go func() {
 		defer c.ops.Done()
@@ -154,7 +156,7 @@ func (c *Controller) DeleteRelease(host, name, user string) (*store.Operation, e
 		c.orphans[host] = slices.DeleteFunc(slices.Clone(c.orphans[host]), func(n string) bool { return n == name })
 		c.mu.Unlock()
 	}()
-	return op, nil
+	return &started, nil
 }
 
 // uninstall removes rel from h, keeping its history and named volumes, and

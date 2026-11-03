@@ -211,6 +211,8 @@ func (c *Controller) Sync(name, user string) (*store.Operation, error) {
 	if err != nil {
 		return nil, err
 	}
+	// The caller gets a copy: the operation may finish op before it is encoded.
+	started := *op
 	c.ops.Add(1)
 	go func() {
 		defer c.ops.Done()
@@ -241,7 +243,7 @@ func (c *Controller) Sync(name, user string) (*store.Operation, error) {
 		p.done()
 		c.setStatus(st)
 	}()
-	return op, nil
+	return &started, nil
 }
 
 // manualAllowed checks the sync windows for a manual operation on app, and
@@ -280,6 +282,8 @@ func (c *Controller) Rollback(name string, revision int, user string) (*store.Op
 	if err != nil {
 		return nil, err
 	}
+	// The caller gets a copy: the operation may finish op before it is encoded.
+	started := *op
 	c.ops.Add(1)
 	go func() {
 		defer c.ops.Done()
@@ -328,7 +332,7 @@ func (c *Controller) Rollback(name string, revision int, user string) (*store.Op
 		p.done()
 		c.setStatus(st)
 	}()
-	return op, nil
+	return &started, nil
 }
 
 // Pause stops automatic sync of app until Resume.

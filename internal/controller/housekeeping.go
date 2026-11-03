@@ -315,7 +315,7 @@ func (c *Controller) PruneHost(host, kind string, all bool, user string) (*store
 	if err != nil {
 		return nil, err
 	}
-	// The caller gets a copy: the prune may finish op before it is encoded.
+	// The caller gets a copy: the operation may finish op before it is encoded.
 	started := *op
 	c.ops.Add(1)
 	go func() {

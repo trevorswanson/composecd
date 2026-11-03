@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"log/slog"
 	"os"
@@ -553,5 +554,41 @@ func TestSyncFailHookRunsOnFailedSync(t *testing.T) {
 	e.refresh()
 	if web := e.app("web"); web.Sync.Status != Synced || strings.Contains(e.fake().CallLog(), "run web alert") {
 		t.Errorf("after fix: %+v calls %s", web.Sync, e.fake().CallLog())
+	}
+}
+
+// The operations Sync and Rollback return are the caller's to read (the API
+// encodes them) while the operation runs on.
+func TestManualOperationsReturnCopies(t *testing.T) {
+	e := newEnv(t)
+	e.refresh()
+	read := func(op *store.Operation) {
+		if _, err := json.Marshal(op); err != nil {
+			t.Error(err)
+		}
+	}
+	op, err := e.c.Sync("manual", "trevor")
+	if err != nil {
+		t.Fatal(err)
+	}
+	read(op)
+	e.c.ops.Wait()
+	read(op)
+	if op.Phase != store.PhaseRunning {
+		t.Errorf("returned sync = %s, want the running snapshot", op.Phase)
+	}
+	if got, err := e.c.Operation(op.ID); err != nil || got.Phase != store.PhaseSucceeded {
+		t.Errorf("stored sync = %+v, %v", got, err)
+	}
+
+	op, err = e.c.Rollback("manual", 1, "trevor")
+	if err != nil {
+		t.Fatal(err)
+	}
+	read(op)
+	e.c.ops.Wait()
+	read(op)
+	if op.Phase != store.PhaseRunning {
+		t.Errorf("returned rollback = %s, want the running snapshot", op.Phase)
 	}
 }
