@@ -165,6 +165,14 @@ func (c *Client) CheckImages(ctx context.Context, app string) error {
 	return c.do(ctx, "POST", appPath(app, "/images/check"), nil, nil)
 }
 
+// DecideImage records an admin's decision about app's service's held image
+// update: store.DecisionMemory applies it without Git, store.DecisionDismiss
+// ignores it until a newer tag.
+func (c *Client) DecideImage(ctx context.Context, app, service, choice string) (*store.ImageDecision, error) {
+	out := &store.ImageDecision{}
+	return out, c.do(ctx, "POST", appPath(app, "/images/"+url.PathEscape(service)+"/decision"), map[string]string{"choice": choice}, out)
+}
+
 func (c *Client) Refresh(ctx context.Context) error {
 	return c.do(ctx, "POST", "/api/v1/refresh", nil, nil)
 }

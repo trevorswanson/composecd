@@ -1,0 +1,20 @@
+# whoami-writeback follows patch releases of traefik/whoami like whoami-semver,
+# but commits each new tag to Git instead of applying it in memory.
+apiVersion: composecd/v1alpha1
+kind: Application
+metadata: {name: whoami-writeback}
+spec:
+  source:
+    path: charts/whoami
+    # charts/whoami/values.yaml sets the tag, but other Applications read it
+    # too, so composecd writes the tag into this app's own values file.
+    valueFiles: [../../values/whoami-writeback.yaml]
+  destination: {host: nas}
+  syncPolicy:
+    automated: {}
+    imageUpdates:
+      enabled: true
+      strategy: semver
+      constraint: "~1.10"
+      allowTags: '^v\d+\.\d+\.\d+$'
+      writeBack: git

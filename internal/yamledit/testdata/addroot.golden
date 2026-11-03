@@ -1,0 +1,5 @@
+replicas: 1
+# trailing comment, no newline at the end
+apps:
+  web:
+    tag: "1.27.3"

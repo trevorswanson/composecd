@@ -1,0 +1,3 @@
+# whoami-writeback's own values. composecd appends `tag: v1.10.x` below the
+# first time it writes a new tag back, and edits only that value after.
+port: 8083
