@@ -227,10 +227,16 @@ func (s *Store) SetHelper(id int64, helper string) error {
 	return err
 }
 
+// SetLog records the log of running operation id so far.
+func (s *Store) SetLog(id int64, log string) error {
+	_, err := s.db.Exec(`UPDATE operations SET log = ? WHERE id = ?`, log, id)
+	return err
+}
+
 // HelperOperations returns the running operations a helper container is
-// carrying out, oldest first.
+// carrying out, oldest first, with their logs so far.
 func (s *Store) HelperOperations() ([]*Operation, error) {
-	return s.query(false, `WHERE phase = ? AND helper != '' ORDER BY id`, PhaseRunning)
+	return s.query(true, `WHERE phase = ? AND helper != '' ORDER BY id`, PhaseRunning)
 }
 
 // Operation returns one operation, with its log.

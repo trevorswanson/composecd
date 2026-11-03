@@ -25,7 +25,8 @@ type fakeHelpers struct {
 	codes map[string]int
 	// listed are containers ListHelpers returns, besides those started.
 	listed []hosts.HelperInfo
-	// block holds WaitHelper for a helper until closed.
+	// block holds WaitHelper for a helper ("*": any) until closed, or until
+	// its context is done, as docker wait is killed.
 	block  map[string]chan struct{}
 	engine interface{ CallLog() string }
 }
@@ -62,12 +63,19 @@ func (f *fakeHelpers) StartHelper(ctx context.Context, h *hosts.Host, spec hosts
 	return nil
 }
 
-func (f *fakeHelpers) WaitHelper(_ context.Context, _ *hosts.Host, name string) (int, error) {
+func (f *fakeHelpers) WaitHelper(ctx context.Context, _ *hosts.Host, name string) (int, error) {
 	f.mu.Lock()
 	block := f.block[name]
+	if block == nil {
+		block = f.block["*"]
+	}
 	f.mu.Unlock()
 	if block != nil {
-		<-block
+		select {
+		case <-block:
+		case <-ctx.Done():
+			return 0, errors.New("waiting for helper container " + name + ": signal: killed")
+		}
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -245,6 +253,49 @@ func TestSelfRecoveryAfterRestart(t *testing.T) {
 	// (The recovered app synced back to Git in between.)
 	if hist := e.history("web"); !strings.HasSuffix(hist, "deployed failed") {
 		t.Errorf("history = %s", hist)
+	}
+}
+
+// The helper replacing composecd stops it while it waits for the helper; the
+// next composecd finishes the operation instead of the stopped one failing it.
+func TestSelfSyncHandedOffWhenComposecdStops(t *testing.T) {
+	e := newEnv(t)
+	helpers := e.updatesSelf("manual")
+	e.refresh()
+	e.commit(map[string]string{"charts/web/values.yaml": "tag: '2'\n"})
+	e.refresh()
+
+	ctx, stop := context.WithCancel(context.Background())
+	e.c.ctx = ctx
+	release := make(chan struct{})
+	helpers.mu.Lock()
+	helpers.block["*"] = release
+	helpers.mu.Unlock()
+	op, err := e.c.Sync("manual", "admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the helper starts", func() bool {
+		helpers.mu.Lock()
+		defer helpers.mu.Unlock()
+		return len(helpers.specs) > 0
+	})
+	stop()
+	e.c.Wait()
+	got, _ := e.c.Store.Operation(op.ID)
+	if got.Phase != store.PhaseRunning || !strings.Contains(got.Log, "Prepared revision") {
+		t.Fatalf("operation after composecd stopped = %+v", got)
+	}
+
+	// The new composecd finds the helper exited.
+	e.c.ctx = context.Background()
+	close(release)
+	e.fake().Objects["container/"+got.Helper] = map[string]interface{}{"State": map[string]interface{}{"Status": "exited"}}
+	e.c.selfRecovered = false
+	e.refresh()
+	got, _ = e.c.Store.Operation(op.ID)
+	if got.Phase != store.PhaseSucceeded || !strings.Contains(got.Log, "Prepared revision") {
+		t.Errorf("recovered operation = %+v", got)
 	}
 }
 

@@ -330,6 +330,16 @@ func (c *Controller) awaitHelper(ctx context.Context, h *hosts.Host, op *store.O
 		cancel()
 		<-followed
 	}
+	if err != nil && ctx.Err() != nil {
+		// composecd is stopping, most likely because the helper is replacing
+		// it: leave op running, with its log up to the helper's output, for
+		// the next composecd to finish from recoverSelf.
+		op.Log = log.String()[:from]
+		if serr := c.Store.SetLog(op.ID, c.Mask(op.App, op.Log)); serr != nil {
+			c.Log.Error("recording the log of an operation left to a helper container", "app", op.App, "id", op.ID, "error", serr)
+		}
+		return
+	}
 	op.Log = log.String()
 
 	// The helper changed the release behind the host's storage cache.
@@ -495,7 +505,9 @@ func (c *Controller) recoverSelf(ctx context.Context, objs *config.Objects) {
 		}
 		c.mu.Lock()
 		c.running[op.App] = op.ID
-		c.liveLogs[op.ID] = &logBuffer{max: maxLog}
+		log := &logBuffer{max: maxLog}
+		_, _ = log.Write([]byte(op.Log))
+		c.liveLogs[op.ID] = log
 		c.mu.Unlock()
 		if len(obj) == 0 {
 			op.Phase, op.Message = store.PhaseFailed, fmt.Sprintf("the helper container %s is gone", op.Helper)
