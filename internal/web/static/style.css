@@ -259,12 +259,14 @@ button { font: inherit; }
 label { font-size: 13px; line-height: 18px; font-weight: 500; }
 .field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .hint { font-size: 12px; line-height: 16px; font-weight: 400; color: var(--mf-text-3); }
-input:not([type=hidden]):not([type=checkbox]):not([type=radio]), select {
+input:not([type=hidden]):not([type=checkbox]):not([type=radio]), select, textarea {
   height: 40px; min-width: 0; padding: 0 12px; border: 1px solid var(--mf-line-strong); border-radius: var(--mf-radius);
   background: var(--mf-surface); color: var(--mf-text); font: 400 14px/20px var(--mf-font); }
 input::placeholder { color: var(--mf-text-3); }
 input.mono { font-family: var(--mf-mono); font-size: 13px; }
-input:focus, select:focus { border-color: var(--mf-accent); }
+input:focus, select:focus, textarea:focus { border-color: var(--mf-accent); }
+textarea { height: auto; padding: 8px 12px; resize: vertical; }
+textarea.mono { font-family: var(--mf-mono); font-size: 13px; line-height: 20px; }
 input:user-invalid, input[aria-invalid=true] { border-color: var(--mf-bad); }
 select { appearance: none; padding-right: 36px; background: var(--mf-surface) var(--i-chevron) right 10px center / 16px no-repeat; }
 .toolbar { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px; }
@@ -484,7 +486,7 @@ details[open] summary { border-bottom: 1px solid var(--mf-line); }
   .toolbar .field { flex: 1 1 140px; }
   .toolbar select { width: 100%; }
   /* Below 16px, iOS zooms the page in when a field takes focus. */
-  input:not([type=hidden]):not([type=checkbox]):not([type=radio]), select { font-size: 16px; }
+  input:not([type=hidden]):not([type=checkbox]):not([type=radio]), select, textarea { font-size: 16px; }
   input.mono { font-size: 15px; }
   .props { padding: 16px; }
   /* Page actions share one even row under the title. */
@@ -678,3 +680,15 @@ a.gstack-name:hover { text-decoration: underline; }
 .fields { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 4px 12px; margin: 6px 0 0; }
 .fields dd { margin: 0; }
 @media (max-width: 800px) { .setting { grid-template-columns: minmax(0, 1fr); } }
+/* Editing settings, and the YAML editor. */
+.setting-value > input, .setting-value > select, .setting-value > textarea { align-self: stretch; }
+.setting-value label.check { display: inline-flex; align-items: center; gap: 6px; height: 40px; font-size: 14px; cursor: pointer; }
+.setting-name label { cursor: pointer; }
+.edit-bar { position: sticky; bottom: 0; z-index: 2; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-top: 8px;
+  padding: 12px 20px; border: 1px solid var(--mf-line); border-radius: var(--mf-radius); background: var(--mf-surface);
+  box-shadow: 0 -4px 12px rgb(0 0 0 / 6%); }
+.edit-yaml .edit-bar { position: static; margin: 0; border: 0; border-top: 1px solid var(--mf-line); border-radius: 0; box-shadow: none; }
+.edit-yaml textarea.yaml { display: block; width: 100%; min-height: 320px; max-height: 70vh; border: 0; border-top: 1px solid var(--mf-line);
+  border-radius: 0; background: var(--mf-code-bg); }
+.edit-yaml .field { padding-bottom: 16px; }
+.edit-form { display: contents; }

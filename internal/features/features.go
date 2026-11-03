@@ -52,6 +52,8 @@ type Feature struct {
 	Secret bool
 	// Sensitive values (a map) show only their keys to readonly users.
 	Sensitive bool
+	// Options are the values a setting takes, when it is one of a few.
+	Options []string
 	// inherit is the value an object that doesn't set Path takes from
 	// elsewhere, and where from.
 	inherit func(Context) (value, from string, ok bool)
@@ -117,6 +119,9 @@ type Setting struct {
 	Fields []Feature
 	// Snippet is YAML that sets it, to copy into the object.
 	Snippet string
+	// Raw is the value as written, as an edit form's input shows it; it
+	// isn't masked, so only admins may see it.
+	Raw string
 }
 
 // Group is a heading's settings.
@@ -169,8 +174,9 @@ func Explain(scope Scope, obj interface{}, ctx Context) ([]Group, error) {
 				s.Fields = append(s.Fields, item)
 			}
 		}
-		if _, ok := lookup(written, f.Path); ok {
+		if w, ok := lookup(written, f.Path); ok {
 			v, _ := lookup(effective, f.Path)
+			s.Raw = raw(f.Input(), w)
 			s.State = Set
 			if m, ok := v.(map[string]interface{}); ok && f.Sensitive && ctx.KeysOnly {
 				v = keys(m)

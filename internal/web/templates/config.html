@@ -2,14 +2,25 @@
 {{define "settings-filter"}}<div class="seg" role="group" aria-label="Show settings">{{range $v := list "" "set" "unset"}}<a href="{{with query $.Filters "show" $v}}{{.}}{{else}}?{{end}}" {{if eq $.Show $v}}aria-current="true"{{end}}>{{if eq $v "set"}}Set{{else if eq $v "unset"}}Not set{{else}}All{{end}}</a>{{end}}</div>{{end}}
 
 {{/* setting-groups lists an object's settings by group: (pair $ Settings). Each says what it does, its value or default, and, when not set, the YAML that sets it. */}}
-{{define "setting-groups"}}{{$d := index . 0}}{{with index . 1}}{{with .Error}}<div class="callout warn"><div><strong>Settings unavailable</strong><p>{{.}}</p></div></div>{{end}}
+{{define "setting-groups"}}{{$d := index . 0}}{{$prefix := (index . 1).Prefix}}{{with index . 1}}{{with .Error}}<div class="callout warn"><div><strong>Settings unavailable</strong><p>{{.}}</p></div></div>{{end}}
 {{range .Groups}}<section class="card" aria-label="{{.Name}}"><div class="card-head"><h2>{{.Name}}</h2><span class="muted">{{.Count}} of {{.Total}} set</span></div>
 <ul class="settings">{{range .Settings}}<li class="setting {{.State}}">
-<div class="setting-name"><span class="setting-title"><strong>{{.Title}}</strong>{{with .DocURL}}<a class="doc" href="{{.}}" target="_blank" rel="noopener">Docs</a>{{end}}</span><code>{{.Path}}</code>{{with .Help}}<p class="reason">{{.}}</p>{{end}}</div>
-<div class="setting-value">{{if eq .State "set"}}{{if .Block}}<pre class="output">{{.Value}}</pre>{{else}}<code>{{.Value}}</code>{{end}}
+<div class="setting-name"><span class="setting-title"><strong>{{.Title}}</strong>{{with .DocURL}}<a class="doc" href="{{.}}" target="_blank" rel="noopener">Docs</a>{{end}}</span>{{if and $d.Editing (inForm .)}}<label for="{{inputID (printf "%s%s" $prefix .Path)}}"><code>{{.Path}}</code></label>{{else}}<code>{{.Path}}</code>{{end}}{{with .Help}}<p class="reason">{{.}}</p>{{end}}</div>
+<div class="setting-value">{{if and $d.Editing (inForm .)}}{{template "setting-input" (pair $prefix .)}}{{else if eq .State "set"}}{{if .Block}}<pre class="output">{{.Value}}</pre>{{else}}<code>{{.Value}}</code>{{end}}
 {{else if eq .State "inherited"}}<span><code>{{.Value}}</code> <span class="tag">inherited</span></span><span class="reason">from {{.From}}</span>
 {{else}}<span class="muted">{{with .Default}}Default: {{.}}{{else}}Not set{{end}}</span>{{end}}
 {{with .Fields}}<details class="more"><summary>Fields of each item</summary><dl class="fields">{{range .}}<dt><code>{{.Key}}</code></dt><dd>{{.Help}}{{with .Default}} <span class="muted">Default: {{.}}</span>{{end}}</dd>{{end}}</dl></details>{{end}}
-{{if and (ne .State "set") .Snippet}}<details class="more"><summary>How to set it</summary><pre class="output">{{.Snippet}}</pre></details>{{end}}</div>
+{{if and (ne .State "set") .Snippet (not $d.Editing)}}<details class="more"><summary>How to set it</summary><pre class="output">{{.Snippet}}</pre></details>{{end}}</div>
 </li>{{end}}</ul></section>
 {{else}}{{if not .Error}}<div class="empty"><strong>{{if eq $d.Show "set"}}Nothing set{{else}}Everything is set{{end}}</strong><span>{{if eq $d.Show "set"}}Every setting here uses its default.{{else}}There's no setting here left to use.{{end}}</span></div>{{end}}{{end}}{{end}}{{end}}
+
+{{/* setting-input edits a setting in a settings form: (pair prefix Setting). The form compares v.PATH with o.PATH, the value as it was, to tell what changed; empty removes the setting. */}}
+{{define "setting-input"}}{{$p := printf "%s%s" (index . 0) (index . 1).Path}}{{with index . 1}}{{$id := inputID $p}}{{$in := .Input}}
+<input type="hidden" name="field" value="{{$p}}"><input type="hidden" name="o.{{$p}}" value="{{.Raw}}">
+{{$unset := "Not set"}}{{if eq .State "inherited"}}{{$unset = printf "Inherit (%s)" .Value}}{{else if .Default}}{{$unset = printf "Default (%s)" .Default}}{{end}}
+{{if eq $in "bool"}}<select id="{{$id}}" name="v.{{$p}}"><option value="">{{$unset}}</option>{{$raw := .Raw}}{{range list "true" "false"}}<option value="{{.}}"{{if eq $raw .}} selected{{end}}>{{.}}</option>{{end}}</select>
+{{else if eq $in "select"}}<select id="{{$id}}" name="v.{{$p}}"><option value="">{{$unset}}</option>{{$raw := .Raw}}{{range .Options}}<option value="{{.}}"{{if eq $raw .}} selected{{end}}>{{.}}</option>{{end}}</select>
+{{else if eq $in "section"}}<label class="check"><input type="checkbox" id="{{$id}}" name="v.{{$p}}" value="on" {{if .Raw}}checked{{end}}> On</label>{{if eq .State "inherited"}}<span class="reason">inherited from {{.From}}</span>{{end}}
+{{else if or (eq $in "number") (eq $in "text")}}<input id="{{$id}}" name="v.{{$p}}" class="mono" value="{{.Raw}}" {{if eq $in "number"}}inputmode="decimal"{{end}} placeholder="{{if eq .State "inherited"}}{{.Value}}{{else if .Default}}{{.Default}}{{else if .Example}}e.g. {{.Example}}{{end}}">
+{{else}}<textarea id="{{$id}}" name="v.{{$p}}" class="mono" rows="{{if eq $in "list"}}3{{else}}4{{end}}" spellcheck="false" placeholder="{{if eq $in "list"}}One per line{{else if .Example}}e.g. {{.Example}}{{else}}YAML{{end}}">{{.Raw}}</textarea>{{if eq $in "list"}}<span class="hint">One per line</span>{{else}}<span class="hint">YAML</span>{{end}}{{end}}
+{{if and (eq .State "inherited") (ne $in "section") (ne $in "bool") (ne $in "select")}}<span class="reason">Empty inherits <code>{{.Value}}</code> from {{.From}}</span>{{end}}{{end}}{{end}}

@@ -1,7 +1,7 @@
 {{define "page"}}<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 {{with .User}}<meta name="csrf-token" content="{{.CSRF}}">{{end}}
-<title>composecd · {{if .User}}{{if or (eq .Page "detail") (eq .Page "host") (eq .Page "applicationset")}}{{.Name}}{{else}}{{.Page}}{{end}}{{else}}Sign in{{end}}</title>
+<title>composecd · {{if .User}}{{if or (eq .Page "detail") (eq .Page "host") (eq .Page "applicationset")}}{{.Name}}{{else if .Edit}}{{if eq .Page "edit"}}{{if .Name}}edit {{.Name}}{{else}}new {{lower .Edit.Kind}}{{end}}{{else}}{{.Page}} edit{{end}}{{else}}{{.Page}}{{end}}{{else}}Sign in{{end}}</title>
 <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="/static/style.css">
 <script defer src="/static/htmx-2.0.11.min.js"></script><script defer src="/static/sse-2.2.4.js"></script><script defer src="/static/ui.js"></script>{{if or (eq .Page "detail") (eq .Page "host")}}<script defer src="/static/dagre-1.1.4.min.js"></script><script defer src="/static/graph.js"></script>{{end}}
@@ -93,6 +93,9 @@
 {{if eq .Page "operations"}}<div class="page-head"><div class="title"><div class="title-row"><h1>Operations</h1></div><p class="subtitle">Every sync, rollback and repair, newest first.</p></div></div>{{template "operations" .}}{{end}}
 {{if eq .Page "settings"}}{{template "settings" .}}{{end}}
 {{if eq .Page "adopt"}}{{template "adopt" .}}{{end}}
+{{if eq .Page "edit"}}{{template "edit" .}}{{end}}
+{{if eq .Page "review"}}{{template "review" .}}{{end}}
+{{if eq .Page "committed"}}{{template "committed" .}}{{end}}
 </section>{{end}}
 
 {{define "adopt"}}<nav class="crumbs" aria-label="Breadcrumb"><a href="/hosts">Hosts</a><span aria-hidden="true">/</span><a href="/hosts/{{path .Name}}">{{.Name}}</a><span aria-hidden="true">/</span><span aria-current="page">Adopt</span></nav>

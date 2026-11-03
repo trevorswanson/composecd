@@ -1,4 +1,4 @@
-{{define "hosts"}}<div class="page-head"><div class="title"><div class="title-row"><h1>Hosts</h1></div><p class="subtitle">The Docker engines composecd deploys to, and what else runs on them.</p></div></div>
+{{define "hosts"}}<div class="page-head"><div class="title"><div class="title-row"><h1>Hosts</h1></div><p class="subtitle">The Docker engines composecd deploys to, and what else runs on them.</p></div>{{if .Admin}}<div class="actions"><a class="btn" href="/new/host">New host</a></div>{{end}}</div>
 <div class="card"><div class="table-wrap"><table class="wide"><thead><tr><th scope="col">Host</th><th scope="col">Engine</th><th scope="col">State</th><th scope="col">Versions</th><th scope="col" class="num">Apps</th><th scope="col">Unmanaged</th>{{if .Admin}}<th scope="col"><span class="sr-only">Maintenance</span></th>{{end}}</tr></thead><tbody>
 {{range .Hosts}}<tr><td><div class="cell">{{if .Retired}}<strong>{{.Name}}</strong><span class="reason">Removed from Git; kept until its releases are pruned</span>{{else}}<a class="name" href="/hosts/{{path .Name}}"><strong>{{.Name}}</strong></a>{{end}}</div></td>
 <td data-label="Engine"><code>{{template "engine" .}}</code></td>
@@ -39,8 +39,8 @@
 <div class="table-wrap"><table class="compact"><thead><tr><th scope="col">Project</th><th scope="col">Status</th><th scope="col">Config files</th></tr></thead><tbody>{{range .Projects}}<tr><td><strong>{{.Name}}</strong></td><td data-label="Status"><span class="pill plain c-{{state .Status}}">{{.Status}}</span></td><td data-label="Config files"><div class="cell">{{range .ConfigFiles}}<code>{{.}}</code>{{else}}<span class="muted">Unavailable</span>{{end}}</div></td></tr>{{else}}<tr><td colspan="3" class="empty-row">No plain Compose projects.</td></tr>{{end}}</tbody></table></div></section>
 {{else if not .Error}}<div class="empty"><strong>Scanning {{$.Name}}…</strong><span>Listing releases and Compose projects. This page fills in when the scan finishes.</span></div>{{end}}{{end}}
 {{template "housekeeping" .}}
-<div class="settings-head"><div class="grow"><h2>Configuration</h2><p class="summary">Defined in {{with .Settings.Origin}}<code>{{.}}</code>{{else}}Git{{end}}. Change it there; composecd applies it on the next refresh.</p></div>{{template "settings-filter" .}}</div>
-{{template "setting-groups" (pair . .Settings)}}{{end}}{{end}}
+{{template "edit-form" (list . "Host" .Name)}}<div class="settings-head"><div class="grow"><h2>Configuration</h2><p class="summary">Defined in {{with .Settings.Origin}}<code>{{.}}</code>{{else}}Git{{end}}. {{if .Admin}}Edit it here or in Git{{else}}Change it there{{end}}; composecd applies it on the next refresh.</p></div>{{template "settings-filter" .}}{{template "edit-actions" (list . "host" .Name)}}</div>
+{{template "setting-groups" (pair . .Settings)}}{{template "edit-form-end" .}}{{end}}{{end}}
 
 {{/* housekeeping is a host's disk usage, scheduled and manual prunes, and their operations. */}}
 {{define "housekeeping"}}{{if or .Host.Disk .Host.NextPrune .Operations .Admin}}<section class="card" aria-label="Housekeeping"><div class="card-head"><h2>Housekeeping</h2>{{with .Host.Disk}}<span class="muted">disk measured <time datetime="{{iso .CheckedAt}}" title="{{iso .CheckedAt}}">{{ago .CheckedAt}}</time></span>{{end}}</div>
@@ -59,14 +59,14 @@
 <script type="application/json" class="graph-data">{{.}}</script>
 </section>{{end}}{{end}}
 
-{{define "windows"}}<div class="page-head"><div class="title"><div class="title-row"><h1>Sync windows</h1></div><p class="subtitle">Schedules that allow or deny automatic syncs, self-heal and prune.</p></div></div>
-<div class="card"><div class="table-wrap"><table class="wide"><thead><tr><th scope="col">Window</th><th scope="col">State</th><th scope="col">Schedule</th><th scope="col">Next change</th><th scope="col">Applications</th></tr></thead><tbody>{{range .Windows}}<tr>
+{{define "windows"}}<div class="page-head"><div class="title"><div class="title-row"><h1>Sync windows</h1></div><p class="subtitle">Schedules that allow or deny automatic syncs, self-heal and prune.</p></div>{{if .Admin}}<div class="actions"><a class="btn" href="/new/window">New window</a></div>{{end}}</div>
+<div class="card"><div class="table-wrap"><table class="wide"><thead><tr><th scope="col">Window</th><th scope="col">State</th><th scope="col">Schedule</th><th scope="col">Next change</th><th scope="col">Applications</th>{{if $.Admin}}<th scope="col"><span class="sr-only">Action</span></th>{{end}}</tr></thead><tbody>{{range .Windows}}<tr>
 <td><div class="name-row"><strong>{{.Name}}</strong><span class="tag{{if eq .Kind "deny"}} changed{{end}}">{{.Kind}}</span></div></td>
 <td data-label="State">{{if .Open}}<span class="pill open">In effect</span>{{else}}<span class="pill closed">Not in effect</span>{{end}}</td>
 <td data-label="Schedule"><div class="cell"><code>{{.Schedule}}</code><span class="reason">for {{.Duration}}{{with .TimeZone}} · {{.}}{{end}}{{if .ManualSync}} · manual sync allowed{{end}}</span></div></td>
 <td data-label="Next change">{{if .Open}}Ends <time datetime="{{iso .ClosesAt}}" title="{{iso .ClosesAt}}">{{ago .ClosesAt}}</time>{{else}}Starts <time datetime="{{iso .NextOpen}}" title="{{iso .NextOpen}}">{{ago .NextOpen}}</time>{{end}}</td>
-<td data-label="Applications">{{with .Applications}}<span class="links">{{range .}}<a href="/apps/{{path .}}">{{.}}</a>{{end}}</span>{{else}}<span class="muted">None</span>{{end}}</td></tr>
-{{else}}<tr><td colspan="5" class="empty-row">No sync windows defined.</td></tr>{{end}}</tbody></table></div></div>{{end}}
+<td data-label="Applications">{{with .Applications}}<span class="links">{{range .}}<a href="/apps/{{path .}}">{{.}}</a>{{end}}</span>{{else}}<span class="muted">None</span>{{end}}</td>{{if $.Admin}}<td class="act"><a class="btn btn-sm" href="/edit/window/{{path .Name}}">Edit YAML</a></td>{{end}}</tr>
+{{else}}<tr><td colspan="6" class="empty-row">No sync windows defined.</td></tr>{{end}}</tbody></table></div></div>{{end}}
 
 {{define "operations"}}{{range .Operations}}<article class="card"><div class="card-head"><div class="op-title"><span class="pill {{lower .Phase}}">{{.Phase}}</span><h2>{{if .App}}<a href="/apps/{{path .App}}?tab=operations">{{.App}}</a>{{else}}<a href="/hosts/{{path .Host}}">{{.Host}}</a>{{end}} · {{.Kind}}</h2><span class="muted mono">#{{.ID}}</span></div><time class="muted" datetime="{{iso .StartedAt}}" title="{{iso .StartedAt}}">{{ago .StartedAt}}</time></div>
 <div class="card-body"><p class="reason">{{.Trigger}}{{with .User}} by {{.}}{{end}}{{with .SourceRevision}} · <code title="{{.}}">{{short .}}</code>{{end}}{{with .ReleaseRevision}} · release rev {{.}}{{end}}</p>{{with .Message}}<p>{{.}}</p>{{end}}</div>

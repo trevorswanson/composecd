@@ -380,6 +380,9 @@ Every `/api/v1` endpoint needs `Authorization: Bearer <token>`, or a browser ses
 | `GET /api/v1/hosts/{name}/adopt/{release}` | Application YAML and warnings as JSON (admin; contains plaintext user values) |
 | `POST /api/v1/hosts/{name}/prune` (`{"kind": "image-prune" or "builder-prune", "all": false}`) | Prune unused images or build cache (admin; 202, returns the operation) |
 | `GET /api/v1/hosts/{name}/operations` | The host's prunes (readonly) |
+| `GET /api/v1/edits/{kind}/{name}` | An object's file and YAML document at the tip of the root's branch (admin) |
+| `POST /api/v1/edits/plan` (`{"kind": "Host", "name": "nas", "set": {"spec.storage": "local"}, "unset": [...]}`, or `"document"`, `"create"` with `"file"`, `"delete"`) | The commit an edit would make: file before and after, message and `token` (admin) |
+| `POST /api/v1/edits` (`{"request": {...}, "token": "..."}`) | Commit a planned edit (admin; 201; 409 when Git moved on: plan it again) |
 | `DELETE /api/v1/hosts/{name}/releases/{release}` | Uninstall an orphaned release, keeping its history and named volumes (admin; returns the operation) |
 | `GET /api/v1/windows`, `GET /api/v1/root`, `POST /api/v1/refresh`, `GET /api/v1/version` | |
 | `GET /api/v1/me` | Who you are, your role, and how you signed in |
@@ -515,9 +518,32 @@ the compose service labels its services set), a Host's and an ApplicationSet's o
 `composecd.yaml`'s on **Settings**. Each one says what it does, its value, or its default when it isn't set,
 and links to its documentation. One that isn't set has the YAML that sets it, ready to copy into the object.
 **Set** and **Not set** filter the list. Values an object takes from elsewhere show as inherited: image
-updates from `composecd.yaml`, and a source's repository and revision from the root. The UI never changes a
-setting: change it in Git (or `composecd.yaml`, then restart composecd). Notification URLs and passwords in
-repository URLs are hidden, and inline values are masked like diffs.
+updates from `composecd.yaml`, and a source's repository and revision from the root. Notification URLs and
+passwords in repository URLs are hidden, and inline values are masked like diffs.
+
+### Editing from the UI
+
+Admins can change Hosts, Applications, ApplicationSets and SyncWindows from the UI. Every change is a commit
+to the root repository, and composecd commits nothing until you approve its diff:
+
+- **Edit** on an object's settings turns them into a form. Change any of them, or empty one to remove it, then
+  **Review changes**. An ApplicationSet's form covers its template too. A generated Application is changed
+  through its ApplicationSet.
+- **Edit YAML** opens the object's YAML document as it is at the tip of the branch. The same page deletes the
+  object. **New application**, **New host**, **New ApplicationSet** and **New window** start a new object
+  in a file you choose under the root's path.
+- The review page shows the file before and after, side by side, with the commit message and anything the
+  change does besides edit Git (deleting an Application uninstalls it, if it was automated with prune).
+  **Commit** pushes it to the branch the root tracks; composecd then refreshes, and the change deploys like
+  any other commit.
+
+Edits change only what you changed. Comments, key order and the rest of the file stay as they are. composecd
+checks that its objects still load with the change before showing the review, so a typo, a dependency cycle
+or a duplicate name is refused there. If the branch moves between review and commit, composecd plans the
+edit again and asks you to review the new diff. It never commits over a change it didn't show you. The root's
+`targetRevision` must be a branch. Commits use the image write-back author and signing key
+(`imageUpdates.writeBack`) and end with a `Composecd-Edited-By: USER` trailer. `composecd.yaml` isn't in
+Git, so the UI doesn't edit it: change it and restart composecd.
 
 Pages are server-rendered and readable without JavaScript; actions also accept ordinary forms. With
 JavaScript enabled, authenticated `GET /events` delivers `app`, `host` and `operation` SSE events containing
