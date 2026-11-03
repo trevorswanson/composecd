@@ -176,6 +176,13 @@ func (o *Objects) validate(allowGenerated bool) error {
 		if err := a.Spec.SyncPolicy.ImageUpdates.Policy().Validate(); err != nil {
 			fail(a.Origin, "application %q: syncPolicy.imageUpdates: %v", name, strings.ReplaceAll(err.Error(), "\n", "; "))
 		}
+		if u := a.Spec.SyncPolicy.ImageUpdates; u != nil {
+			switch u.WriteBack {
+			case "", WriteBackMemory, WriteBackGit:
+			default:
+				fail(a.Origin, "application %q: syncPolicy.imageUpdates.writeBack %q must be %s or %s", name, u.WriteBack, WriteBackMemory, WriteBackGit)
+			}
+		}
 		for _, dep := range a.Spec.DependsOn {
 			if dep == name {
 				fail(a.Origin, "application %q: dependsOn names itself", name)
