@@ -92,7 +92,7 @@
 html { -webkit-text-size-adjust: 100%; }
 body { margin: 0; background: var(--mf-bg); color: var(--mf-text); font: 400 14px/20px var(--mf-font); }
 h1, h2, h3, h4, p, pre, dl, figure { margin: 0; }
-h1 { font-size: 28px; line-height: 36px; font-weight: 600; letter-spacing: -.01em; }
+h1 { font-size: 24px; line-height: 32px; font-weight: 600; letter-spacing: -.01em; }
 h2 { font-size: 16px; line-height: 24px; font-weight: 600; }
 h3, h4 { font-size: 14px; line-height: 20px; font-weight: 600; }
 a { color: var(--mf-accent); text-underline-offset: 3px; }
@@ -122,9 +122,9 @@ code, pre, kbd { font-family: var(--mf-mono); font-size: 12px; }
 }
 
 /* Shell: sidebar beside the page; stacked above it on narrow screens. */
-.shell { display: grid; grid-template-columns: 232px minmax(0, 1fr); min-height: 100vh; }
-.sidebar { position: sticky; top: 0; height: 100vh; overflow-y: auto; display: flex; flex-direction: column; gap: 24px;
-  padding: 20px 16px; background: var(--mf-surface); border-right: 1px solid var(--mf-line); }
+.shell { display: grid; grid-template-columns: 216px minmax(0, 1fr); min-height: 100vh; }
+.sidebar { position: sticky; top: 0; height: 100vh; overflow-y: auto; display: flex; flex-direction: column; gap: 20px;
+  padding: 16px 12px; background: var(--mf-surface); border-right: 1px solid var(--mf-line); }
 .brand { display: flex; align-items: center; gap: 10px; padding: 0 8px; color: var(--mf-text); text-decoration: none;
   font-size: 16px; line-height: 24px; font-weight: 600; }
 .brand:hover { color: var(--mf-text); }
@@ -144,7 +144,7 @@ code, pre, kbd { font-family: var(--mf-mono); font-size: 12px; }
 .logo-line { fill: none; stroke: var(--mf-accent-fg); stroke-width: 2.4; }
 .logo-fill { fill: var(--mf-accent-fg); }
 .nav { display: flex; flex-direction: column; gap: 2px; }
-.nav a { display: flex; align-items: center; gap: 10px; height: 40px; padding: 0 10px; border-radius: var(--mf-radius);
+.nav a { display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 10px; border-radius: var(--mf-radius);
   color: var(--mf-text-2); text-decoration: none; font-weight: 500; white-space: nowrap; }
 .nav a::before { opacity: .8; }
 .nav a:hover { background: var(--mf-surface-2); color: var(--mf-text); }
@@ -183,8 +183,8 @@ code, pre, kbd { font-family: var(--mf-mono); font-size: 12px; }
 
 .main { min-width: 0; display: flex; flex-direction: column; }
 .label { font-size: 11px; line-height: 16px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--mf-text-2); }
-.content { width: 100%; max-width: 1240px; padding: 28px 32px 48px; display: flex; flex-direction: column; gap: 20px; }
-.panel { display: flex; flex-direction: column; gap: 20px; }
+.content { width: 100%; max-width: 1240px; padding: 20px 28px 40px; display: flex; flex-direction: column; gap: 16px; }
+.panel { display: flex; flex-direction: column; gap: 16px; }
 .panel:empty { display: none; }
 
 /* Narrow screens: a slim bar with the brand and a menu button, which opens
@@ -215,13 +215,13 @@ code, pre, kbd { font-family: var(--mf-mono); font-size: 12px; }
 .crumbs { display: flex; align-items: center; gap: 8px; font-size: 13px; line-height: 18px; color: var(--mf-text-3); }
 .crumbs a { text-decoration: none; }
 .crumbs [aria-current] { color: var(--mf-text-2); }
-.detail-head { display: flex; flex-direction: column; gap: 16px; }
+.detail-head { display: flex; flex-direction: column; gap: 12px; }
 .actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .actions form, .inline { display: inline-flex; }
 
 /* Buttons */
 button { font: inherit; }
-.btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; height: 40px; padding: 0 16px;
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; height: 36px; padding: 0 14px;
   border-radius: var(--mf-radius); border: 1px solid var(--mf-line-strong); background: var(--mf-surface); color: var(--mf-text);
   font: 500 14px/1 var(--mf-font); text-decoration: none; white-space: nowrap; cursor: pointer; }
 .btn:hover { background: var(--mf-surface-2); color: var(--mf-text); }
@@ -232,7 +232,7 @@ button { font: inherit; }
 .btn-ghost { background: transparent; border-color: transparent; color: var(--mf-text-2); }
 .btn-ghost:hover { background: var(--mf-surface-2); color: var(--mf-text); }
 .btn-sm { height: 32px; padding: 0 12px; gap: 6px; font-size: 13px; }
-.btn-icon { width: 40px; padding: 0; }
+.btn-icon { width: 36px; padding: 0; }
 .btn-sm.btn-icon { width: 32px; }
 .btn:disabled { background: var(--mf-surface-2); border-color: var(--mf-line); color: var(--mf-text-3); cursor: not-allowed; }
 /* A button whose operation is running keeps its tone and spins. */
@@ -260,12 +260,12 @@ label { font-size: 13px; line-height: 18px; font-weight: 500; }
 .field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .hint { font-size: 12px; line-height: 16px; font-weight: 400; color: var(--mf-text-3); }
 input:not([type=hidden]):not([type=checkbox]):not([type=radio]), select, textarea {
-  height: 40px; min-width: 0; padding: 0 12px; border: 1px solid var(--mf-line-strong); border-radius: var(--mf-radius);
+  height: 36px; min-width: 0; padding: 0 10px; border: 1px solid var(--mf-line-strong); border-radius: var(--mf-radius);
   background: var(--mf-surface); color: var(--mf-text); font: 400 14px/20px var(--mf-font); }
 input::placeholder { color: var(--mf-text-3); }
 input.mono { font-family: var(--mf-mono); font-size: 13px; }
 input:focus, select:focus, textarea:focus { border-color: var(--mf-accent); }
-textarea { height: auto; padding: 8px 12px; resize: vertical; }
+textarea { height: auto; padding: 6px 10px; resize: vertical; }
 textarea.mono { font-family: var(--mf-mono); font-size: 13px; line-height: 20px; }
 input:user-invalid, input[aria-invalid=true] { border-color: var(--mf-bad); }
 select { appearance: none; padding-right: 36px; background: var(--mf-surface) var(--i-chevron) right 10px center / 16px no-repeat; }
@@ -273,7 +273,7 @@ select { appearance: none; padding-right: 36px; background: var(--mf-surface) va
 .toolbar .grow { flex: 1 1 200px; }
 /* Top-aligned so a field's hint hangs below without lifting its input; the
    button drops by a label's height (18px line + 6px gap) to sit beside the inputs. */
-.form-row { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 12px; padding: 16px 20px; border-top: 1px solid var(--mf-line); }
+.form-row { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 12px; padding: 12px 16px; border-top: 1px solid var(--mf-line); }
 .form-row > .btn { margin-top: 24px; }
 
 /* Segmented filter and tabs */
@@ -283,8 +283,8 @@ select { appearance: none; padding-right: 36px; background: var(--mf-surface) va
   border: 1px solid transparent; color: var(--mf-text-2); font-size: 13px; font-weight: 500; text-decoration: none; }
 .seg a:hover { color: var(--mf-text); }
 .seg a[aria-current] { background: var(--mf-surface); border-color: var(--mf-line-strong); color: var(--mf-text); }
-.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--mf-line); overflow-x: auto; }
-.tabs a { display: inline-flex; align-items: center; gap: 8px; height: 44px; padding: 0 12px; margin-bottom: -1px;
+.tabs { display: flex; flex-wrap: wrap; gap: 0 4px; border-bottom: 1px solid var(--mf-line); }
+.tabs a { display: inline-flex; align-items: center; gap: 8px; height: 40px; padding: 0 10px; margin-bottom: -1px;
   border-bottom: 2px solid transparent; color: var(--mf-text-2); font-weight: 500; text-decoration: none;
   text-transform: capitalize; white-space: nowrap; }
 .tabs a:hover { color: var(--mf-text); }
@@ -298,29 +298,31 @@ select { appearance: none; padding-right: 36px; background: var(--mf-surface) va
 .card-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px;
   padding: 12px 16px; border-bottom: 1px solid var(--mf-line); }
 .card-head h2, .card-head h3 { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; overflow-wrap: anywhere; }
-.card-body { padding: 16px 20px; display: flex; flex-direction: column; gap: 8px; }
-.card > h4 { padding: 16px 20px 8px; }
-.split { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 24px; align-items: start; }
+.card-body { padding: 12px 16px; display: flex; flex-direction: column; gap: 8px; }
+.card > h4 { padding: 12px 16px 6px; }
+.split { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 16px; align-items: start; }
 .split > div, .split > aside { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
 @media (max-width: 1100px) { .split { grid-template-columns: minmax(0, 1fr); } }
 .table-wrap { overflow-x: auto; }
 table { width: 100%; border-collapse: collapse; }
-th { text-align: left; padding: 10px 16px; background: var(--mf-surface-2); border-bottom: 1px solid var(--mf-line);
+th { text-align: left; padding: 8px 12px; background: var(--mf-surface-2); border-bottom: 1px solid var(--mf-line);
   font-size: 11px; line-height: 16px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase;
   color: var(--mf-text-2); white-space: nowrap; }
-td { padding: 14px 16px; border-bottom: 1px solid var(--mf-line); vertical-align: top; }
-th:first-child, td:first-child { padding-left: 20px; }
-th:last-child, td:last-child { padding-right: 20px; }
+td { padding: 10px 12px; border-bottom: 1px solid var(--mf-line); vertical-align: top; }
+th:first-child, td:first-child { padding-left: 16px; }
+th:last-child, td:last-child { padding-right: 16px; }
+/* Long names, images and paths break rather than widen the table. */
+td code, td .name, td .reason { overflow-wrap: anywhere; }
 tbody tr:last-child td { border-bottom: 0; }
 tbody tr:hover td { background: var(--mf-surface-2); }
-table.wide { min-width: 880px; }
 .num { text-align: right; font-variant-numeric: tabular-nums; }
-td.act { text-align: right; white-space: nowrap; padding-top: 10px; }
+/* Buttons keep their words together; explanations beside them still wrap. */
+td.act { text-align: right; padding-top: 4px; }
 /* Rows holding inputs center everything on the input. */
-table.forms td, table.forms td.act { vertical-align: middle; padding-top: 10px; padding-bottom: 10px; }
-table.compact td { padding-top: 8px; padding-bottom: 8px; }
+table.forms td, table.forms td.act { vertical-align: middle; padding-top: 6px; padding-bottom: 6px; }
+table.compact td { padding-top: 6px; padding-bottom: 6px; }
 td.act form + form { margin-left: 4px; }
-td.empty-row { padding: 40px 20px; text-align: center; color: var(--mf-text-2); }
+td.empty-row { padding: 32px 16px; text-align: center; color: var(--mf-text-2); }
 tbody tr:hover td.empty-row { background: none; }
 .cell { display: flex; flex-direction: column; gap: 4px; align-items: flex-start; min-width: 0; }
 .name-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
@@ -410,7 +412,7 @@ a.name:hover { color: var(--mf-accent); }
   border: 1px solid var(--mf-line); font-size: 13px; overflow-wrap: anywhere; user-select: all; }
 
 /* Properties */
-.props { display: grid; grid-template-columns: minmax(112px, 168px) minmax(0, 1fr); row-gap: 12px; column-gap: 16px; padding: 20px; }
+.props { display: grid; grid-template-columns: minmax(112px, 168px) minmax(0, 1fr); row-gap: 8px; column-gap: 16px; padding: 16px; }
 .props dt { font-size: 11px; line-height: 20px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--mf-text-2); }
 .props dd { margin: 0; min-width: 0; display: flex; flex-direction: column; gap: 4px; align-items: flex-start; overflow-wrap: anywhere; }
 .props .none { color: var(--mf-text-3); }
@@ -439,7 +441,7 @@ a.name:hover { color: var(--mf-accent); }
 .sbs .none { background: var(--mf-surface-2); }
 .sbs-fold { grid-column: 1 / -1; padding: 2px 16px; background: var(--mf-surface-2); color: var(--mf-text-3);
   border-block: 1px solid var(--mf-line); }
-.check-toggle label { display: inline-flex; align-items: center; gap: 6px; height: 38px; font-size: 13px; cursor: pointer; }
+.check-toggle label { display: inline-flex; align-items: center; gap: 6px; height: 34px; font-size: 13px; cursor: pointer; }
 .log, .output { max-height: 420px; overflow: auto; padding: 8px 16px; background: var(--mf-code-bg);
   font: 400 12px/20px var(--mf-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
 .log span { display: block; }
@@ -458,7 +460,7 @@ details[open] summary { border-bottom: 1px solid var(--mf-line); }
 .op-title h2 { font-size: 14px; line-height: 20px; }
 
 /* Empty states */
-.empty { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 32px 24px;
+.empty { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 24px 16px;
   border: 1px dashed var(--mf-line-strong); border-radius: var(--mf-radius-card); text-align: center; color: var(--mf-text-2); }
 .empty strong { color: var(--mf-text); font-weight: 500; }
 .empty span { font-size: 13px; line-height: 18px; color: var(--mf-text-3); }
@@ -498,11 +500,10 @@ details[open] summary { border-bottom: 1px solid var(--mf-line); }
 /* Phones: each table row becomes a small card. The first cell is its title;
    the others hang their column's name (data-label) to their left. */
 @media (max-width: 640px) {
-  table.wide { min-width: 0; }
   .table-wrap { overflow-x: visible; }
   thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
   table, tbody, tr, td { display: block; }
-  tbody tr { display: flex; flex-direction: column; gap: 8px; padding: 14px 16px; border-bottom: 1px solid var(--mf-line); }
+  tbody tr { display: flex; flex-direction: column; gap: 6px; padding: 12px 16px; border-bottom: 1px solid var(--mf-line); }
   tbody tr:last-child { border-bottom: 0; }
   td, th:first-child, td:first-child, th:last-child, td:last-child,
   table.forms td, table.forms td.act, table.compact td { padding: 0; border: 0; }
@@ -517,12 +518,17 @@ details[open] summary { border-bottom: 1px solid var(--mf-line); }
   td.empty-row { padding: 24px 0; }
   table.forms .toolbar { flex-wrap: nowrap; }
   table.forms .toolbar input { flex: 1; width: 100%; }
+  /* Tabs wrap into rows of pills rather than scroll sideways. */
+  .tabs { gap: 4px; border-bottom: 0; }
+  .tabs a { height: 32px; margin: 0; padding: 0 10px; border: 1px solid var(--mf-line); border-radius: var(--mf-radius);
+    background: var(--mf-surface); font-size: 13px; }
+  .tabs a[aria-current=page] { border-color: var(--mf-accent-soft); background: var(--mf-accent-soft); color: var(--mf-accent); }
 }
 
 /* The app's status strip: health, sync and the last operation, side by side. */
 .strip { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); background: var(--mf-surface);
   border: 1px solid var(--mf-line); border-radius: var(--mf-radius-card); }
-.strip-panel { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; min-width: 0; padding: 14px 16px; }
+.strip-panel { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; min-width: 0; padding: 10px 16px; }
 .strip-panel + .strip-panel { border-left: 1px solid var(--mf-line); }
 .strip-main { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
 .strip-link { font-size: 13px; font-weight: 500; text-decoration: none; }
@@ -534,6 +540,8 @@ details[open] summary { border-bottom: 1px solid var(--mf-line); }
 @media (max-width: 800px) {
   .strip { grid-template-columns: minmax(0, 1fr); }
   .strip-panel + .strip-panel { border-left: 0; border-top: 1px solid var(--mf-line); }
+  /* Stacked, each panel keeps its label and state on one line. */
+  .strip-panel { flex-direction: row; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 12px; padding: 8px 16px; }
 }
 
 /* Dialogs */
@@ -659,36 +667,42 @@ a.gstack-name:hover { text-decoration: underline; }
 .card-head h2 .gicon { width: 18px; height: 18px; }
 
 /* Settings: each one an object sets, inherits or leaves at its default. Set
-   ones carry an accent bar; their value, or "Default: ...", says which. */
-.settings-head { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px; margin-top: 8px; }
+   ones carry an accent bar; their value, or "Default: ...", says which. Rows
+   stay short: the title and key share a line, and an unset one's default and
+   "How to set it" sit side by side until opened. */
+.settings-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
 .settings-head .grow { flex: 1 1 280px; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.settings-head > .summary { flex: 1 1 280px; }
+.settings-head > .summary { flex: 1 1 280px; font-size: 13px; line-height: 18px; }
 .settings { list-style: none; margin: 0; padding: 0; }
-.setting { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); gap: 8px 24px; padding: 14px 20px;
+.setting { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 4px 24px; padding: 8px 16px;
   border-bottom: 1px solid var(--mf-line); }
 .setting:last-child { border-bottom: 0; }
 .setting.set { box-shadow: inset 3px 0 0 var(--mf-accent); }
 .setting.inherited { box-shadow: inset 3px 0 0 var(--mf-line-strong); }
-.setting-name, .setting-value { display: flex; flex-direction: column; gap: 4px; align-items: flex-start; min-width: 0; }
-.setting-name code { font-size: 11px; color: var(--mf-text-3); overflow-wrap: anywhere; }
-.setting-value > code { overflow-wrap: anywhere; }
-.setting-value .output { align-self: stretch; max-height: 240px; padding: 8px 12px; border-radius: var(--mf-radius-chip); }
-.setting-value .more { align-self: stretch; }
-.setting-value .more .output { margin-top: 6px; }
-.setting-title { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
+.setting-name, .setting-value { display: flex; flex-direction: column; gap: 2px; align-items: flex-start; min-width: 0; }
+.setting-name .reason { font-size: 12px; line-height: 16px; }
+.setting-title { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 8px; }
+.setting-title code { font-size: 11px; color: var(--mf-text-3); overflow-wrap: anywhere; }
 .setting-title .doc { font-size: 12px; }
+.setting-value > code { overflow-wrap: anywhere; }
+.setting-value .output { align-self: stretch; max-height: 200px; padding: 6px 10px; border-radius: var(--mf-radius-chip); }
+.setting-value .more { align-self: stretch; }
+.setting-value .more .output { margin-top: 4px; }
+.setting.default .setting-value:not(:has(input, select, textarea)) { flex-direction: row; flex-wrap: wrap; align-items: baseline; column-gap: 12px; }
+.setting.default .setting-value:not(:has(input, select, textarea)) .more { align-self: auto; }
+.setting.default .setting-value .more[open] { flex-basis: 100%; }
 .fields { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 4px 12px; margin: 6px 0 0; }
 .fields dd { margin: 0; }
 @media (max-width: 800px) { .setting { grid-template-columns: minmax(0, 1fr); } }
 /* Editing settings, and the YAML editor. */
 .setting-value > input, .setting-value > select, .setting-value > textarea { align-self: stretch; }
-.setting-value label.check { display: inline-flex; align-items: center; gap: 6px; height: 40px; font-size: 14px; cursor: pointer; }
+.setting-value label.check { display: inline-flex; align-items: center; gap: 6px; height: 36px; font-size: 14px; cursor: pointer; }
 .setting-name label { cursor: pointer; }
 .edit-bar { position: sticky; bottom: 0; z-index: 2; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-top: 8px;
-  padding: 12px 20px; border: 1px solid var(--mf-line); border-radius: var(--mf-radius); background: var(--mf-surface);
+  padding: 10px 16px; border: 1px solid var(--mf-line); border-radius: var(--mf-radius); background: var(--mf-surface);
   box-shadow: 0 -4px 12px rgb(0 0 0 / 6%); }
 .edit-yaml .edit-bar { position: static; margin: 0; border: 0; border-top: 1px solid var(--mf-line); border-radius: 0; box-shadow: none; }
 .edit-yaml textarea.yaml { display: block; width: 100%; min-height: 320px; max-height: 70vh; border: 0; border-top: 1px solid var(--mf-line);
   border-radius: 0; background: var(--mf-code-bg); }
-.edit-yaml .field { padding-bottom: 16px; }
+.edit-yaml .field { padding-bottom: 12px; }
 .edit-form { display: contents; }
