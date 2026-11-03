@@ -207,10 +207,14 @@ func (c *Controller) scheduleLocked(name string, at time.Time) {
 	}
 	d := time.Until(at) + 100*time.Millisecond
 	c.timers[name] = &timer{when: at, timer: time.AfterFunc(d, func() {
+		// Count the reconcile as running before the timer is gone, so Wait
+		// with no timers left means nothing is pending.
 		c.mu.Lock()
+		c.ops.Add(1)
 		delete(c.timers, name)
 		ctx := c.ctx
 		c.mu.Unlock()
+		defer c.ops.Done()
 		if ctx.Err() != nil {
 			return
 		}
