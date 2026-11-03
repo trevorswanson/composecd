@@ -513,6 +513,19 @@ func (c *Controller) RefreshAll(ctx context.Context) {
 			readers = append(readers, a)
 		}
 	}
+	// composecd itself syncs last, but readers need its render: until it has
+	// one (after a restart), render it now without acting on it.
+	if len(readers) > 0 {
+		for _, a := range self {
+			if !c.isKnown(a.Metadata.Name) {
+				func() {
+					defer c.lockApp(a.Metadata.Name)()
+					_, p := c.assess(ctx, a, fetchErrs[sourceRepo(a)])
+					p.done()
+				}()
+			}
+		}
+	}
 	run(readers)
 	for _, a := range self {
 		c.reconcile(ctx, a, fetchErrs[sourceRepo(a)], true)

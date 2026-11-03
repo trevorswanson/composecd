@@ -256,3 +256,30 @@ func TestLookupWaitsForRendersInProgress(t *testing.T) {
 		}
 	}
 }
+
+// composecd's own app reconciles after the readers; they still see it on the
+// first refresh after a restart.
+func TestLookupSeesTheSelfAppAfterARestart(t *testing.T) {
+	e := newEnv(t)
+	app := func(name, extra string) string {
+		return "apiVersion: composecd/v1alpha1\nkind: Application\nmetadata: {name: " + name + "}\nspec:\n" +
+			"  source: {path: charts/" + name + "}\n  destination: {host: nas}\n" + extra
+	}
+	e.commit(map[string]string{
+		"composecd/apps.yaml":           app("gatus", "  syncPolicy: {automated: {}, options: {wait: false}}\n") + "---\n" + app("web", "  self: true\n"),
+		"charts/web/values.yaml":        "tag: '1'\n",
+		"charts/gatus/Chart.yaml":       "apiVersion: v2\nname: gatus\nversion: 0.1.0\n",
+		"charts/gatus/templates/a.yaml": readerTemplate,
+	})
+	e.refresh() // gatus is found to be a reader
+	e.c.mu.Lock()
+	e.c.apps = map[string]*appState{"gatus": {reader: true}} // a restart that remembers nothing else
+	e.c.mu.Unlock()
+	e.refresh()
+	if st := e.app("gatus"); st.Error != "" || st.Sync.Status != Synced {
+		t.Fatalf("reader after a restart: %s %+v", st.Error, st.Sync)
+	}
+	if items, _, _ := deployedLookup(t, e); items["web"] == nil {
+		t.Errorf("the self app is missing: %v", items)
+	}
+}
