@@ -1,9 +1,14 @@
 package controller
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
+	"sync"
 	"testing"
+	"time"
+
+	"github.com/trevorswanson/composetpl/pkg/compose"
 
 	"gopkg.in/yaml.v3"
 
@@ -173,5 +178,81 @@ func TestLookupApplicationsFailsClosed(t *testing.T) {
 	}
 	if !e.c.isReader("gatus") || e.c.isReader("web") {
 		t.Error("only gatus reads other Applications")
+	}
+}
+
+// gated lets a test hold one app's render while another reads it.
+type gated struct {
+	compose.Runner
+	entered, release chan struct{}
+	once             *sync.Once
+}
+
+func (g gated) Inspect(ctx context.Context, kind, name string) (map[string]interface{}, error) {
+	switch name {
+	case "web-gate": // web is rendering
+		g.once.Do(func() { close(g.entered) })
+		select {
+		case <-g.release:
+		case <-time.After(time.Second): // the reader's render failed first
+		}
+	case "reader-gate":
+		select {
+		case <-g.entered:
+		case <-time.After(5 * time.Second):
+		}
+	case "reader-done":
+		select {
+		case <-g.release:
+		default:
+			close(g.release)
+		}
+	}
+	return g.Runner.Inspect(ctx, kind, name)
+}
+
+func TestLookupWaitsForRendersInProgress(t *testing.T) {
+	e := newEnv(t)
+	app := func(name string) string {
+		return "apiVersion: composecd/v1alpha1\nkind: Application\nmetadata: {name: " + name + "}\nspec:\n" +
+			"  source: {path: charts/" + name + "}\n  destination: {host: nas}\n" +
+			"  syncPolicy: {automated: {}, options: {wait: false}}\n"
+	}
+	e.commit(map[string]string{
+		"composecd/apps.yaml":    app("gatus") + "---\n" + app("web"),
+		"charts/web/values.yaml": "gen: old\n",
+		"charts/web/templates/a.yaml": `services:
+  web:
+    image: nginx
+    labels:
+      gen: {{ .Values.gen | quote }}
+      gate: {{ lookup "container" "web-gate" | len | quote }}
+`,
+		"charts/gatus/Chart.yaml": "apiVersion: v2\nname: gatus\nversion: 0.1.0\n",
+		"charts/gatus/templates/a.yaml": `services:
+  gatus:
+    image: gatus
+    labels:
+      gate: {{ lookup "container" "reader-gate" | len | quote }}
+    environment:
+      ITEMS: {{ (lookup "composecd/application" "").items | toJson | quote }}
+      DONE: {{ lookup "container" "reader-done" | len | quote }}
+`,
+	})
+	// web renders slowly while the reader, on its first render, reads it.
+	e.backend.mu.Lock()
+	g := gated{entered: make(chan struct{}), release: make(chan struct{}), once: &sync.Once{}}
+	e.backend.wrap = func(r compose.Runner) compose.Runner { w := g; w.Runner = r; return w }
+	e.backend.mu.Unlock()
+	e.refresh()
+
+	hist, err := e.c.Hosts.Get("nas").Store().History("gatus")
+	if err != nil || len(hist) == 0 {
+		t.Fatalf("reader history: %v %v", hist, err)
+	}
+	for _, r := range hist {
+		if !strings.Contains(r.Manifest, `\"gen\":\"old\"`) {
+			t.Errorf("revision %d didn't wait for web's render:\n%s", r.Revision, r.Manifest)
+		}
 	}
 }

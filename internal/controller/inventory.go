@@ -20,8 +20,8 @@ import (
 const LookupApplication = "composecd/application"
 
 // rememberManifest records the compose manifest lookup reports for app: the
-// desired one it last rendered from Git, or, until one renders, the deployed
-// one ("" when nothing is deployed).
+// desired one it last rendered from Git, or, when it has never rendered and a
+// render just failed, the deployed one ("" when nothing is deployed).
 func (c *Controller) rememberManifest(name, manifest string, desired bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
