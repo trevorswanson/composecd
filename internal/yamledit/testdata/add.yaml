@@ -1,0 +1,9 @@
+apps:
+    web:
+        image: nginx
+        ports: [80]
+
+    # the database
+    db:
+        tag: "16"
+other: 1

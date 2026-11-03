@@ -26,7 +26,7 @@ func newAppCmd(cf *clientFlags) *cobra.Command {
 	cmd.AddCommand(
 		newAppListCmd(cf), newAppGetCmd(cf), newAppDiffCmd(cf), newAppSyncCmd(cf), newAppRollbackCmd(cf),
 		newAppHistoryCmd(cf), newAppOperationsCmd(cf), newAppPauseCmd(cf), newAppResumeCmd(cf), newAppRefreshCmd(cf),
-		newAppCheckImagesCmd(cf),
+		newAppCheckImagesCmd(cf), newAppImageDecisionCmd(cf),
 	)
 	return cmd
 }
@@ -487,6 +487,53 @@ pinned in Git is only reported.`,
 	return cmd
 }
 
+func newAppImageDecisionCmd(cf *clientFlags) *cobra.Command {
+	var inMemory, dismiss bool
+	cmd := &cobra.Command{
+		Use:   "image-decision NAME SERVICE (--in-memory | --dismiss)",
+		Short: "Decide an image update that couldn't be written back to Git (admin)",
+		Long: `An Application with imageUpdates.writeBack: git deploys a new tag only once
+composecd has committed it to Git. When it can't (the tag comes from an
+encrypted file, a packaged chart, a key it can't trace, a rejected push), the
+update is held and nothing deploys for the service until an admin decides:
+
+  --in-memory  deploy the new tag without Git. The deployment diverges from
+               Git, the app shows "Diverged from Git", and the decision is
+               recorded with your name in the operation log.
+  --dismiss    ignore this tag until a newer one appears; change it in Git to
+               update.
+
+A decision lasts until the service's source in Git changes.`,
+		Args: cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if inMemory == dismiss {
+				return errors.New("give --in-memory or --dismiss")
+			}
+			choice := store.DecisionDismiss
+			if inMemory {
+				choice = store.DecisionMemory
+			}
+			d, err := cf.client().DecideImage(ctx(cmd), args[0], args[1], choice)
+			if err != nil {
+				return err
+			}
+			if inMemory {
+				fmt.Fprintf(cmd.OutOrStdout(), "Applying %s to %s/%s in memory; the deployment diverges from Git.\n", d.Candidate, args[0], args[1])
+				return nil
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "Dismissed %s for %s/%s until a newer tag.", d.Candidate, args[0], args[1])
+			if d.File != "" {
+				fmt.Fprintf(cmd.OutOrStdout(), " To update from Git, set %s in %s.", d.Key, d.File)
+			}
+			fmt.Fprintln(cmd.OutOrStdout())
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&inMemory, "in-memory", false, "deploy the update without Git, diverging from it")
+	cmd.Flags().BoolVar(&dismiss, "dismiss", false, "ignore the update until a newer tag")
+	return cmd
+}
+
 // printImages lists a's images, the digests their tags resolve to and the
 // tags their strategies picked.
 func printImages(w io.Writer, a *controller.AppStatus) {
@@ -499,6 +546,15 @@ func printImages(w io.Writer, a *controller.AppStatus) {
 	for _, im := range a.Images {
 		update := "-"
 		switch {
+		case im.Held != "":
+			update = "held: " + im.Held
+			if im.File != "" {
+				update += fmt.Sprintf(" (set %s in %s; or decide with image-decision)", im.Key, im.File)
+			}
+		case im.Diverged:
+			update = "diverged from Git: " + im.Note
+		case im.Commit != "":
+			update = im.Note
 		case im.UpdateAvailable && im.Applicable:
 			update = "available: sync to apply"
 		case im.UpdateAvailable:

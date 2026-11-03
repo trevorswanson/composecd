@@ -15,6 +15,7 @@ import (
 
 	"github.com/trevorswanson/composecd/internal/config"
 	"github.com/trevorswanson/composecd/internal/images"
+	"github.com/trevorswanson/composecd/internal/source"
 	"github.com/trevorswanson/composecd/internal/store"
 )
 
@@ -77,6 +78,29 @@ type ImageStatus struct {
 	Note       string `json:"note,omitempty"`
 	// Error is the last failed registry check.
 	Error string `json:"error,omitempty"`
+	// WriteBack is "git" when the strategy's picks are committed to Git
+	// rather than applied in memory.
+	WriteBack string `json:"writeBack,omitempty"`
+	// Commit is the write-back commit that sets Candidate in Git; it deploys
+	// once Git renders it.
+	Commit string `json:"commit,omitempty"`
+	// Held says why Candidate couldn't be written to Git. Nothing deploys it
+	// until an admin applies it in memory or dismisses it.
+	Held string `json:"held,omitempty"`
+	// File and Key are where Git sets the tag, when write-back found them: a
+	// path in the source (or root) repository and a dotted values key.
+	File string `json:"file,omitempty"`
+	Key  string `json:"key,omitempty"`
+	// Decision is an admin's choice about a held candidate: memory (apply it
+	// in memory) or dismiss, and DecidedBy who made it.
+	Decision  string `json:"decision,omitempty"`
+	DecidedBy string `json:"decidedBy,omitempty"`
+	// Diverged is true while an update applied in memory makes the deployment
+	// differ from what Git renders.
+	Diverged bool `json:"diverged,omitempty"`
+	// fingerprint and repo are what a decision about a held candidate
+	// records: see imageFingerprint.
+	fingerprint, repo string
 }
 
 // pinResult is what pinImages learned about an app's images.
@@ -95,7 +119,10 @@ type pinResult struct {
 // CheckImages asks registries. A tag that can't be resolved keeps the digest
 // the deployed release pins, so an unreachable registry never shows as a
 // change.
-func (c *Controller) pinImages(ctx context.Context, app *config.Application, rendered string, deployed *release.Release) pinResult {
+//
+// With write-back to Git, a newer tag deploys once Git renders it, unless an
+// admin applied it in memory: until then the service keeps Git's tag.
+func (c *Controller) pinImages(ctx context.Context, app *config.Application, rendered string, deployed *release.Release, prep *source.Prepared) pinResult {
 	res := pinResult{manifest: rendered}
 	name := app.Metadata.Name
 	svcs, err := images.Services(rendered, config.ImageUpdatesFor(c.Boot.ImageUpdates.Enabled, app),
@@ -130,6 +157,14 @@ func (c *Controller) pinImages(ctx context.Context, app *config.Application, ren
 			return res
 		}
 	}
+	// With write-back, a candidate waits on Git, unless applied in memory.
+	var wbs map[string]*wbView
+	if app.Spec.SyncPolicy.ImageUpdates.WritesBack() {
+		var warnings []string
+		wbs, warnings = c.writeBackViews(ctx, app, prep, svcs, picks)
+		res.warnings = append(res.warnings, warnings...)
+	}
+	waits := func(s images.Service) bool { v := wbs[s.Name]; return v != nil && !v.inMemory }
 	// The images the deployed release runs, by service.
 	var deployedImages map[string]string
 	if deployed != nil {
@@ -177,6 +212,9 @@ func (c *Controller) pinImages(ctx context.Context, app *config.Application, ren
 	// tagOf is the tag a service deploys: what its strategy picked, the
 	// deployed one it keeps, or Git's.
 	tagOf := func(s images.Service) string {
+		if waits(s) {
+			return s.Ref.Tag
+		}
 		if p, ok := picks[s.Name]; s.MovesTags() && ok && pickedFor(p, s) && p.Tag != "" {
 			return p.Tag
 		}
@@ -293,11 +331,52 @@ func (c *Controller) pinImages(ctx context.Context, app *config.Application, ren
 		}
 		res.statuses = append(res.statuses, st)
 	}
+	for i := range res.statuses {
+		if v := wbs[res.statuses[i].Service]; v != nil {
+			showWriteBack(&res.statuses[i], v)
+		}
+	}
 	if res.manifest, err = images.Override(rendered, res.pins); err != nil {
 		res.warnings = append(res.warnings, "pinning images: "+err.Error())
 		res.manifest, res.pins, res.reasons = rendered, nil, nil
 	}
 	return res
+}
+
+// showWriteBack shows on st how writing its candidate to Git stands.
+func showWriteBack(st *ImageStatus, v *wbView) {
+	st.WriteBack, st.fingerprint = config.WriteBackGit, v.fingerprint
+	if d := v.decision; d != nil {
+		st.Decision, st.DecidedBy, st.repo, st.File, st.Key = d.Choice, d.User, d.Repo, d.File, d.Key
+	}
+	gitTag := ""
+	if r, err := images.Parse(st.Image); err == nil {
+		gitTag = r.Tag
+	}
+	switch {
+	case v.inMemory:
+		st.Diverged = true
+		st.Note = fmt.Sprintf("applied in memory by %s, diverging from Git, which says %s", v.decision.User, gitTag)
+		return
+	case v.decision != nil:
+		st.Candidate, st.UpdateAvailable, st.Applicable = v.tag, false, false
+		st.Note = fmt.Sprintf("%s dismissed by %s until a newer tag", v.tag, v.decision.User)
+		if st.File != "" {
+			st.Note += fmt.Sprintf("; to update, set %s in %s to %s", st.Key, st.File, v.tag)
+		}
+		return
+	}
+	st.Candidate, st.UpdateAvailable, st.Applicable = v.tag, true, false
+	switch w := v.state; {
+	case w == nil:
+		st.Note = "writing " + v.tag + " to Git"
+	case w.held != "":
+		st.Held, st.repo, st.File, st.Key = w.held, w.repo, w.file, w.key
+		st.Note = heldNote + w.held
+	default:
+		st.Commit, st.repo, st.File, st.Key = w.commit, w.repo, w.file, w.key
+		st.Note = fmt.Sprintf("committed to Git as %s (%s in %s); it deploys once Git renders it", short(w.commit), w.key, w.file)
+	}
 }
 
 // rememberImages records app's images, which CheckImages checks.
@@ -323,6 +402,10 @@ type ImageCheck struct {
 	Moved []string `json:"moved,omitempty"`
 	// Failed are why the tags a registry didn't answer for failed.
 	Failed map[string]string `json:"failed,omitempty"`
+	// Written are the tags committed to Git, as "app/service: tag", and Held
+	// those that couldn't be, as "app/service: tag: why".
+	Written []string `json:"written,omitempty"`
+	Held    []string `json:"held,omitempty"`
 }
 
 // resolveImages asks registries for refs' digests and records them, or the
@@ -480,6 +563,19 @@ func (c *Controller) checkImages(ctx context.Context, only string) ImageCheck {
 	check.Moved = moved
 	for a := range tagApps {
 		apps[a] = true
+	}
+	// Write the picks of apps with write-back to Git before they reconcile.
+	var names []string
+	if only != "" {
+		names = []string{only}
+	}
+	wb := c.writeBack(ctx, names)
+	check.Written, check.Held = wb.written, wb.held
+	for a := range wb.apps {
+		apps[a] = true
+	}
+	if wb.root {
+		c.Refresh()
 	}
 	for _, ch := range choices {
 		if ch.err != nil {
@@ -760,8 +856,19 @@ func (c *Controller) notifyImages(prev, st *AppStatus) {
 			known[key(im)] = true
 		}
 	}
+	held := map[string]bool{}
+	for _, im := range prev.Images {
+		if im.Held != "" {
+			held[im.Service+"@"+im.Candidate] = true
+		}
+	}
 	for _, im := range st.Images {
-		if !im.UpdateAvailable || known[key(im)] || im.Latest == "" {
+		if im.Held != "" && !held[im.Service+"@"+im.Candidate] {
+			msg := fmt.Sprintf("%s: %s (%s): %s can't be written to Git: %s. Nothing deploys it until an admin applies it in memory or dismisses it",
+				st.Name, images.Repo(im.Image), im.Service, im.Candidate, im.Held)
+			c.notify(Event{Type: config.EventWriteBackBlocked, App: st.Name, Host: st.Host, Message: msg})
+		}
+		if !im.UpdateAvailable || known[key(im)] || im.Latest == "" || im.Held != "" {
 			continue
 		}
 		var msg string

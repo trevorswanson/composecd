@@ -1,0 +1,20 @@
+apiVersion: composecd/v1alpha1
+kind: Application
+metadata: {name: web}
+spec:
+  source:
+    path: charts/web
+    values:
+      replicas: 2
+      tag: "1.27.3"
+  destination: {host: nas}
+---
+apiVersion: composecd/v1alpha1
+kind: Application
+metadata: {name: db}
+spec:
+  source:
+    path: charts/db
+    values:
+      tag: "16.1"   # keep
+  destination: {host: nas}

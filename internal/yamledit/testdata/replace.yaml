@@ -1,0 +1,7 @@
+# Values for the web stack.
+image:
+  repository: ghcr.io/me/web   # the app
+  tag: 1.27.1  # bumped by hand until now
+sidecar: {image: "busybox", tag: "1.36.0"}
+worker:
+    tag: '2.0.0'

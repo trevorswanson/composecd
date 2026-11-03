@@ -170,8 +170,11 @@ func (c *Controller) assess(ctx context.Context, app *config.Application, fetchE
 		renderFailed()
 		return fail(p.prep.RelativeErr(err))
 	}
-	pinned := c.pinImages(ctx, app, manifest, deployed)
+	pinned := c.pinImages(ctx, app, manifest, deployed, p.prep)
 	manifest, p.pins, st.Images = pinned.manifest, pinned.pins, pinned.statuses
+	for _, im := range st.Images {
+		st.Diverged = st.Diverged || im.Diverged
+	}
 	warnings = append(warnings, pinned.warnings...)
 	c.rememberManifest(name, manifest, true)
 	projectDir := h.ProjectDir(name)

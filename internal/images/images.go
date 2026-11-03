@@ -89,6 +89,10 @@ type Service struct {
 	// Policy is how the tag may move: the Application's, with the service's
 	// labels applied.
 	Policy Policy `json:"policy"`
+	// TagKey is the values key (or Chart.appVersion) that sets the tag, as
+	// the service's label.tag-key names it, for write-back; "" lets
+	// write-back trace it.
+	TagKey string `json:"tagKey,omitempty"`
 	// Warning says why the service's policy doesn't apply as written: its
 	// labels are invalid (the digest strategy is used), or semver is asked of a
 	// tag that isn't a semantic version (its digest is pinned).
@@ -110,7 +114,7 @@ func (s Service) MovesTags() bool {
 // Services lists the images of manifest's services, sorted by service. enabled
 // and policy are the Application's settings, which a service's label
 // overrides: label ("true" or "false"), and label.strategy, label.constraint
-// and label.allow-tags.
+// and label.allow-tags. label.tag-key is read into TagKey.
 func Services(manifest string, enabled bool, policy Policy, label string) ([]Service, error) {
 	doc, err := parse(manifest)
 	if err != nil {
@@ -138,6 +142,9 @@ func Services(manifest string, enabled bool, policy Policy, label string) ([]Ser
 			}
 			if v, ok := labelValue(labels, label+".allow-tags"); ok {
 				s.Policy.AllowTags = v
+			}
+			if v, ok := labelValue(labels, label+".tag-key"); ok {
+				s.TagKey = strings.TrimSpace(v)
 			}
 			if err := s.Policy.Validate(); err != nil {
 				s.Policy, s.Warning = Policy{}, "invalid "+label+" labels, using the digest strategy: "+err.Error()

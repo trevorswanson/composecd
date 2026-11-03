@@ -184,7 +184,12 @@ func TestCLIAgainstServer(t *testing.T) {
 	expect(t, mustCLI(t, srv, "app", "refresh", "whoami"), "Refresh of whoami requested")
 	expect(t, mustCLI(t, srv, "app", "check-images", "whoami"), "Image check of whoami requested")
 	expect(t, mustCLI(t, srv, "app", "check-images", "--all"), "Image check of every application requested")
-	for _, args := range [][]string{{"app", "check-images"}, {"app", "check-images", "whoami", "--all"}, {"app", "check-images", "nope"}} {
+	// whoami's images aren't updated, so there is nothing to decide.
+	if _, err := cli(t, srv, "app", "image-decision", "whoami", "web", "--dismiss"); err == nil || !strings.Contains(err.Error(), `service "web" of whoami: not found`) {
+		t.Errorf("decision on an update that isn't held: %v", err)
+	}
+	for _, args := range [][]string{{"app", "check-images"}, {"app", "check-images", "whoami", "--all"}, {"app", "check-images", "nope"},
+		{"app", "image-decision", "whoami", "web"}, {"app", "image-decision", "whoami", "web", "--in-memory", "--dismiss"}} {
 		if _, err := cli(t, srv, args...); err == nil {
 			t.Errorf("%v: expected an error", args)
 		}

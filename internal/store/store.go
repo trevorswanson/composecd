@@ -27,6 +27,9 @@ const (
 	// build cache. They belong to a host, not an app.
 	KindImagePrune   = "image-prune"
 	KindBuilderPrune = "builder-prune"
+	// KindImageDecision records an admin's decision about an image update
+	// write-back held: it changes nothing on the host itself.
+	KindImageDecision = "image-decision"
 
 	TriggerAuto   = "auto"
 	TriggerManual = "manual"
@@ -202,6 +205,22 @@ func migrate(db *sql.DB) error {
 		checked_at TEXT NOT NULL,
 		truncated  INTEGER NOT NULL DEFAULT 0,
 		error      TEXT NOT NULL DEFAULT '',
+		PRIMARY KEY (app, service)
+	)`); err != nil {
+		return err
+	}
+	// Phase 4c: what an admin decided about an image update write-back holds.
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS image_decisions (
+		app         TEXT NOT NULL,
+		service     TEXT NOT NULL,
+		candidate   TEXT NOT NULL,
+		choice      TEXT NOT NULL,
+		user        TEXT NOT NULL DEFAULT '',
+		fingerprint TEXT NOT NULL DEFAULT '',
+		repo        TEXT NOT NULL DEFAULT '',
+		file        TEXT NOT NULL DEFAULT '',
+		key         TEXT NOT NULL DEFAULT '',
+		decided_at  TEXT NOT NULL,
 		PRIMARY KEY (app, service)
 	)`); err != nil {
 		return err
@@ -521,6 +540,78 @@ func (s *Store) SetImageTag(t ImageTag) error {
 		digest = excluded.digest, picked_at = excluded.picked_at, checked_at = excluded.checked_at,
 		truncated = excluded.truncated, error = excluded.error`,
 		t.App, t.Service, t.Image, t.Policy, t.Tag, t.Digest, picked, formatTime(t.CheckedAt), boolInt(t.Truncated), t.Error)
+	return err
+}
+
+// Image decision choices.
+const (
+	// DecisionMemory applies held updates in memory, diverging from Git.
+	DecisionMemory = "memory"
+	// DecisionDismiss ignores the held candidate until a newer one.
+	DecisionDismiss = "dismiss"
+)
+
+// ImageDecision is what an admin decided about a service's image update that
+// couldn't be written to Git. It holds while the service's source has the
+// same Fingerprint.
+type ImageDecision struct {
+	App     string `json:"app"`
+	Service string `json:"service"`
+	// Candidate is the tag held when the decision was made.
+	Candidate string `json:"candidate"`
+	// Choice is DecisionMemory or DecisionDismiss.
+	Choice string `json:"choice"`
+	User   string `json:"user,omitempty"`
+	// Fingerprint identifies the service's source (chart, traced file and key,
+	// tag-key label) the decision applies to.
+	Fingerprint string `json:"fingerprint"`
+	// Repo, File and Key are where tracing found the tag, if it did: a
+	// repository URL, a path in it and a dotted key in that file.
+	Repo      string    `json:"repo,omitempty"`
+	File      string    `json:"file,omitempty"`
+	Key       string    `json:"key,omitempty"`
+	DecidedAt time.Time `json:"decidedAt"`
+}
+
+// ImageDecisions returns app's decisions, by service.
+func (s *Store) ImageDecisions(app string) (map[string]ImageDecision, error) {
+	rows, err := s.db.Query(`SELECT app, service, candidate, choice, user, fingerprint, repo, file, key, decided_at
+		FROM image_decisions WHERE app = ?`, app)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]ImageDecision{}
+	for rows.Next() {
+		var d ImageDecision
+		var at string
+		if err := rows.Scan(&d.App, &d.Service, &d.Candidate, &d.Choice, &d.User, &d.Fingerprint, &d.Repo, &d.File, &d.Key, &at); err != nil {
+			return nil, err
+		}
+		if d.DecidedAt, err = parseTime(at); err != nil {
+			return nil, err
+		}
+		out[d.Service] = d
+	}
+	return out, rows.Err()
+}
+
+// SetImageDecision records d, replacing an earlier decision for its service.
+func (s *Store) SetImageDecision(d ImageDecision) error {
+	if d.DecidedAt.IsZero() {
+		d.DecidedAt = time.Now()
+	}
+	_, err := s.db.Exec(`INSERT INTO image_decisions (app, service, candidate, choice, user, fingerprint, repo, file, key, decided_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT (app, service) DO UPDATE SET candidate = excluded.candidate, choice = excluded.choice, user = excluded.user,
+		fingerprint = excluded.fingerprint, repo = excluded.repo, file = excluded.file, key = excluded.key, decided_at = excluded.decided_at`,
+		d.App, d.Service, d.Candidate, d.Choice, d.User, d.Fingerprint, d.Repo, d.File, d.Key, formatTime(d.DecidedAt))
+	return err
+}
+
+// DeleteImageDecision forgets the decision about app's service.
+func (s *Store) DeleteImageDecision(app, service string) error {
+	_, err := s.db.Exec(`DELETE FROM image_decisions WHERE app = ? AND service = ?`, app, service)
 	return err
 }
 

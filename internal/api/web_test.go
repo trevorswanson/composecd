@@ -45,6 +45,10 @@ func (s *webStub) App(name string) (controller.AppStatus, error) {
 			Candidate: "1.27.3", Pin: controller.PinComposecd, Digest: "sha256:eeeeeeeeeeeeeeee", Latest: "sha256:eeeeeeeeeeeeeeee", UpdateAvailable: true, Applicable: true},
 		{Service: "db", Image: "postgres:16@sha256:cccccccccccccccc", Ref: "docker.io/library/postgres:16", Pin: controller.PinGit,
 			Digest: "sha256:cccccccccccccccc", Latest: "sha256:dddddddddddddddd", UpdateAvailable: true, Note: "the digest is pinned in Git; change it there to update"},
+		{Service: "worker", Image: "ghcr.io/me/worker:2.0.0", Strategy: "semver", Tag: "2.0.0", Candidate: "2.1.0", WriteBack: "git", UpdateAvailable: true,
+			Held: "the tag is set in an encrypted file", File: "apps/media/values.yaml", Key: "worker.tag", Note: "held: the tag is set in an encrypted file"},
+		{Service: "proxy", Image: "caddy:2.8.0", Strategy: "semver", Tag: "2.8.0", Candidate: "2.8.4", WriteBack: "git", Diverged: true, Applicable: true,
+			Decision: "memory", DecidedBy: "admin", Note: "applied in memory by admin, diverging from Git, which says 2.8.0"},
 	}
 	return a, err
 }
@@ -99,15 +103,16 @@ func TestWebPagesAndActions(t *testing.T) {
 	// An operation's result stays to show its output; anything else is a toast
 	// that leaves a result already showing in place.
 	for path, form := range map[string][3]string{
-		"/ui/apps/media/sync":         {"", `<strong>Sync #7 running</strong>`, ""},
-		"/ui/apps/media/rollback":     {"revision=1", `sse-connect="/api/v1/apps/media/operations/8/log"`, ""},
-		"/ui/apps/media/pause":        {"", "Paused automated sync of media", "none"},
-		"/ui/apps/media/resume":       {"", "Resumed automated sync of media", "none"},
-		"/ui/apps/media/refresh":      {"", "Refreshed media", "none"},
-		"/ui/apps/media/check-images": {"", "Checked 2 images; docker.io/library/nginx:1 has a new digest", "none"},
-		"/ui/hosts/nas/maintenance":   {"enabled=true", "Started maintenance on nas", "none"},
-		"/ui/hosts/nas/rescan":        {"", "Rescanned nas", "none"},
-		"/ui/root/refresh":            {"", "Fetched the root repository at abc", "none"},
+		"/ui/apps/media/sync":           {"", `<strong>Sync #7 running</strong>`, ""},
+		"/ui/apps/media/rollback":       {"revision=1", `sse-connect="/api/v1/apps/media/operations/8/log"`, ""},
+		"/ui/apps/media/pause":          {"", "Paused automated sync of media", "none"},
+		"/ui/apps/media/resume":         {"", "Resumed automated sync of media", "none"},
+		"/ui/apps/media/refresh":        {"", "Refreshed media", "none"},
+		"/ui/apps/media/check-images":   {"", "Checked 2 images; docker.io/library/nginx:1 has a new digest", "none"},
+		"/ui/apps/media/image-decision": {"service=web&choice=memory", "Applying 1.27.3 to web in memory; it diverges from Git", "none"},
+		"/ui/hosts/nas/maintenance":     {"enabled=true", "Started maintenance on nas", "none"},
+		"/ui/hosts/nas/rescan":          {"", "Rescanned nas", "none"},
+		"/ui/root/refresh":              {"", "Fetched the root repository at abc", "none"},
 	} {
 		code, h, body := b.do("POST", path, form[0], map[string]string{"Content-Type": "application/x-www-form-urlencoded", auth.CSRFHeader: b.csrf, "HX-Request": "true"})
 		if code != 200 || !strings.Contains(body, form[1]) || h.Get("HX-Reswap") != form[2] {
@@ -122,9 +127,23 @@ func TestWebPagesAndActions(t *testing.T) {
 		t.Errorf("image checks not requested: %v", st.calls)
 	}
 	_, _, body = b.do("GET", "/apps/media?tab=images", "", nil)
-	if !strings.Contains(body, "sha256:bbbbbbbbbbbb") || !strings.Contains(body, `hx-post="/ui/apps/media/sync"`) || !strings.Contains(body, ">images<span class=\"count warn\">3</span>") ||
+	if !strings.Contains(body, "sha256:bbbbbbbbbbbb") || !strings.Contains(body, `hx-post="/ui/apps/media/sync"`) || !strings.Contains(body, ">images<span class=\"count warn\">4</span>") ||
 		!strings.Contains(body, "semver <code>~1.27</code>") || !strings.Contains(body, "1.27.1 → <strong>1.27.3</strong>") {
 		t.Errorf("images tab: %s", body)
+	}
+	// A held update names the file to fix and offers an admin the decision;
+	// one applied in memory says it diverges.
+	if !strings.Contains(body, "the tag is set in an encrypted file") || !strings.Contains(body, "set <code>worker.tag</code> in <code>apps/media/values.yaml</code>") ||
+		!strings.Contains(body, `name="choice" value="memory"`) || !strings.Contains(body, `name="choice" value="dismiss"`) || !strings.Contains(body, "Diverged from Git") {
+		t.Errorf("write-back on the images tab: %s", body)
+	}
+	if code, _, body := b.do("POST", "/ui/apps/media/image-decision", "service=web&choice=yolo", map[string]string{"Content-Type": "application/x-www-form-urlencoded",
+		auth.CSRFHeader: b.csrf, "HX-Request": "true"}); code != 400 || !strings.Contains(body, "invalid choice") {
+		t.Errorf("bad decision: %d %s", code, body)
+	}
+	if code, _, _ := b.do("POST", "/ui/apps/media/image-decision", "service=db&choice=dismiss", map[string]string{"Content-Type": "application/x-www-form-urlencoded",
+		auth.CSRFHeader: b.csrf, "HX-Request": "true"}); code != 409 {
+		t.Errorf("decision on an update that isn't held: %d", code)
 	}
 	if !slices.Contains(st.calls, "refresh all") {
 		t.Errorf("root refresh not requested: %v", st.calls)
@@ -148,6 +167,13 @@ func TestWebPagesAndActions(t *testing.T) {
 	}
 	if code, _, _ := g.do("POST", "/ui/apps/media/sync", "csrf="+g.csrf, map[string]string{"Content-Type": "application/x-www-form-urlencoded"}); code != 403 {
 		t.Fatalf("readonly action: %d", code)
+	}
+	// A readonly user sees a held update but can't decide it.
+	if _, _, body = g.do("GET", "/apps/media?tab=images", "", nil); !strings.Contains(body, "the tag is set in an encrypted file") || strings.Contains(body, "Apply in memory") {
+		t.Errorf("readonly images tab: %s", body)
+	}
+	if code, _, _ := g.do("POST", "/ui/apps/media/image-decision", "csrf="+g.csrf+"&service=web&choice=memory", map[string]string{"Content-Type": "application/x-www-form-urlencoded"}); code != 403 {
+		t.Errorf("readonly decision: %d", code)
 	}
 	_, _, body = g.do("GET", "/settings", "", nil)
 	if strings.Contains(body, "Create token") {

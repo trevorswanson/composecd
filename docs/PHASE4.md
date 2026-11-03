@@ -1,8 +1,8 @@
 # Phase 4 plan: image updater, ignoreDifferences, signatures, housekeeping, the agent
 
 **Status:** 4a delivered (composetpl v0.5.0: post-render hook and `sync-fail`), 4b delivered (semver and
-newest-build strategies), 4f delivered (host housekeeping). 4c (write-back) is in progress; 4d, 4e and 4g are
-not started.
+newest-build strategies), 4c delivered (write-back to Git with held updates), 4f delivered (host housekeeping).
+4d, 4e and 4g are not started.
 
 ## Context
 

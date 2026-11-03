@@ -50,8 +50,11 @@ type AppStatus struct {
 	Objects []Object `json:"objects,omitempty"`
 	// Images are the services' images with image updates on, and what their
 	// registries serve for their tags.
-	Images  []ImageStatus `json:"images,omitempty"`
-	Release *Release      `json:"release,omitempty"`
+	Images []ImageStatus `json:"images,omitempty"`
+	// Diverged is true while an image update an admin applied in memory makes
+	// the deployment differ from what Git renders.
+	Diverged bool     `json:"diverged,omitempty"`
+	Release  *Release `json:"release,omitempty"`
 	// DependsOn are the apps that must be Synced and Healthy first.
 	DependsOn []string `json:"dependsOn,omitempty"`
 	// Blocked says why automation is holding off: a sync window, a dependency,

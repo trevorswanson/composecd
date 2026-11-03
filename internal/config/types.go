@@ -275,7 +275,19 @@ type AppImageUpdates struct {
 	AllowTags string `yaml:"allowTags,omitempty" json:"allowTags,omitempty"`
 	// IgnoreTags are globs of tags never picked.
 	IgnoreTags []string `yaml:"ignoreTags,omitempty" json:"ignoreTags,omitempty"`
+	// WriteBack is where a picked tag is recorded: memory (default: applied
+	// at deploy time only) or git (committed to the values that set it).
+	WriteBack string `yaml:"writeBack,omitempty" json:"writeBack,omitempty"`
 }
+
+// Image update write-back modes.
+const (
+	WriteBackMemory = "memory"
+	WriteBackGit    = "git"
+)
+
+// WritesBack is true when picked tags are committed to Git.
+func (u *AppImageUpdates) WritesBack() bool { return u != nil && u.WriteBack == WriteBackGit }
 
 // Policy is the tag policy u sets (the digest strategy for nil).
 func (u *AppImageUpdates) Policy() images.Policy {
@@ -288,7 +300,8 @@ func (u *AppImageUpdates) Policy() images.Policy {
 // LabelImageUpdates is the compose service label ("true" or "false") that
 // overrides the Application's image update setting for one service. With the
 // suffixes .strategy, .constraint and .allow-tags it overrides the
-// Application's policy.
+// Application's policy; .tag-key names the values key (or Chart.appVersion)
+// write-back edits, when tracing can't find it.
 const LabelImageUpdates = "composecd.image-updates"
 
 // ImageUpdatesFor says whether image updates are on for app, given the

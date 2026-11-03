@@ -57,7 +57,35 @@ type ImageUpdates struct {
 	Schedule string `yaml:"schedule,omitempty"`
 	// TimeZone is an IANA zone for Schedule (default UTC).
 	TimeZone string `yaml:"timeZone,omitempty"`
+	// WriteBack is how composecd commits the tags it picks for Applications
+	// with syncPolicy.imageUpdates.writeBack: git.
+	WriteBack WriteBack `yaml:"writeBack,omitempty"`
 }
+
+// WriteBack configures the commits image updates write to Git.
+type WriteBack struct {
+	// Branch is the branch commits are pushed to (default: each source's
+	// targetRevision, which must then be a branch). Another branch than the
+	// deployed one leaves merging, and so deploying, to you.
+	Branch string `yaml:"branch,omitempty"`
+	// Author is who the commits are by (default composecd
+	// <composecd@localhost>).
+	Author CommitAuthor `yaml:"author,omitempty"`
+	// SigningKeyFile is an SSH private key the commits are signed with.
+	SigningKeyFile string `yaml:"signingKeyFile,omitempty"`
+}
+
+// CommitAuthor is a commit's author and committer.
+type CommitAuthor struct {
+	Name  string `yaml:"name,omitempty"`
+	Email string `yaml:"email,omitempty"`
+}
+
+// Defaults for imageUpdates.writeBack.
+const (
+	DefaultWriteBackName  = "composecd"
+	DefaultWriteBackEmail = "composecd@localhost"
+)
 
 // DefaultImageSchedule checks registries hourly.
 const DefaultImageSchedule = "0 * * * *"
@@ -94,7 +122,7 @@ type Notifier struct {
 	// TokenFile holds an ntfy access token or a Gotify application token.
 	TokenFile string `yaml:"tokenFile,omitempty"`
 	// Events to send (default: sync-failed, health-degraded, host-down, prune,
-	// host-disk).
+	// host-disk, write-back-blocked).
 	Events []string `yaml:"events,omitempty"`
 	// Applications are name globs; events about other apps aren't sent
 	// (default: every app). Host events are always sent.
@@ -114,13 +142,17 @@ const (
 	EventImageUpdate = "image-update"
 	// EventHostDisk is a host's disk filling past housekeeping.diskWarning.
 	EventHostDisk = "host-disk"
+	// EventWriteBackBlocked is an image update that can't be written to Git,
+	// held until an admin decides.
+	EventWriteBackBlocked = "write-back-blocked"
 )
 
 // AllEvents lists every notification event.
-var AllEvents = []string{EventSyncSucceeded, EventSyncFailed, EventHealed, EventPruned, EventHealthDegraded, EventOutOfSync, EventHostDown, EventImageUpdate, EventHostDisk}
+var AllEvents = []string{EventSyncSucceeded, EventSyncFailed, EventHealed, EventPruned, EventHealthDegraded, EventOutOfSync, EventHostDown, EventImageUpdate, EventHostDisk,
+	EventWriteBackBlocked}
 
 // DefaultEvents are sent when a notifier lists none.
-var DefaultEvents = []string{EventSyncFailed, EventHealthDegraded, EventHostDown, EventPruned, EventHostDisk}
+var DefaultEvents = []string{EventSyncFailed, EventHealthDegraded, EventHostDown, EventPruned, EventHostDisk, EventWriteBackBlocked}
 
 // Notifier types.
 var notifierTypes = map[string]bool{"webhook": true, "ntfy": true, "gotify": true, "discord": true, "slack": true}
@@ -230,6 +262,12 @@ func ParseBootstrap(data []byte) (*Bootstrap, error) {
 	if b.ImageUpdates.Schedule == "" {
 		b.ImageUpdates.Schedule = DefaultImageSchedule
 	}
+	if a := &b.ImageUpdates.WriteBack.Author; a.Name == "" {
+		a.Name = DefaultWriteBackName
+	}
+	if a := &b.ImageUpdates.WriteBack.Author; a.Email == "" {
+		a.Email = DefaultWriteBackEmail
+	}
 
 	var errs []error
 	if b.Root.RepoURL == "" {
@@ -251,6 +289,10 @@ func ParseBootstrap(data []byte) (*Bootstrap, error) {
 	}
 	if _, err := time.LoadLocation(b.ImageUpdates.TimeZone); err != nil {
 		errs = append(errs, fmt.Errorf("imageUpdates.timeZone %q: %w", b.ImageUpdates.TimeZone, err))
+	}
+	if br := b.ImageUpdates.WriteBack.Branch; br != "" && (strings.HasPrefix(br, "-") || strings.ContainsAny(br, " \t\n:~^?*[\\") ||
+		strings.Contains(br, "..") || br == "HEAD") {
+		errs = append(errs, fmt.Errorf("imageUpdates.writeBack.branch %q is not a valid branch name", br))
 	}
 	for i, r := range b.Repositories {
 		if r.URL == "" {

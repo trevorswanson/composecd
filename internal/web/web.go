@@ -64,6 +64,7 @@ type Controller interface {
 	Logs(context.Context, string, string, int, bool, io.Writer) error
 	Mask(string, string) string
 	LiveObject(ctx context.Context, app, id string, all, redact bool) (*controller.Live, error)
+	DecideImage(app, service, choice, user string) (*store.ImageDecision, error)
 }
 
 type Server struct {
@@ -756,7 +757,7 @@ func pageError(w http.ResponseWriter, err error) {
 	case errors.Is(err, controller.ErrNotFound), errors.Is(err, store.ErrNotFound):
 		code = 404
 	case errors.Is(err, controller.ErrBusy), errors.Is(err, controller.ErrBlocked), errors.Is(err, controller.ErrAdoptionBlocked), errors.Is(err, store.ErrExists),
-		errors.Is(err, controller.ErrHostBusy):
+		errors.Is(err, controller.ErrHostBusy), errors.Is(err, controller.ErrNotHeld):
 		code = 409
 	}
 	http.Error(w, err.Error(), code)
@@ -816,6 +817,19 @@ func (s *Server) Action(w http.ResponseWriter, r *http.Request) {
 			toast, late = imageToast(check), "Still waiting on image registries; this page updates when they answer"
 			if err == nil {
 				err = imageErr(check)
+			}
+		case "image-decision":
+			svc, choice := r.FormValue("service"), r.FormValue("choice")
+			if choice != store.DecisionMemory && choice != store.DecisionDismiss {
+				err = invalidRequest("invalid choice")
+				break
+			}
+			var d *store.ImageDecision
+			if d, err = s.C.DecideImage(name, svc, choice, p.Name); err == nil {
+				toast = fmt.Sprintf("Dismissed %s for %s until a newer tag", d.Candidate, svc)
+				if choice == store.DecisionMemory {
+					toast = fmt.Sprintf("Applying %s to %s in memory; it diverges from Git", d.Candidate, svc)
+				}
 			}
 		default:
 			err = controller.ErrNotFound
@@ -1001,6 +1015,15 @@ func imageToast(check controller.ImageCheck) string {
 		msg += "; new tag for " + check.Moved[0]
 	case n > 1:
 		msg += fmt.Sprintf("; %d new tags", n)
+	}
+	switch n := len(check.Written); {
+	case n == 1:
+		msg += "; committed " + check.Written[0] + " to Git"
+	case n > 1:
+		msg += fmt.Sprintf("; committed %d tags to Git", n)
+	}
+	if n := len(check.Held); n > 0 {
+		msg += fmt.Sprintf("; %s held: can't be written to Git", plural(n, "update"))
 	}
 	return msg
 }

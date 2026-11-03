@@ -132,6 +132,16 @@ type Controller struct {
 	hostOps map[string]int64
 	// buildTimes caches when images were built, by digest, for newest-build.
 	buildTimes sync.Map
+	// wbRun serializes image write-backs. wbMu guards wbStates, the last
+	// write-back of each app's services; wbQueued, the write-backs started
+	// in the background; and ownCommits, the commits they pushed.
+	wbRun      sync.Mutex
+	wbMu       sync.Mutex
+	wbStates   map[string]map[string]*wbState
+	wbQueued   map[string]bool
+	ownCommits map[string]bool
+	// beforePush, in tests, runs before write-back pushes to a repository.
+	beforePush func(url string)
 }
 
 // watcher streams one host's container events.
