@@ -29,6 +29,7 @@
 {{if .Host.Maintenance}}<div class="callout"><div><strong>In maintenance</strong><p>{{.Host.MaintenanceReason}}. Automatic syncs, self-heal and prune skip this host; manual operations still work.</p></div></div>{{end}}
 {{if .Host.Retired}}<div class="empty"><strong>Removed from Git</strong><span>This host is kept until its releases are pruned; discovery doesn't run on it.</span></div>
 {{else}}{{with $inv}}{{with .Error}}<div class="callout bad" role="alert"><div><strong>Discovery failed</strong><code>{{.}}</code></div></div>{{end}}
+{{template "host-graph" (pair $ .)}}
 {{if .Unmanaged}}<p class="summary">Running here, not in Git · {{template "scanned" .}}</p>
 <section class="card"><div class="card-head"><h2>composetpl releases<span class="count">{{len .Releases}}</span></h2><span class="muted">adopt one to export its Application YAML{{if $.Admin}}, or delete an orphaned one{{end}}</span></div>
 <div class="table-wrap"><table><thead><tr><th scope="col">Release</th><th scope="col">Status</th><th scope="col">Chart</th><th scope="col"><span class="sr-only">Adoption</span></th></tr></thead><tbody>
@@ -36,6 +37,13 @@
 <section class="card"><div class="card-head"><h2>Compose projects<span class="count">{{len .Projects}}</span></h2><span class="muted">convert one to a chart with <code>composetpl create</code></span></div>
 <div class="table-wrap"><table class="compact"><thead><tr><th scope="col">Project</th><th scope="col">Status</th><th scope="col">Config files</th></tr></thead><tbody>{{range .Projects}}<tr><td><strong>{{.Name}}</strong></td><td data-label="Status"><span class="pill plain c-{{state .Status}}">{{.Status}}</span></td><td data-label="Config files"><div class="cell">{{range .ConfigFiles}}<code>{{.}}</code>{{else}}<span class="muted">Unavailable</span>{{end}}</div></td></tr>{{else}}<tr><td colspan="3" class="empty-row">No plain Compose projects.</td></tr>{{end}}</tbody></table></div></section>
 {{else if not .Error}}<div class="empty"><strong>Scanning {{$.Name}}…</strong><span>Listing releases and Compose projects. This page fills in when the scan finishes.</span></div>{{end}}{{end}}{{end}}{{end}}
+
+{{define "host-graph"}}{{$d := index . 0}}{{$inv := index . 1}}{{with $inv.GraphError}}<div class="callout bad" role="alert"><div><strong>Couldn't list what runs here</strong><code>{{.}}</code></div></div>{{end}}{{with $inv.Graph}}<section class="graph-wrap card" aria-label="Everything on {{$d.Name}}">
+<div class="graph-tools"><label class="stack-pick">Highlight <select data-stack><option value="">All stacks</option>{{range .Stacks}}<option value="{{.ID}}">{{.Name}}</option>{{end}}</select></label><span class="muted">{{len .Nodes}} objects in {{len .Stacks}} stack{{if ne (len .Stacks) 1}}s{{end}}</span>{{template "zoom"}}</div>
+<div class="graph" tabindex="0" aria-label="Containers, networks and volumes on {{$d.Name}}"><ul class="graph-list">{{range .Nodes}}<li><span class="kind">{{.Kind}}</span> <strong>{{.Name}}</strong>{{with .Stack}} <span class="muted">{{.}}</span>{{end}}</li>{{end}}</ul></div>
+<div class="legend" aria-hidden="true">{{range $k := lines "network\nvolume\ncontainer"}}<span class="k-{{$k}}">{{$k}}</span>{{end}}<span class="k-stack">stack</span></div>
+<script type="application/json" class="graph-data">{{.}}</script>
+</section>{{end}}{{end}}
 
 {{define "windows"}}<div class="page-head"><div class="title"><div class="title-row"><h1>Sync windows</h1></div><p class="subtitle">Schedules that allow or deny automatic syncs, self-heal and prune.</p></div></div>
 <div class="card"><div class="table-wrap"><table class="wide"><thead><tr><th scope="col">Window</th><th scope="col">State</th><th scope="col">Schedule</th><th scope="col">Next change</th><th scope="col">Applications</th></tr></thead><tbody>{{range .Windows}}<tr>

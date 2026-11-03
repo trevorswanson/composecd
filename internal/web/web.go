@@ -24,6 +24,7 @@ import (
 	"github.com/trevorswanson/composecd/internal/auth"
 	"github.com/trevorswanson/composecd/internal/controller"
 	"github.com/trevorswanson/composecd/internal/health"
+	"github.com/trevorswanson/composecd/internal/hosts"
 	"github.com/trevorswanson/composecd/internal/images"
 	"github.com/trevorswanson/composecd/internal/store"
 	"github.com/trevorswanson/composecd/internal/windows"
@@ -42,6 +43,7 @@ type Controller interface {
 	FollowOperation(context.Context, int64, io.Writer) error
 	HostStatuses() []controller.HostStatus
 	Unmanaged(context.Context, string) (*controller.Unmanaged, error)
+	HostResources(context.Context, string) (*hosts.Resources, error)
 	Adopt(context.Context, string, string) (*controller.Adoption, error)
 	Root() controller.RootStatus
 	RefreshWait(context.Context) (controller.RootStatus, error)
@@ -68,14 +70,16 @@ type Server struct {
 	Version string
 
 	inventoryMu sync.Mutex
-	inventory   map[string]*inventory
-	// scanned is closed, and replaced, whenever a discovery scan starts or finishes.
+	inventory   map[string]*scan[controller.Unmanaged]
+	resources   map[string]*scan[hosts.Resources]
+	// scanned is closed, and replaced, whenever a host scan starts or finishes.
 	scanned chan struct{}
 }
 
-type inventory struct {
+// scan is a host's cached discovery or resource listing.
+type scan[T any] struct {
 	at  time.Time
-	out *controller.Unmanaged
+	out *T
 	err error
 	// running is closed when the scan in progress finishes; nil when idle.
 	running chan struct{}
@@ -87,6 +91,10 @@ type Inventory struct {
 	Error    string
 	At       time.Time
 	Scanning bool
+	// Graph is everything on the host, by stack, as graph.js draws it; nil
+	// until its resources are listed. GraphError is why they couldn't be.
+	Graph      *graph
+	GraphError string
 }
 
 // inventoryTTL is how old discovery may get before a view rescans it in the
@@ -101,28 +109,37 @@ var inventoryWait = 2 * time.Second
 // liveKey marks a render for an SSE update rather than a page load.
 type liveKey struct{}
 
-// inventories returns each host's cached discovery, starting a background scan
-// for any that is missing or stale (or every one, with force). A page load
+// cached returns each host's cached result in cache, starting a background run
+// for any that is missing or stale (or every one, with force). With wait, it
 // waits briefly on hosts with nothing cached so quick hosts render complete.
-func (s *Server) inventories(hosts []string, force, wait bool) map[string]Inventory {
+func cached[T any](s *Server, cache *map[string]*scan[T], hostNames []string, force, wait bool, run func(string) (*T, error)) map[string]scan[T] {
 	s.inventoryMu.Lock()
-	if s.inventory == nil {
-		s.inventory = map[string]*inventory{}
+	if *cache == nil {
+		*cache = map[string]*scan[T]{}
 	}
 	var pending []chan struct{}
-	for _, host := range hosts {
-		inv := s.inventory[host]
-		if inv == nil {
-			inv = &inventory{}
-			s.inventory[host] = inv
+	for _, host := range hostNames {
+		sc := (*cache)[host]
+		if sc == nil {
+			sc = &scan[T]{}
+			(*cache)[host] = sc
 		}
-		if inv.running == nil && (force || time.Since(inv.at) >= inventoryTTL) {
-			inv.running = make(chan struct{})
-			go s.scan(host, inv.running)
+		if sc.running == nil && (force || time.Since(sc.at) >= inventoryTTL) {
+			sc.running = make(chan struct{})
+			// The scan runs apart from any request, so closing the page that
+			// started it doesn't cancel it, and wakes live views when it ends.
+			go func(host string, done chan struct{}) {
+				out, err := run(host)
+				s.inventoryMu.Lock()
+				defer s.inventoryMu.Unlock()
+				(*cache)[host] = &scan[T]{at: time.Now(), out: out, err: err}
+				close(done)
+				s.wakeLocked()
+			}(host, sc.running)
 			s.wakeLocked()
 		}
-		if wait && inv.at.IsZero() && inv.running != nil {
-			pending = append(pending, inv.running)
+		if wait && sc.at.IsZero() && sc.running != nil {
+			pending = append(pending, sc.running)
 		}
 	}
 	s.inventoryMu.Unlock()
@@ -136,29 +153,36 @@ wait:
 			break wait
 		}
 	}
-	out := map[string]Inventory{}
+	out := map[string]scan[T]{}
 	s.inventoryMu.Lock()
 	defer s.inventoryMu.Unlock()
-	for _, host := range hosts {
-		inv := s.inventory[host]
-		view := Inventory{Unmanaged: inv.out, At: inv.at, Scanning: inv.running != nil}
-		if inv.err != nil {
-			view.Error = inv.err.Error()
+	for _, host := range hostNames {
+		out[host] = *(*cache)[host]
+	}
+	return out
+}
+
+// inventories returns each host's cached discovery; see cached.
+func (s *Server) inventories(hostNames []string, force, wait bool) map[string]Inventory {
+	got := cached(s, &s.inventory, hostNames, force, wait, func(host string) (*controller.Unmanaged, error) {
+		return s.C.Unmanaged(context.Background(), host)
+	})
+	out := map[string]Inventory{}
+	for host, sc := range got {
+		view := Inventory{Unmanaged: sc.out, At: sc.at, Scanning: sc.running != nil}
+		if sc.err != nil {
+			view.Error = sc.err.Error()
 		}
 		out[host] = view
 	}
 	return out
 }
 
-// scan runs discovery apart from any request, so closing the page that
-// started it doesn't cancel it, and wakes live views when it finishes.
-func (s *Server) scan(host string, done chan struct{}) {
-	out, err := s.C.Unmanaged(context.Background(), host)
-	s.inventoryMu.Lock()
-	defer s.inventoryMu.Unlock()
-	s.inventory[host] = &inventory{at: time.Now(), out: out, err: err}
-	close(done)
-	s.wakeLocked()
+// hostResources returns each host's cached resource listing; see cached.
+func (s *Server) hostResources(hostNames []string, force, wait bool) map[string]scan[hosts.Resources] {
+	return cached(s, &s.resources, hostNames, force, wait, func(host string) (*hosts.Resources, error) {
+		return s.C.HostResources(context.Background(), host)
+	})
 }
 
 // wakeLocked tells live host views that a scan started or finished.
@@ -169,7 +193,7 @@ func (s *Server) wakeLocked() {
 	s.scanned = make(chan struct{})
 }
 
-// scans returns a channel closed when a discovery scan next starts or finishes.
+// scans returns a channel closed when a host scan next starts or finishes.
 func (s *Server) scans() <-chan struct{} {
 	s.inventoryMu.Lock()
 	defer s.inventoryMu.Unlock()
@@ -195,7 +219,9 @@ type Data struct {
 	Users                                                      []*store.User
 	Tokens                                                     []*store.Token
 	Inventory                                                  map[string]Inventory
-	Adoption                                                   *controller.Adoption
+	// Graph is the graph tab's: the app's objects and their neighbors.
+	Graph    graph
+	Adoption *controller.Adoption
 	// Op is the operation an action started, whose output the result follows.
 	Op *store.Operation
 	// Toast is an action's outcome, shown briefly; Message titles a result
@@ -270,8 +296,7 @@ var templates = template.Must(template.New("web").Funcs(template.FuncMap{
 		}
 		return ""
 	},
-	"diffstat":  diffstat,
-	"graphData": graphData,
+	"diffstat": diffstat,
 	// objectCount counts objects in sync state.
 	"objectCount": func(objs []controller.Object, state string) int {
 		n := 0
@@ -523,7 +548,12 @@ func (s *Server) data(r *http.Request, p *auth.Principal) (*Data, error) {
 		}
 		d.App = a
 		switch d.Tab {
-		case "graph", "containers", "images":
+		case "graph":
+			// Neighbors come from the host's cached resources; a scan's
+			// result arrives over SSE.
+			res := s.hostResources([]string{a.Host}, false, false)[a.Host]
+			d.Graph = appGraph(a, res.out, s.C.Apps())
+		case "containers", "images":
 		case "diff":
 			d.Mode = r.URL.Query().Get("mode")
 			if d.Mode == "objects" {
@@ -570,7 +600,23 @@ func (s *Server) data(r *http.Request, p *auth.Principal) (*Data, error) {
 		if d.Page == "host" && len(d.Hosts) == 0 {
 			return nil, fmt.Errorf("host %q: %w", d.Name, controller.ErrNotFound)
 		}
+		if d.Page == "host" {
+			// Start listing resources first, so both scans wait together.
+			s.hostResources(scan, false, false)
+		}
 		d.Inventory = s.inventories(scan, false, !live)
+		if d.Page == "host" && len(scan) == 1 {
+			res := s.hostResources(scan, false, !live)[d.Name]
+			inv := d.Inventory[d.Name]
+			if res.out != nil {
+				g := hostGraph(d.Name, res.out, s.C.Apps())
+				inv.Graph = &g
+			}
+			if res.err != nil {
+				inv.GraphError = res.err.Error()
+			}
+			d.Inventory[d.Name] = inv
+		}
 	case "windows":
 		d.Windows = s.C.Windows()
 	case "operations":
@@ -881,6 +927,8 @@ func (s *Server) rescan(ctx context.Context, host string) error {
 		return fmt.Errorf("host %q: %w", host, controller.ErrNotFound)
 	}
 	s.inventories([]string{host}, true, false)
+	// The host graph's resources refresh alongside; they report over SSE.
+	s.hostResources([]string{host}, true, false)
 	s.inventoryMu.Lock()
 	running := s.inventory[host].running
 	s.inventoryMu.Unlock()
@@ -1032,35 +1080,6 @@ func (s *Server) objectDiffs(ctx context.Context, a controller.AppStatus, all, r
 	}
 	sort.SliceStable(out, func(i, j int) bool { return order[out[i].Object.Sync] < order[out[j].Object.Sync] })
 	return out
-}
-
-// graphNode is an object as graph.js draws it, without its YAML.
-type graphNode struct {
-	ID        string   `json:"id"`
-	Kind      string   `json:"kind"`
-	Name      string   `json:"name"`
-	Sub       string   `json:"sub,omitempty"`
-	Parent    string   `json:"parent,omitempty"`
-	Sync      string   `json:"sync"`
-	Health    string   `json:"health,omitempty"`
-	Message   string   `json:"message,omitempty"`
-	Uses      []string `json:"uses,omitempty"`
-	DependsOn []string `json:"dependsOn,omitempty"`
-}
-
-// graphData is what graph.js lays out: the app's objects and the URL their
-// dialogs start with.
-func graphData(a controller.AppStatus) interface{} {
-	nodes := make([]graphNode, 0, len(a.Objects))
-	for _, o := range a.Objects {
-		n := graphNode{ID: o.ID, Kind: o.Kind, Name: o.Name, Sub: o.Image, Parent: o.Parent, Sync: string(o.Sync),
-			Health: string(o.Health), Message: o.Message, Uses: o.Uses, DependsOn: o.DependsOn}
-		if n.Sub == "" && o.Kind != controller.KindContainer && o.LiveName != "" {
-			n.Sub = o.LiveName
-		}
-		nodes = append(nodes, n)
-	}
-	return map[string]interface{}{"app": a.Name, "base": "/ui/apps/" + url.PathEscape(a.Name) + "/objects/", "nodes": nodes}
 }
 
 // invalidRequest identifies client input errors separately from server failures.

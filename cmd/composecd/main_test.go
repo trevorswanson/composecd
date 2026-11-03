@@ -341,6 +341,10 @@ func (b *fakeBackend) Logs(context.Context, *hosts.Host, string, int, bool, io.W
 	return nil
 }
 
+func (b *fakeBackend) Resources(context.Context, *hosts.Host) (*hosts.Resources, error) {
+	return &hosts.Resources{}, nil
+}
+
 func TestValidateRejectsPlainSOPSFile(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "values.sops.yaml"), []byte("password: accidentally-plain\n"), 0o644); err != nil {

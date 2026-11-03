@@ -37,6 +37,8 @@ type fakeBackend struct {
 	stores   int // storage drivers built
 	// wrap, when set, wraps every host's runner.
 	wrap func(compose.Runner) compose.Runner
+	// resources is what Resources lists on every host.
+	resources *hosts.Resources
 }
 
 func (b *fakeBackend) Watch(ctx context.Context, h *hosts.Host, on events.Handlers) error {
@@ -430,6 +432,15 @@ func contains(list []string, s string) bool {
 
 func (b *fakeBackend) Logs(context.Context, *hosts.Host, string, int, bool, io.Writer) error {
 	return nil
+}
+
+func (b *fakeBackend) Resources(context.Context, *hosts.Host) (*hosts.Resources, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.resources == nil {
+		return &hosts.Resources{}, nil
+	}
+	return b.resources, nil
 }
 
 func TestUndeployedDiff(t *testing.T) {

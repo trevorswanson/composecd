@@ -8,6 +8,7 @@ import (
 
 	"github.com/trevorswanson/composecd/internal/auth"
 	"github.com/trevorswanson/composecd/internal/controller"
+	"github.com/trevorswanson/composecd/internal/hosts"
 )
 
 func (s *stub) Unmanaged(_ context.Context, host string) (*controller.Unmanaged, error) {
@@ -16,6 +17,16 @@ func (s *stub) Unmanaged(_ context.Context, host string) (*controller.Unmanaged,
 	}
 	return &controller.Unmanaged{Releases: []controller.UnmanagedRelease{{Name: "external", Revision: 1, ChartRef: "oci://registry.lan/web:1"}}, Projects: []controller.UnmanagedProject{{Name: "plain", ConfigFiles: []string{"/srv/<script>/compose.yaml"}, Hint: "Convert with composetpl create"}}}, nil
 }
+func (s *stub) HostResources(_ context.Context, host string) (*hosts.Resources, error) {
+	if host != "nas" {
+		return nil, controller.ErrNotFound
+	}
+	return &hosts.Resources{
+		Containers: []hosts.ResourceContainer{{Name: "traefik-proxy-1", Image: "traefik:3", State: "running", Project: "traefik", Networks: []string{"proxy"}}},
+		Networks:   []hosts.ResourceNetwork{{Name: "proxy", Driver: "bridge", Project: "traefik"}},
+	}, nil
+}
+
 func (s *stub) Adopt(_ context.Context, host, name string) (*controller.Adoption, error) {
 	if name == "blocked" {
 		return nil, controller.ErrAdoptionBlocked

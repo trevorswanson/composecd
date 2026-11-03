@@ -68,9 +68,10 @@ func (s *Server) Events(w http.ResponseWriter, r *http.Request) {
 		}
 		view.SetPathValue("name", name)
 	}
-	// Host pages also refresh when a background discovery scan starts or finishes.
+	// Host pages, and app graphs showing what else is on the host, also
+	// refresh when a background host scan starts or finishes.
 	var scans <-chan struct{}
-	if strings.HasPrefix(page, "/hosts") {
+	if strings.HasPrefix(page, "/hosts") || strings.HasPrefix(page, "/apps/") {
 		scans = s.scans()
 	}
 	changes, cancel := s.C.Subscribe()

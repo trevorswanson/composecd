@@ -436,7 +436,8 @@ binary; there is no CDN or Node build step.
   commits) and last operation, then tabs: a **graph** of its services, networks, volumes, configs, secrets and
   containers, each marked Synced, OutOfSync, Missing or Prune with its health (click one for its details, its
   live `docker inspect` state with engine bookkeeping folded away, a live-to-desired diff, and its desired and
-  deployed YAML); containers and live log tails; diffs, either of the compose file against the deployed
+  deployed YAML), and, behind **Connected**, the other stacks' containers on its networks and volumes, drawn
+  faint until pointed at (a `traefik_proxy` network shows what else joins it); containers and live log tails; diffs, either of the compose file against the deployed
   release (side by side, compact or every resource in full) or of each object's live state against Git; release history with rollback; operations with
   their output; and, with image updates on, the services' **images**: who pins each digest, the deployed and
   latest digests, and whether an update can be synced or is pinned in Git. **Details** shows the source,
@@ -445,6 +446,8 @@ binary; there is no CDN or Node build step.
 - **ApplicationSets** (`/applicationsets`): generated apps, counts, expansion/validation errors and each
   rolling sync's progress, step by step.
 - **Hosts** (`/hosts`): connectivity, Docker/Compose versions, orphaned releases and admin maintenance toggles.
+  Each host's page draws a graph of every container, network and named volume on it, boxed by the stack
+  (Application or Compose project) that created it, with **Highlight** to pick out one stack and what it shares.
   Lists unmanaged composetpl releases and plain Compose projects with config paths. Admins can use **Adopt** to preview Application YAML, or **Delete** an orphaned release.
 - **Sync windows** (`/windows`): open/closed state, next change, and matching applications.
 - **Operations** (`/operations`): the latest 50 operations across applications, including who acted and output.
