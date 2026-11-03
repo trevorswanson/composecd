@@ -21,10 +21,10 @@ func pushable(t *testing.T) *testRepo {
 func TestCommitFiles(t *testing.T) {
 	repo := pushable(t)
 	repo.commit(map[string]string{"charts/web/values.yaml": "tag: 1.27.1\n", "run.sh": "#!/bin/sh\n"})
-	if err := os.Chmod(filepath.Join(repo.dir, "run.sh"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	repo.run("add", "run.sh")
+	// Set the mode in the index, and ignore the work tree's, as on Windows,
+	// which has no executable bit to chmod.
+	repo.run("config", "core.fileMode", "false")
+	repo.run("update-index", "--chmod=+x", "run.sh")
 	repo.run("commit", "--quiet", "-m", "exec")
 	ctx := context.Background()
 	c := New(t.TempDir(), nil)
