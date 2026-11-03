@@ -41,6 +41,8 @@ func (s *webStub) App(name string) (controller.AppStatus, error) {
 	a.Images = []controller.ImageStatus{
 		{Service: "web", Image: "nginx:1", Ref: "docker.io/library/nginx:1", Pin: controller.PinComposecd, Digest: "sha256:bbbbbbbbbbbbbbbb",
 			Deployed: "sha256:aaaaaaaaaaaaaaaa", Latest: "sha256:bbbbbbbbbbbbbbbb", UpdateAvailable: true, Applicable: true},
+		{Service: "app", Image: "ghcr.io/me/app:1.27.1", Ref: "ghcr.io/me/app:1.27.3", Strategy: "semver", Constraint: "~1.27", Tag: "1.27.1",
+			Candidate: "1.27.3", Pin: controller.PinComposecd, Digest: "sha256:eeeeeeeeeeeeeeee", Latest: "sha256:eeeeeeeeeeeeeeee", UpdateAvailable: true, Applicable: true},
 		{Service: "db", Image: "postgres:16@sha256:cccccccccccccccc", Ref: "docker.io/library/postgres:16", Pin: controller.PinGit,
 			Digest: "sha256:cccccccccccccccc", Latest: "sha256:dddddddddddddddd", UpdateAvailable: true, Note: "the digest is pinned in Git; change it there to update"},
 	}
@@ -120,7 +122,8 @@ func TestWebPagesAndActions(t *testing.T) {
 		t.Errorf("image checks not requested: %v", st.calls)
 	}
 	_, _, body = b.do("GET", "/apps/media?tab=images", "", nil)
-	if !strings.Contains(body, "sha256:bbbbbbbbbbbb") || !strings.Contains(body, `hx-post="/ui/apps/media/sync"`) || !strings.Contains(body, ">images<span class=\"count warn\">2</span>") {
+	if !strings.Contains(body, "sha256:bbbbbbbbbbbb") || !strings.Contains(body, `hx-post="/ui/apps/media/sync"`) || !strings.Contains(body, ">images<span class=\"count warn\">3</span>") ||
+		!strings.Contains(body, "semver <code>~1.27</code>") || !strings.Contains(body, "1.27.1 → <strong>1.27.3</strong>") {
 		t.Errorf("images tab: %s", body)
 	}
 	if !slices.Contains(st.calls, "refresh all") {
@@ -559,6 +562,53 @@ func TestApplicationSetsPageShowsRollout(t *testing.T) {
 		`<span class="pill outofsync">Pending</span> unbound-dns2`, "&lt;boom&gt;", "Not in any step", "/apps/unbound-lab"} {
 		if code != 200 || !strings.Contains(body, want) {
 			t.Errorf("%d missing %s: %s", code, want, body)
+		}
+	}
+}
+
+func TestWebHostHousekeeping(t *testing.T) {
+	a := newAuthn(t, "secret")
+	if err := a.AddUser("guest", auth.RoleReadonly, "guest password!"); err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(New(&stub{}, Options{Auth: a}))
+	defer srv.Close()
+	admin := newBrowser(t, srv)
+	admin.login("", "secret")
+	code, _, body := admin.do("GET", "/hosts/nas", "", nil)
+	for _, want := range []string{"nas is running out of disk", "the disk is 87% full (warning at 85%)", "87% used", "13B free of 100B",
+		"<td>images</td>", "2.0GB", `hx-post="/ui/hosts/nas/prune"`, `value="builder-prune"`, `<a href="/hosts/nas">nas</a> · image-prune`,
+		"Total reclaimed space: 1.2GB"} {
+		if code != 200 || !strings.Contains(body, want) {
+			t.Errorf("host page lacks %q: %d", want, code)
+		}
+	}
+	form := map[string]string{"Content-Type": "application/x-www-form-urlencoded", auth.CSRFHeader: admin.csrf, "HX-Request": "true"}
+	code, _, body = admin.do("POST", "/ui/hosts/nas/prune", "kind=image-prune", form)
+	if code != 200 || !strings.Contains(body, "<strong>Image prune #10 running</strong>") || !strings.Contains(body, `sse-connect="/api/v1/hosts/nas/operations/10/log"`) {
+		t.Errorf("prune: %d %s", code, body)
+	}
+	if code, _, _ := admin.do("POST", "/ui/hosts/nas/prune", "kind=volume-prune", form); code != 400 {
+		t.Errorf("bad kind: %d", code)
+	}
+
+	guest := newBrowser(t, srv)
+	guest.login("guest", "guest password!")
+	if code, _, body := guest.do("GET", "/hosts/nas", "", nil); code != 200 || strings.Contains(body, "Prune images") || !strings.Contains(body, "87% used") {
+		t.Errorf("readonly host page: %d", code)
+	}
+	if code, _, _ := guest.do("POST", "/ui/hosts/nas/prune", "kind=image-prune", map[string]string{"Content-Type": "application/x-www-form-urlencoded",
+		auth.CSRFHeader: guest.csrf, "HX-Request": "true"}); code != 403 {
+		t.Errorf("readonly prune: %d", code)
+	}
+
+	// A host operation's output follows under the host, not an app.
+	for path, want := range map[string]int{
+		"/api/v1/hosts/nas/operations/10/log": 200, "/api/v1/hosts/pi/operations/10/log": 404,
+		"/api/v1/apps/media/operations/10/log": 404, "/api/v1/hosts/nas/operations/7/log": 404,
+	} {
+		if code, body := do(t, srv, "GET", path, "secret", ""); code != want || (want == 200 && !strings.Contains(body, "Total reclaimed space")) {
+			t.Errorf("%s: %d %s", path, code, body)
 		}
 	}
 }

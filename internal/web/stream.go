@@ -232,7 +232,11 @@ func (s *Server) OperationLog(w http.ResponseWriter, r *http.Request) {
 		pageError(w, err)
 		return
 	}
-	if op.App != r.PathValue("name") {
+	owner := op.App
+	if strings.HasPrefix(r.URL.Path, "/api/v1/hosts/") {
+		owner = op.Host
+	}
+	if owner == "" || owner != r.PathValue("name") {
 		pageError(w, fmt.Errorf("operation %d: %w", id, controller.ErrNotFound))
 		return
 	}

@@ -94,6 +94,9 @@ func (c *Controller) beginSelfUpdate(ctx context.Context, self string) error {
 				break
 			}
 		}
+		for host := range c.hostOps {
+			busy = "host " + host
+		}
 		c.mu.RUnlock()
 		if busy == "" {
 			return nil
@@ -164,7 +167,7 @@ func (c *Controller) runSelfSync(ctx context.Context, p *plan, op *store.Operati
 		cfg.Registry = c.Registry
 		u := c.newUpgrade(cfg, p, op)
 		op.SourceRevision = p.prep.Revision
-		rel, err := c.prepareUpgrade(ctx, cfg, u, p)
+		rel, err := u.Prepare(ctx, name, p.prep.ChartRef, p.prep.Values)
 		if err != nil {
 			op.Log = log.String()
 			if rel != nil {

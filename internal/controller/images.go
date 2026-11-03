@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"sort"
@@ -10,12 +11,11 @@ import (
 	"time"
 
 	"github.com/robfig/cron/v3"
-	"github.com/trevorswanson/composetpl/pkg/action"
-	"github.com/trevorswanson/composetpl/pkg/compose"
 	"github.com/trevorswanson/composetpl/pkg/release"
 
 	"github.com/trevorswanson/composecd/internal/config"
 	"github.com/trevorswanson/composecd/internal/images"
+	"github.com/trevorswanson/composecd/internal/store"
 )
 
 // Image pins.
@@ -33,6 +33,9 @@ const gitPinNote = "the digest is pinned in Git; change it there to update"
 var (
 	// imageTimeout bounds one registry check.
 	imageTimeout = 30 * time.Second
+	// tagListTimeout bounds listing a repository's tags, which takes a request
+	// per page.
+	tagListTimeout = 2 * time.Minute
 	// imageConcurrency bounds the registry checks run at once.
 	imageConcurrency = 4
 )
@@ -42,8 +45,18 @@ type ImageStatus struct {
 	Service string `json:"service"`
 	// Image is the image as Git renders it.
 	Image string `json:"image"`
-	// Ref is the tag checked, as registry/repository:tag.
+	// Ref is the tag checked, as registry/repository:tag: the Candidate's, if
+	// the strategy picked one.
 	Ref string `json:"ref,omitempty"`
+	// Strategy is how the tag may move: digest, semver or newest-build.
+	Strategy string `json:"strategy,omitempty"`
+	// Constraint is the semver constraint the strategy applies.
+	Constraint string `json:"constraint,omitempty"`
+	// Tag is the tag deployed (Git's, before the first deployment).
+	Tag string `json:"tag,omitempty"`
+	// Candidate is the newer tag the strategy picked over Git's, which a sync
+	// deploys.
+	Candidate string `json:"candidate,omitempty"`
 	// Pin is who pinned the desired digest: composecd (a moving tag) or git.
 	Pin string `json:"pin,omitempty"`
 	// Digest is the digest the desired manifest pins.
@@ -53,7 +66,10 @@ type ImageStatus struct {
 	// Latest is the digest the registry last served for the tag.
 	Latest    string    `json:"latest,omitempty"`
 	CheckedAt time.Time `json:"checkedAt,omitzero"`
-	// UpdateAvailable is true when the deployed image is behind its tag.
+	// TagsCheckedAt is when the strategy last listed the repository's tags.
+	TagsCheckedAt time.Time `json:"tagsCheckedAt,omitzero"`
+	// UpdateAvailable is true when the deployed image is behind its tag, or
+	// the strategy picked a tag other than the deployed one.
 	UpdateAvailable bool `json:"updateAvailable,omitempty"`
 	// Applicable is true when a sync deploys the update; it is false for a
 	// digest pinned in Git, which only Git can change.
@@ -73,14 +89,17 @@ type pinResult struct {
 }
 
 // pinImages pins the moving tags of rendered, app's manifest as Git renders
-// it, to the digests registries last served for them. A tag never seen before
-// is resolved now; otherwise only CheckImages asks registries. A tag that
-// can't be resolved keeps the digest the deployed release pins, so an
-// unreachable registry never shows as a change.
+// it, to the digests registries last served for them, and moves services
+// whose strategy picked a newer tag to it. A tag never seen before, or a
+// service whose strategy never picked, is checked now; otherwise only
+// CheckImages asks registries. A tag that can't be resolved keeps the digest
+// the deployed release pins, so an unreachable registry never shows as a
+// change.
 func (c *Controller) pinImages(ctx context.Context, app *config.Application, rendered string, deployed *release.Release) pinResult {
 	res := pinResult{manifest: rendered}
 	name := app.Metadata.Name
-	svcs, err := images.Services(rendered, config.ImageUpdatesFor(c.Boot.ImageUpdates.Enabled, app), config.LabelImageUpdates)
+	svcs, err := images.Services(rendered, config.ImageUpdatesFor(c.Boot.ImageUpdates.Enabled, app),
+		app.Spec.SyncPolicy.ImageUpdates.Policy(), config.LabelImageUpdates)
 	if err != nil {
 		res.warnings = append(res.warnings, "reading images: "+err.Error())
 		return res
@@ -89,6 +108,89 @@ func (c *Controller) pinImages(ctx context.Context, app *config.Application, ren
 	if !slices.ContainsFunc(svcs, func(s images.Service) bool { return s.Enabled }) {
 		return res
 	}
+
+	// Strategies that never picked for the image Git renders now pick first.
+	picks, err := c.Store.ImageTags(name)
+	if err != nil {
+		res.warnings = append(res.warnings, "reading image tags: "+err.Error())
+		return res
+	}
+	var unpicked []tagJob
+	for _, s := range svcs {
+		if p, ok := picks[s.Name]; s.MovesTags() && (!ok || !pickedFor(p, s)) {
+			unpicked = append(unpicked, tagJob{app: name, svc: s})
+		}
+	}
+	if len(unpicked) > 0 {
+		choices := c.chooseTags(ctx, unpicked)
+		c.resolveImages(ctx, chosenRefs(choices))
+		c.recordTags(choices)
+		if picks, err = c.Store.ImageTags(name); err != nil {
+			res.warnings = append(res.warnings, "reading image tags: "+err.Error())
+			return res
+		}
+	}
+	// The images the deployed release runs, by service.
+	var deployedImages map[string]string
+	if deployed != nil {
+		deployedImages = map[string]string{}
+		if ds, err := images.Services(deployed.Manifest, true, images.Policy{}, ""); err == nil {
+			for _, d := range ds {
+				deployedImages[d.Name] = d.Image
+			}
+		}
+	}
+	// deployedDigest is the digest the deployed release pins for want, the
+	// image s deploys.
+	deployedDigest := func(s images.Service, want string) string {
+		img := deployedImages[s.Name]
+		if after, ok := strings.CutPrefix(img, want+"@"); ok && !s.Pinned {
+			return after
+		}
+		if s.Pinned && img == s.Image {
+			return s.Ref.Digest
+		}
+		return ""
+	}
+	// deployedTag is the tag the deployed release runs for s's repository.
+	deployedTag := func(s images.Service) string {
+		r, err := images.Parse(deployedImages[s.Name])
+		if err != nil || r.Registry != s.Ref.Registry || r.Repository != s.Ref.Repository {
+			return ""
+		}
+		return r.Tag
+	}
+
+	// keepsDeployed is true when s's strategy has no pick for the image and
+	// policy Git has because the registry couldn't be asked, and the deployed
+	// release runs a newer tag the policy still accepts: an outage must never
+	// deploy an older image.
+	keepsDeployed := func(s images.Service) bool {
+		p, ok := picks[s.Name]
+		if !s.MovesTags() || ok && pickedFor(p, s) && p.Tag != "" {
+			return false
+		}
+		t := deployedTag(s)
+		return t != "" && t != s.Ref.Tag && s.Policy.Accepts(s.Ref.Tag, t) &&
+			deployedDigest(s, images.WithTag(s.Image, t)) != ""
+	}
+	// tagOf is the tag a service deploys: what its strategy picked, the
+	// deployed one it keeps, or Git's.
+	tagOf := func(s images.Service) string {
+		if p, ok := picks[s.Name]; s.MovesTags() && ok && pickedFor(p, s) && p.Tag != "" {
+			return p.Tag
+		}
+		if keepsDeployed(s) {
+			return deployedTag(s)
+		}
+		return s.Ref.Tag
+	}
+	refOf := func(s images.Service) images.Ref {
+		r := s.Ref
+		r.Tag = tagOf(s)
+		return r
+	}
+
 	cache, err := c.Store.ImageDigests()
 	if err != nil {
 		res.warnings = append(res.warnings, "reading image digests: "+err.Error())
@@ -96,8 +198,8 @@ func (c *Controller) pinImages(ctx context.Context, app *config.Application, ren
 	}
 	var unseen []images.Ref
 	for _, s := range svcs {
-		if _, ok := cache[s.Ref.Name()]; s.Checked() && !ok {
-			unseen = append(unseen, s.Ref)
+		if _, ok := cache[refOf(s).Name()]; s.Checked() && !ok && !keepsDeployed(s) {
+			unseen = append(unseen, refOf(s))
 		}
 	}
 	if len(unseen) > 0 {
@@ -108,43 +210,42 @@ func (c *Controller) pinImages(ctx context.Context, app *config.Application, ren
 		}
 	}
 
-	// What the deployed release pins, by service, for the image Git renders.
-	var deployedPins map[string]string
-	if deployed != nil {
-		deployedPins = map[string]string{}
-		if ds, err := images.Services(deployed.Manifest, true, ""); err == nil {
-			for _, d := range ds {
-				if d.Pinned {
-					deployedPins[d.Name] = d.Image
-				}
-			}
-		}
-	}
-	deployedDigest := func(s images.Service) string {
-		img := deployedPins[s.Name]
-		if after, ok := strings.CutPrefix(img, s.Image+"@"); ok && !s.Pinned {
-			return after
-		}
-		if s.Pinned && img == s.Image {
-			return s.Ref.Digest
-		}
-		return ""
-	}
-
 	res.pins = map[string]images.Pin{}
 	for _, s := range svcs {
 		if !s.Enabled {
 			continue
 		}
-		st := ImageStatus{Service: s.Name, Image: s.Image, Note: s.Skip}
+		st := ImageStatus{Service: s.Name, Image: s.Image, Note: s.Skip, Strategy: s.Policy.Name()}
 		if s.Skip != "" {
 			res.statuses = append(res.statuses, st)
 			continue
 		}
-		entry := cache[s.Ref.Name()]
-		st.Deployed, st.Error = deployedDigest(s), entry.Error
+		tag, pick := tagOf(s), picks[s.Name]
+		want := s.Image
+		if tag != s.Ref.Tag {
+			want, st.Candidate = images.WithTag(s.Image, tag), tag
+		}
+		if s.Policy.Strategy == images.StrategySemver {
+			st.Constraint, _ = s.Policy.ConstraintFor(s.Ref.Tag)
+		}
+		entry := cache[refOf(s).Name()]
+		st.Deployed, st.Error = deployedDigest(s, want), entry.Error
+		st.Tag = s.Ref.Tag
+		if t := deployedTag(s); t != "" {
+			st.Tag = t
+		}
 		if s.Ref.Tag != "" {
-			st.Ref, st.Latest, st.CheckedAt = s.Ref.Name(), entry.Digest, entry.CheckedAt
+			st.Ref, st.Latest, st.CheckedAt = refOf(s).Name(), entry.Digest, entry.CheckedAt
+		}
+		if s.MovesTags() {
+			st.TagsCheckedAt = pick.CheckedAt
+			if pick.Error != "" {
+				st.Error = pick.Error
+			}
+		}
+		st.Note = s.Warning
+		if s.MovesTags() && pick.Truncated {
+			st.Note = "the registry has more tags than composecd reads; a newer one may be missed"
 		}
 		if s.Pinned {
 			st.Pin, st.Digest = PinGit, s.Ref.Digest
@@ -155,6 +256,12 @@ func (c *Controller) pinImages(ctx context.Context, app *config.Application, ren
 			continue
 		}
 		st.Digest = entry.Digest
+		if keepsDeployed(s) {
+			st.Digest, st.Note = st.Deployed, "registry unreachable; keeping the deployed "+tag
+		}
+		if st.Digest == "" && st.Candidate != "" {
+			st.Digest = pick.Digest
+		}
 		if st.Digest == "" {
 			st.Digest = st.Deployed
 		}
@@ -164,36 +271,33 @@ func (c *Controller) pinImages(ctx context.Context, app *config.Application, ren
 			continue
 		}
 		st.Pin, st.Applicable = PinComposecd, true
-		res.pins[s.Name] = images.Pin{Image: s.Image, Digest: st.Digest}
-		if deployed != nil && st.Deployed != st.Digest {
-			st.UpdateAvailable = st.Deployed != ""
-			from := "unpinned"
-			if st.Deployed != "" {
-				from = images.Short(st.Deployed)
+		res.pins[s.Name] = images.Pin{Image: s.Image, Tag: st.Candidate, Digest: st.Digest}
+		if deployed != nil {
+			from := deployedTag(s)
+			switch {
+			case st.Candidate != "" && from != st.Candidate:
+				// The strategy moves the tag.
+				if from == "" {
+					from = s.Ref.Tag
+				}
+				st.UpdateAvailable = true
+				res.reasons = append(res.reasons, fmt.Sprintf("image %s (%s): %s → %s", images.Repo(s.Image), s.Name, from, st.Candidate))
+			case st.Deployed != st.Digest:
+				st.UpdateAvailable = st.Deployed != ""
+				from := "unpinned"
+				if st.Deployed != "" {
+					from = images.Short(st.Deployed)
+				}
+				res.reasons = append(res.reasons, fmt.Sprintf("image %s (%s): %s → %s", want, s.Name, from, images.Short(st.Digest)))
 			}
-			res.reasons = append(res.reasons, fmt.Sprintf("image %s (%s): %s → %s", s.Image, s.Name, from, images.Short(st.Digest)))
 		}
 		res.statuses = append(res.statuses, st)
 	}
-	if res.manifest, err = images.PinManifest(rendered, res.pins); err != nil {
+	if res.manifest, err = images.Override(rendered, res.pins); err != nil {
 		res.warnings = append(res.warnings, "pinning images: "+err.Error())
 		res.manifest, res.pins, res.reasons = rendered, nil, nil
 	}
 	return res
-}
-
-// pinRelease pins rel, which Upgrade.Prepare saved as pending, as assess
-// pinned the manifest it compared, and saves it again.
-func pinRelease(ctx context.Context, cfg *action.Configuration, rel *release.Release, pins map[string]images.Pin) error {
-	m, err := images.PinManifest(rel.Manifest, pins)
-	if err != nil || m == rel.Manifest {
-		return err
-	}
-	rel.Manifest = m
-	if err := cfg.Compose.Config(ctx, compose.Project{Name: rel.Name, Manifest: []byte(m), Dir: rel.ProjectDir}); err != nil {
-		return err
-	}
-	return cfg.Store.Save(rel)
 }
 
 // rememberImages records app's images, which CheckImages checks.
@@ -214,6 +318,9 @@ type ImageCheck struct {
 	Checked int `json:"checked"`
 	// Updated are the tags whose digest moved since the last check.
 	Updated []string `json:"updated,omitempty"`
+	// Moved are the services a strategy moved to another tag, as
+	// "app/service: tag".
+	Moved []string `json:"moved,omitempty"`
 	// Failed are why the tags a registry didn't answer for failed.
 	Failed map[string]string `json:"failed,omitempty"`
 }
@@ -325,10 +432,17 @@ func (c *Controller) checkImages(ctx context.Context, only string) ImageCheck {
 	c.mu.RLock()
 	uses := map[string][]string{}
 	var refs []images.Ref
+	var jobs []tagJob
 	seen := map[string]bool{}
 	for name, s := range c.apps {
 		for _, svc := range s.images {
 			if !svc.Checked() {
+				continue
+			}
+			if svc.MovesTags() {
+				if only == "" || only == name {
+					jobs = append(jobs, tagJob{app: name, svc: svc})
+				}
 				continue
 			}
 			uses[svc.Ref.Name()] = append(uses[svc.Ref.Name()], name)
@@ -339,6 +453,18 @@ func (c *Controller) checkImages(ctx context.Context, only string) ImageCheck {
 		}
 	}
 	c.mu.RUnlock()
+	choices := c.chooseTags(ctx, jobs)
+	for _, ch := range choices {
+		if ch.tag == "" {
+			continue
+		}
+		r := ch.ref()
+		uses[r.Name()] = append(uses[r.Name()], ch.app)
+		if !seen[r.Name()] {
+			seen[r.Name()] = true
+			refs = append(refs, r)
+		}
+	}
 	sort.Slice(refs, func(i, j int) bool { return refs[i].Name() < refs[j].Name() })
 	apps := map[string]bool{}
 	if only != "" {
@@ -350,6 +476,19 @@ func (c *Controller) checkImages(ctx context.Context, only string) ImageCheck {
 			apps[a] = true
 		}
 	}
+	moved, tagApps := c.recordTags(choices)
+	check.Moved = moved
+	for a := range tagApps {
+		apps[a] = true
+	}
+	for _, ch := range choices {
+		if ch.err != nil {
+			if check.Failed == nil {
+				check.Failed = map[string]string{}
+			}
+			check.Failed[ch.svc.Ref.Name()] = ch.err.Error()
+		}
+	}
 	if len(apps) > 0 {
 		c.bumpGeneration()
 	}
@@ -359,6 +498,219 @@ func (c *Controller) checkImages(ctx context.Context, only string) ImageCheck {
 		}
 	}
 	return check
+}
+
+// tagJob is a service whose strategy picks its tag.
+type tagJob struct {
+	app string
+	svc images.Service
+}
+
+// tagChoice is the tag a strategy picked for a service: Git's own when
+// nothing is newer.
+type tagChoice struct {
+	tagJob
+	tag       string
+	truncated bool
+	err       error
+}
+
+func (t tagChoice) ref() images.Ref {
+	r := t.svc.Ref
+	r.Tag = t.tag
+	return r
+}
+
+// pickedFor is true when p was picked for s's image and policy as they are.
+func pickedFor(p store.ImageTag, s images.Service) bool {
+	return p.Image == s.Image && p.Policy == s.Policy.Fingerprint()
+}
+
+// chosenRefs are the tags choices picked.
+func chosenRefs(choices []tagChoice) []images.Ref {
+	var out []images.Ref
+	seen := map[string]bool{}
+	for _, ch := range choices {
+		if r := ch.ref(); ch.tag != "" && !seen[r.Name()] {
+			seen[r.Name()] = true
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// chooseTags lists the tags of jobs' repositories, each once, and lets each
+// service's strategy pick one.
+func (c *Controller) chooseTags(ctx context.Context, jobs []tagJob) []tagChoice {
+	type list struct {
+		tags      []string
+		truncated bool
+		err       error
+	}
+	repo := func(r images.Ref) string { return r.Registry + "/" + r.Repository }
+	repos := map[string]images.Ref{}
+	for _, j := range jobs {
+		repos[repo(j.svc.Ref)] = j.svc.Ref
+	}
+	lists := map[string]list{}
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, imageConcurrency)
+	for key, r := range repos {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			v, err, _ := c.imageFlight.Do("tags:"+key, func() (interface{}, error) {
+				ctx, cancel := context.WithTimeout(ctx, tagListTimeout)
+				defer cancel()
+				tags, truncated, err := c.ImageResolver.Tags(ctx, r)
+				return list{tags: tags, truncated: truncated}, err
+			})
+			l := list{err: err}
+			if err != nil {
+				c.Log.Warn("listing an image's tags", "repository", key, "error", err)
+			} else {
+				l = v.(list)
+			}
+			mu.Lock()
+			lists[key] = l
+			mu.Unlock()
+		}()
+	}
+	wg.Wait()
+
+	out := make([]tagChoice, len(jobs))
+	for i, j := range jobs {
+		l := lists[repo(j.svc.Ref)]
+		ch := tagChoice{tagJob: j, truncated: l.truncated, err: l.err}
+		if ch.err == nil {
+			switch j.svc.Policy.Strategy {
+			case images.StrategySemver:
+				ch.tag, ch.err = j.svc.Policy.PickSemver(j.svc.Ref.Tag, l.tags)
+			case images.StrategyNewestBuild:
+				ch.tag, ch.err = c.newestBuild(ctx, j.svc, l.tags)
+			}
+		}
+		out[i] = ch
+	}
+	return out
+}
+
+// newestBuild picks, among s's candidate tags, the one whose image was built
+// last; ties go to the newest by name. Build times are cached by digest.
+func (c *Controller) newestBuild(ctx context.Context, s images.Service, tags []string) (string, error) {
+	cands := s.Policy.NewestCandidates(s.Ref.Tag, tags)
+	built := make([]time.Time, len(cands))
+	errs := make([]error, len(cands))
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, imageConcurrency)
+	for i, t := range cands {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			ctx, cancel := context.WithTimeout(ctx, imageTimeout)
+			defer cancel()
+			r := s.Ref
+			r.Tag = t
+			d, err := c.ImageResolver.Digest(ctx, r)
+			if err != nil {
+				errs[i] = err
+				return
+			}
+			if v, ok := c.buildTimes.Load(d); ok {
+				built[i] = v.(time.Time)
+				return
+			}
+			r.Digest = d
+			at, err := c.ImageResolver.Created(ctx, r)
+			if err != nil {
+				errs[i] = err
+				return
+			}
+			c.buildTimes.Store(d, at)
+			built[i] = at
+		}()
+	}
+	wg.Wait()
+	best := -1
+	for i := range cands {
+		if errs[i] != nil {
+			c.Log.Warn("reading when an image was built", "image", s.Ref.Registry+"/"+s.Ref.Repository+":"+cands[i], "error", errs[i])
+			continue
+		}
+		if best < 0 || built[i].After(built[best]) {
+			best = i
+		}
+	}
+	if best < 0 {
+		return "", fmt.Errorf("no candidate tag could be read: %w", errors.Join(errs...))
+	}
+	return cands[best], nil
+}
+
+// recordTags stores choices, once resolveImages has resolved their tags. A
+// failed choice keeps the last pick for the same image and policy. It returns
+// the services moved to a new tag, as "app/service: tag", and the apps whose
+// pick changed.
+func (c *Controller) recordTags(choices []tagChoice) ([]string, map[string]bool) {
+	apps := map[string]bool{}
+	var moved []string
+	if len(choices) == 0 {
+		return nil, apps
+	}
+	cache, err := c.Store.ImageDigests()
+	if err != nil {
+		c.Log.Error("reading image digests", "error", err)
+		return nil, apps
+	}
+	prevs := map[string]map[string]store.ImageTag{}
+	now := time.Now()
+	for _, ch := range choices {
+		if prevs[ch.app] == nil {
+			if prevs[ch.app], err = c.Store.ImageTags(ch.app); err != nil {
+				c.Log.Error("reading image tags", "app", ch.app, "error", err)
+				continue
+			}
+		}
+		prev, ok := prevs[ch.app][ch.svc.Name]
+		same := ok && pickedFor(prev, ch.svc)
+		t := store.ImageTag{App: ch.app, Service: ch.svc.Name, Image: ch.svc.Image, Policy: ch.svc.Policy.Fingerprint(),
+			CheckedAt: now, Truncated: ch.truncated}
+		if same {
+			t.Tag, t.Digest, t.PickedAt = prev.Tag, prev.Digest, prev.PickedAt
+		}
+		switch entry := cache[ch.ref().Name()]; {
+		case ch.err != nil:
+			t.Error = ch.err.Error()
+		case entry.Digest == "":
+			t.Error = entry.Error
+			if t.Error == "" {
+				t.Error = "resolving " + ch.ref().Name() + " failed"
+			}
+		default:
+			if t.Tag != ch.tag {
+				t.PickedAt = now
+				if ch.tag != ch.svc.Ref.Tag {
+					moved = append(moved, fmt.Sprintf("%s/%s: %s", ch.app, ch.svc.Name, ch.tag))
+					c.Log.Info("image tag picked", "app", ch.app, "service", ch.svc.Name, "from", t.Tag, "to", ch.tag)
+				}
+			}
+			t.Tag, t.Digest = ch.tag, entry.Digest
+		}
+		if err := c.Store.SetImageTag(t); err != nil {
+			c.Log.Error("recording an image tag", "app", ch.app, "service", ch.svc.Name, "error", err)
+			continue
+		}
+		if !same || t.Tag != prev.Tag || t.Digest != prev.Digest || (t.Error == "") != (prev.Error == "") || t.Truncated != prev.Truncated {
+			apps[ch.app] = true
+		}
+	}
+	sort.Strings(moved)
+	return moved, apps
 }
 
 // runImageSchedule calls CheckImages for every app on composecd.yaml's
@@ -401,17 +753,27 @@ func imageSchedule(u config.ImageUpdates) (cron.Schedule, *time.Location, error)
 // notifyImages sends an image-update event for each update st shows that prev
 // didn't.
 func (c *Controller) notifyImages(prev, st *AppStatus) {
+	key := func(im ImageStatus) string { return im.Service + "@" + im.Candidate + "@" + im.Latest }
 	known := map[string]bool{}
 	for _, im := range prev.Images {
 		if im.UpdateAvailable {
-			known[im.Service+"@"+im.Latest] = true
+			known[key(im)] = true
 		}
 	}
 	for _, im := range st.Images {
-		if !im.UpdateAvailable || known[im.Service+"@"+im.Latest] || im.Latest == "" {
+		if !im.UpdateAvailable || known[key(im)] || im.Latest == "" {
 			continue
 		}
-		msg := fmt.Sprintf("%s: a new image is available for %s (%s): %s", st.Name, im.Service, im.Image, images.Short(im.Latest))
+		var msg string
+		if im.Candidate != "" && im.Candidate != im.Tag {
+			policy := im.Strategy
+			if im.Constraint != "" {
+				policy += " " + im.Constraint
+			}
+			msg = fmt.Sprintf("%s: %s (%s): %s available (%s)", st.Name, images.Repo(im.Image), im.Service, im.Candidate, policy)
+		} else {
+			msg = fmt.Sprintf("%s: a new image is available for %s (%s): %s", st.Name, im.Service, im.Image, images.Short(im.Latest))
+		}
 		if !im.Applicable {
 			msg += " (" + im.Note + ")"
 		}

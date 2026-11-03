@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/trevorswanson/composecd/internal/images"
 )
 
 // APIVersion is the apiVersion of every composecd object.
@@ -58,6 +60,50 @@ type HostSpec struct {
 	// Env is added to the environment of every docker call to this host, and is
 	// visible to compose ${VAR} interpolation and the env template function.
 	Env map[string]string `yaml:"env,omitempty" json:"env,omitempty"`
+	// Housekeeping prunes unused images and build cache on a schedule, and
+	// watches the engine's disk. Without it, composecd never measures or
+	// prunes the host.
+	Housekeeping *Housekeeping `yaml:"housekeeping,omitempty" json:"housekeeping,omitempty"`
+}
+
+// Housekeeping keeps a host's disk in check.
+type Housekeeping struct {
+	// ImagePrune runs `docker image prune` on a schedule.
+	ImagePrune *ImagePrune `yaml:"imagePrune,omitempty" json:"imagePrune,omitempty"`
+	// BuilderPrune runs `docker builder prune` on a schedule.
+	BuilderPrune *BuilderPrune `yaml:"builderPrune,omitempty" json:"builderPrune,omitempty"`
+	// DiskWarning warns when the engine's data root fills up.
+	DiskWarning *DiskWarning `yaml:"diskWarning,omitempty" json:"diskWarning,omitempty"`
+}
+
+// ImagePrune removes images no container uses.
+type ImagePrune struct {
+	// Schedule is a cron expression for when to prune; empty prunes only on
+	// request.
+	Schedule string `yaml:"schedule,omitempty" json:"schedule,omitempty"`
+	// TimeZone is an IANA zone for Schedule (default UTC).
+	TimeZone string `yaml:"timeZone,omitempty" json:"timeZone,omitempty"`
+	// Until spares images created more recently than this (until=<Until>).
+	Until Duration `yaml:"until,omitempty" json:"until,omitempty"`
+	// All removes unused tagged images too, not just dangling ones.
+	All bool `yaml:"all,omitempty" json:"all,omitempty"`
+}
+
+// BuilderPrune removes build cache.
+type BuilderPrune struct {
+	// Schedule is a cron expression for when to prune; empty prunes only on
+	// request.
+	Schedule string `yaml:"schedule,omitempty" json:"schedule,omitempty"`
+	// TimeZone is an IANA zone for Schedule (default UTC).
+	TimeZone string `yaml:"timeZone,omitempty" json:"timeZone,omitempty"`
+	// KeepStorage is how much cache to keep, as docker reads sizes ("10GB").
+	KeepStorage string `yaml:"keepStorage,omitempty" json:"keepStorage,omitempty"`
+}
+
+// DiskWarning is when a host's disk counts as nearly full.
+type DiskWarning struct {
+	// Percent of the data root's filesystem in use, 1-100.
+	Percent int `yaml:"percent" json:"percent"`
 }
 
 // Defaults for HostSpec.
@@ -214,14 +260,35 @@ type SyncPolicy struct {
 	ImageUpdates *AppImageUpdates `yaml:"imageUpdates,omitempty" json:"imageUpdates,omitempty"`
 }
 
-// AppImageUpdates opts an Application in or out of image updates.
+// AppImageUpdates opts an Application in or out of image updates, and says how
+// its services' tags may move.
 type AppImageUpdates struct {
 	// Enabled, when set, overrides the global setting.
 	Enabled *bool `yaml:"enabled,omitempty" json:"enabled,omitempty"`
+	// Strategy is digest (default: pin each tag to its digest), semver or
+	// newest-build.
+	Strategy string `yaml:"strategy,omitempty" json:"strategy,omitempty"`
+	// Constraint is a semver constraint, such as ~1.27 (default: the current
+	// tag's major version).
+	Constraint string `yaml:"constraint,omitempty" json:"constraint,omitempty"`
+	// AllowTags is a regexp tags must match; newest-build requires it.
+	AllowTags string `yaml:"allowTags,omitempty" json:"allowTags,omitempty"`
+	// IgnoreTags are globs of tags never picked.
+	IgnoreTags []string `yaml:"ignoreTags,omitempty" json:"ignoreTags,omitempty"`
+}
+
+// Policy is the tag policy u sets (the digest strategy for nil).
+func (u *AppImageUpdates) Policy() images.Policy {
+	if u == nil {
+		return images.Policy{}
+	}
+	return images.Policy{Strategy: u.Strategy, Constraint: u.Constraint, AllowTags: u.AllowTags, IgnoreTags: u.IgnoreTags}
 }
 
 // LabelImageUpdates is the compose service label ("true" or "false") that
-// overrides the Application's image update setting for one service.
+// overrides the Application's image update setting for one service. With the
+// suffixes .strategy, .constraint and .allow-tags it overrides the
+// Application's policy.
 const LabelImageUpdates = "composecd.image-updates"
 
 // ImageUpdatesFor says whether image updates are on for app, given the

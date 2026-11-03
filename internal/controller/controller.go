@@ -57,6 +57,9 @@ type Options struct {
 	// ImageResolver resolves image tags to digests for image updates; nil
 	// asks the registries.
 	ImageResolver images.Resolver
+	// Housekeeper measures hosts' disks and prunes them; nil turns
+	// housekeeping off.
+	Housekeeper Housekeeper
 }
 
 // Controller reconciles every Application.
@@ -123,6 +126,12 @@ type Controller struct {
 	watchers       map[string]*watcher
 	// imageFlight shares one registry check of a tag among the apps using it.
 	imageFlight singleflight.Group
+	// disks are hosts' last disk measurements, by host.
+	disks map[string]*diskState
+	// hostOps are the running housekeeping operations, by host.
+	hostOps map[string]int64
+	// buildTimes caches when images were built, by digest, for newest-build.
+	buildTimes sync.Map
 }
 
 // watcher streams one host's container events.
@@ -261,6 +270,7 @@ func (c *Controller) Run(ctx context.Context) {
 	t := time.NewTicker(time.Duration(c.Boot.RefreshInterval))
 	defer t.Stop()
 	go c.runImageSchedule(ctx)
+	go c.runHousekeeping(ctx)
 	for {
 		c.RefreshAll(ctx)
 		select {
@@ -484,6 +494,8 @@ func (c *Controller) RefreshAll(ctx context.Context) {
 				if prev == hosts.StateUp {
 					c.notify(Event{Type: config.EventHostDown, Host: s.Name, Message: "host " + s.Name + " is down: " + s.Error})
 				}
+			} else {
+				c.measureDisk(h, false)
 			}
 		}()
 	}
@@ -785,11 +797,15 @@ func (c *Controller) HostStatuses() []HostStatus {
 	orphans := c.orphans
 	c.mu.RUnlock()
 	var out []HostStatus
+	now := time.Now()
 	for _, h := range c.pruneHosts() {
 		hs := HostStatus{Status: h.Status(), Apps: counts[h.Name()], Orphans: orphans[h.Name()], Retired: c.Hosts.Get(h.Name()) == nil,
 			Self: c.selfRelease(h.Name())}
 		if st, err := c.Store.HostState(h.Name()); err == nil {
 			hs.Maintenance, hs.MaintenanceReason = st.Maintenance, st.MaintenanceReason
+		}
+		if !hs.Retired {
+			c.housekeepingStatus(h, &hs, now)
 		}
 		out = append(out, hs)
 	}

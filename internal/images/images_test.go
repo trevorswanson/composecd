@@ -69,7 +69,7 @@ services:
 
 func TestServices(t *testing.T) {
 	got := map[string]Service{}
-	svcs, err := Services(manifest, true, "composecd.image-updates")
+	svcs, err := Services(manifest, true, Policy{}, "composecd.image-updates")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +96,7 @@ func TestServices(t *testing.T) {
 	}
 
 	// Off for the app: only the label opts in.
-	svcs, _ = Services(manifest, false, "composecd.image-updates")
+	svcs, _ = Services(manifest, false, Policy{}, "composecd.image-updates")
 	for _, s := range svcs {
 		if s.Eligible() != (s.Name == "on") {
 			t.Errorf("app off: %s eligible = %v", s.Name, s.Eligible())
@@ -104,13 +104,13 @@ func TestServices(t *testing.T) {
 	}
 }
 
-func TestPinManifest(t *testing.T) {
+func TestOverridePins(t *testing.T) {
 	pins := map[string]Pin{
 		"web":    {Image: "nginx:1", Digest: dig},
 		"pinned": {Image: "redis:7@" + dig, Digest: dig}, // never pinned twice
 		"off":    {Image: "nginx:2", Digest: dig},        // not the image the service has
 	}
-	out, err := PinManifest(manifest, pins)
+	out, err := Override(manifest, pins)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,11 +120,11 @@ func TestPinManifest(t *testing.T) {
 	if strings.Count(out, "@") != 2 {
 		t.Errorf("want exactly two digests:\n%s", out)
 	}
-	again, err := PinManifest(out, pins)
+	again, err := Override(out, pins)
 	if err != nil || again != out {
 		t.Errorf("pinning twice changed the manifest: %v\n%s", err, again)
 	}
-	if same, _ := PinManifest(manifest, nil); same != manifest {
+	if same, _ := Override(manifest, nil); same != manifest {
 		t.Error("no pins changed the manifest")
 	}
 }

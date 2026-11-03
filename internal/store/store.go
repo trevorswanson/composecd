@@ -23,6 +23,10 @@ const (
 	KindHeal = "heal"
 	// KindPrune uninstalls a release whose Application left Git.
 	KindPrune = "prune"
+	// KindImagePrune and KindBuilderPrune remove a host's unused images and
+	// build cache. They belong to a host, not an app.
+	KindImagePrune   = "image-prune"
+	KindBuilderPrune = "builder-prune"
 
 	TriggerAuto   = "auto"
 	TriggerManual = "manual"
@@ -32,10 +36,14 @@ const (
 	PhaseFailed    = "Failed"
 )
 
-// Operation is one sync or rollback of an application.
+// Operation is one sync or rollback of an application, or one housekeeping
+// run on a host.
 type Operation struct {
-	ID      int64  `json:"id"`
-	App     string `json:"app"`
+	ID int64 `json:"id"`
+	// App is "" for a host's housekeeping operation.
+	App string `json:"app"`
+	// Host is the host a housekeeping operation ran on ("" for app operations).
+	Host    string `json:"host,omitempty"`
 	Kind    string `json:"kind"`
 	Trigger string `json:"trigger"`
 	// User is who started a manual operation ("" for automatic ones).
@@ -174,6 +182,30 @@ func migrate(db *sql.DB) error {
 			return err
 		}
 	}
+	if !cols["host"] {
+		if _, err := db.Exec(`ALTER TABLE operations ADD COLUMN host TEXT NOT NULL DEFAULT ''`); err != nil {
+			return err
+		}
+	}
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS operations_host ON operations (host, id)`); err != nil {
+		return err
+	}
+	// Phase 4b: the tag each service's image update strategy picked.
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS image_tags (
+		app        TEXT NOT NULL,
+		service    TEXT NOT NULL,
+		image      TEXT NOT NULL,
+		policy     TEXT NOT NULL DEFAULT '',
+		tag        TEXT NOT NULL DEFAULT '',
+		digest     TEXT NOT NULL DEFAULT '',
+		picked_at  TEXT,
+		checked_at TEXT NOT NULL,
+		truncated  INTEGER NOT NULL DEFAULT 0,
+		error      TEXT NOT NULL DEFAULT '',
+		PRIMARY KEY (app, service)
+	)`); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -203,8 +235,8 @@ func (s *Store) StartOperation(op *Operation) error {
 	if op.StartedAt.IsZero() {
 		op.StartedAt = time.Now()
 	}
-	res, err := s.db.Exec(`INSERT INTO operations (app, kind, trigger, user, source_revision, phase, started_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		op.App, op.Kind, op.Trigger, op.User, op.SourceRevision, op.Phase, formatTime(op.StartedAt))
+	res, err := s.db.Exec(`INSERT INTO operations (app, host, kind, trigger, user, source_revision, phase, started_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		op.App, op.Host, op.Kind, op.Trigger, op.User, op.SourceRevision, op.Phase, formatTime(op.StartedAt))
 	if err != nil {
 		return err
 	}
@@ -265,6 +297,14 @@ func (s *Store) Operations(app string, limit int) ([]*Operation, error) {
 	return s.query(false, `WHERE app = ? ORDER BY id DESC LIMIT ?`, app, limit)
 }
 
+// HostOperations returns host's newest housekeeping operations first, without logs.
+func (s *Store) HostOperations(host string, limit int) ([]*Operation, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	return s.query(false, `WHERE host = ? ORDER BY id DESC LIMIT ?`, host, limit)
+}
+
 // LastOperation returns app's newest operation, without its log, or nil.
 func (s *Store) LastOperation(app string) (*Operation, error) {
 	ops, err := s.Operations(app, 1)
@@ -280,7 +320,7 @@ func (s *Store) query(withLog bool, where string, args ...interface{}) ([]*Opera
 		logCol = `log`
 	}
 	// logCol and where are constants from this file; values are bound parameters.
-	rows, err := s.db.Query(`SELECT id, app, kind, trigger, user, source_revision, release_revision, phase, message, `+logCol+ //nolint:gosec // see above
+	rows, err := s.db.Query(`SELECT id, app, host, kind, trigger, user, source_revision, release_revision, phase, message, `+logCol+ //nolint:gosec // see above
 		`, helper, started_at, finished_at FROM operations `+where, args...)
 	if err != nil {
 		return nil, err
@@ -291,7 +331,7 @@ func (s *Store) query(withLog bool, where string, args ...interface{}) ([]*Opera
 		op := &Operation{}
 		var started string
 		var finished sql.NullString
-		if err := rows.Scan(&op.ID, &op.App, &op.Kind, &op.Trigger, &op.User, &op.SourceRevision, &op.ReleaseRevision,
+		if err := rows.Scan(&op.ID, &op.App, &op.Host, &op.Kind, &op.Trigger, &op.User, &op.SourceRevision, &op.ReleaseRevision,
 			&op.Phase, &op.Message, &op.Log, &op.Helper, &started, &finished); err != nil {
 			return nil, err
 		}
@@ -415,6 +455,72 @@ func (s *Store) SetImageDigest(ref, digest string, at time.Time) error {
 func (s *Store) SetImageError(ref, msg string, at time.Time) error {
 	_, err := s.db.Exec(`INSERT INTO image_digests (ref, checked_at, error) VALUES (?, ?, ?)
 		ON CONFLICT (ref) DO UPDATE SET checked_at = excluded.checked_at, error = excluded.error`, ref, formatTime(at), msg)
+	return err
+}
+
+// ImageTag is the tag an image update strategy picked for one service.
+type ImageTag struct {
+	App     string `json:"app"`
+	Service string `json:"service"`
+	// Image is the image Git rendered when the tag was picked, and Policy the
+	// strategy's fingerprint; a pick made for another is redone.
+	Image  string `json:"image"`
+	Policy string `json:"policy"`
+	// Tag is the tag picked ("" if none ever was), and Digest what it resolved to.
+	Tag      string    `json:"tag,omitempty"`
+	Digest   string    `json:"digest,omitempty"`
+	PickedAt time.Time `json:"pickedAt,omitzero"`
+	// CheckedAt is when the repository's tags were last listed.
+	CheckedAt time.Time `json:"checkedAt"`
+	// Truncated is true when the registry listed more tags than were read.
+	Truncated bool `json:"truncated,omitempty"`
+	// Error is the last failed check ("" when it succeeded).
+	Error string `json:"error,omitempty"`
+}
+
+// ImageTags returns app's picked tags, by service.
+func (s *Store) ImageTags(app string) (map[string]ImageTag, error) {
+	rows, err := s.db.Query(`SELECT app, service, image, policy, tag, digest, picked_at, checked_at, truncated, error
+		FROM image_tags WHERE app = ?`, app)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]ImageTag{}
+	for rows.Next() {
+		var t ImageTag
+		var picked sql.NullString
+		var checked string
+		var truncated int
+		if err := rows.Scan(&t.App, &t.Service, &t.Image, &t.Policy, &t.Tag, &t.Digest, &picked, &checked, &truncated, &t.Error); err != nil {
+			return nil, err
+		}
+		if picked.Valid {
+			if t.PickedAt, err = parseTime(picked.String); err != nil {
+				return nil, err
+			}
+		}
+		if t.CheckedAt, err = parseTime(checked); err != nil {
+			return nil, err
+		}
+		t.Truncated = truncated != 0
+		out[t.Service] = t
+	}
+	return out, rows.Err()
+}
+
+// SetImageTag records t, replacing what was stored for its app and service.
+func (s *Store) SetImageTag(t ImageTag) error {
+	var picked interface{}
+	if !t.PickedAt.IsZero() {
+		picked = formatTime(t.PickedAt)
+	}
+	_, err := s.db.Exec(`INSERT INTO image_tags (app, service, image, policy, tag, digest, picked_at, checked_at, truncated, error)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT (app, service) DO UPDATE SET image = excluded.image, policy = excluded.policy, tag = excluded.tag,
+		digest = excluded.digest, picked_at = excluded.picked_at, checked_at = excluded.checked_at,
+		truncated = excluded.truncated, error = excluded.error`,
+		t.App, t.Service, t.Image, t.Policy, t.Tag, t.Digest, picked, formatTime(t.CheckedAt), boolInt(t.Truncated), t.Error)
 	return err
 }
 

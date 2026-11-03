@@ -58,6 +58,8 @@ type Controller interface {
 	CheckImagesWait(context.Context, string) (controller.ImageCheck, error)
 	SetMaintenance(string, bool, string) error
 	DeleteRelease(host, name, user string) (*store.Operation, error)
+	PruneHost(host, kind string, all bool, user string) (*store.Operation, error)
+	HostOperations(string, int) ([]*store.Operation, error)
 	Subscribe() (<-chan controller.Update, func())
 	Logs(context.Context, string, string, int, bool, io.Writer) error
 	Mask(string, string) string
@@ -354,6 +356,15 @@ var templates = template.Must(template.New("web").Funcs(template.FuncMap{
 		return "?" + out.Encode()
 	},
 	"path": url.PathEscape,
+	// bytes is a size with decimal units, as docker prints it.
+	"bytes": hosts.FormatBytes,
+	// usedPercent is how full a measured disk is, "87%".
+	"usedPercent": func(u *hosts.DiskUsage) string {
+		if r, ok := u.UsedRatio(); ok {
+			return fmt.Sprintf("%.0f%%", r*100)
+		}
+		return ""
+	},
 	// live reports whether the page takes SSE updates.
 	"live": func(d *Data) bool { return d.Page != "settings" && d.Page != "adopt" },
 	"pair": func(a, b interface{}) []interface{} { return []interface{}{a, b} },
@@ -365,7 +376,7 @@ var templates = template.Must(template.New("web").Funcs(template.FuncMap{
 			return "Rolling back…"
 		case store.KindHeal:
 			return "Healing…"
-		case store.KindPrune:
+		case store.KindPrune, store.KindImagePrune, store.KindBuilderPrune:
 			return "Pruning…"
 		}
 		return "Syncing…"
@@ -490,6 +501,7 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /events", s.Events)
 	mux.HandleFunc("GET /api/v1/apps/{name}/containers/{container}/logs", s.Logs)
 	mux.HandleFunc("GET /api/v1/apps/{name}/operations/{id}/log", s.OperationLog)
+	mux.HandleFunc("GET /api/v1/hosts/{name}/operations/{id}/log", s.OperationLog)
 	mux.HandleFunc("GET /ui/apps/{name}/details", s.Dialog)
 	mux.HandleFunc("GET /ui/apps/{name}/operations/{id}", s.Dialog)
 	mux.HandleFunc("GET /ui/apps/{name}/objects/{section}/{object}", s.Dialog)
@@ -604,6 +616,12 @@ func (s *Server) data(r *http.Request, p *auth.Principal) (*Data, error) {
 		if d.Page == "host" && len(d.Hosts) == 0 {
 			return nil, fmt.Errorf("host %q: %w", d.Name, controller.ErrNotFound)
 		}
+		if d.Page == "host" && !d.Host.Retired {
+			var err error
+			if d.Operations, err = s.withLogs(s.C.HostOperations(d.Name, 10)); err != nil {
+				return nil, err
+			}
+		}
 		if d.Page == "host" {
 			// Start listing resources first, so both scans wait together.
 			s.hostResources(scan, false, false)
@@ -680,7 +698,11 @@ func matches(a controller.AppStatus, q url.Values) bool {
 }
 
 func (s *Server) operations(app string) ([]*store.Operation, error) {
-	ops, err := s.C.Operations(app, 50)
+	return s.withLogs(s.C.Operations(app, 50))
+}
+
+// withLogs returns ops with their output, masked.
+func (s *Server) withLogs(ops []*store.Operation, err error) ([]*store.Operation, error) {
 	if err != nil {
 		return nil, err
 	}
@@ -733,7 +755,8 @@ func pageError(w http.ResponseWriter, err error) {
 		code = http.StatusBadRequest
 	case errors.Is(err, controller.ErrNotFound), errors.Is(err, store.ErrNotFound):
 		code = 404
-	case errors.Is(err, controller.ErrBusy), errors.Is(err, controller.ErrBlocked), errors.Is(err, controller.ErrAdoptionBlocked), errors.Is(err, store.ErrExists):
+	case errors.Is(err, controller.ErrBusy), errors.Is(err, controller.ErrBlocked), errors.Is(err, controller.ErrAdoptionBlocked), errors.Is(err, store.ErrExists),
+		errors.Is(err, controller.ErrHostBusy):
 		code = 409
 	}
 	http.Error(w, err.Error(), code)
@@ -811,6 +834,13 @@ func (s *Server) Action(w http.ResponseWriter, r *http.Request) {
 		case "rescan":
 			err = s.rescan(ctx, name)
 			toast, late = "Rescanned "+name, "Still scanning "+name+"; this page updates when it's done"
+		case "prune":
+			kind := r.FormValue("kind")
+			if kind != store.KindImagePrune && kind != store.KindBuilderPrune {
+				err = invalidRequest("invalid prune kind")
+				break
+			}
+			op, err = s.C.PruneHost(name, kind, r.FormValue("all") == "true", p.Name)
 		case "delete-release":
 			op, err = s.C.DeleteRelease(name, r.FormValue("release"), p.Name)
 			if err == nil {
@@ -899,7 +929,12 @@ func (s *Server) Action(w http.ResponseWriter, r *http.Request) {
 		}
 		switch {
 		case op != nil:
-			d.Message = fmt.Sprintf("%s #%d", map[string]string{"sync": "Sync", "rollback": "Rollback", "delete-release": "Delete"}[action], op.ID)
+			what := action
+			if action == "prune" {
+				what = op.Kind
+			}
+			d.Message = fmt.Sprintf("%s #%d", map[string]string{"sync": "Sync", "rollback": "Rollback", "delete-release": "Delete",
+				store.KindImagePrune: "Image prune", store.KindBuilderPrune: "Build cache prune"}[what], op.ID)
 		case token != "":
 			d.Message = "Created the token " + r.FormValue("name")
 		default:
@@ -950,16 +985,24 @@ func (s *Server) rescan(ctx context.Context, host string) error {
 
 // imageToast sums up an image check that every registry answered.
 func imageToast(check controller.ImageCheck) string {
+	var msg string
 	switch n := len(check.Updated); {
 	case check.Checked == 0:
 		return "No images to check"
 	case n == 0:
-		return fmt.Sprintf("Checked %s; no new digests", plural(check.Checked, "image"))
+		msg = fmt.Sprintf("Checked %s; no new digests", plural(check.Checked, "image"))
 	case n == 1:
-		return fmt.Sprintf("Checked %s; %s has a new digest", plural(check.Checked, "image"), check.Updated[0])
+		msg = fmt.Sprintf("Checked %s; %s has a new digest", plural(check.Checked, "image"), check.Updated[0])
 	default:
-		return fmt.Sprintf("Checked %s; %d have new digests", plural(check.Checked, "image"), n)
+		msg = fmt.Sprintf("Checked %s; %d have new digests", plural(check.Checked, "image"), n)
 	}
+	switch n := len(check.Moved); {
+	case n == 1:
+		msg += "; new tag for " + check.Moved[0]
+	case n > 1:
+		msg += fmt.Sprintf("; %d new tags", n)
+	}
+	return msg
 }
 
 // imageErr is why the registries failed for an image check's tags, if any did.

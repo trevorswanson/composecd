@@ -3,9 +3,11 @@ package controller
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/trevorswanson/composecd/internal/config"
 	"github.com/trevorswanson/composecd/internal/images"
@@ -17,12 +19,54 @@ const (
 	digestC = "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
 )
 
-// fakeRegistry serves digests by registry/repository:tag, or fails when down.
+// fakeRegistry serves digests by registry/repository:tag, tags by
+// registry/repository and build times by digest, or fails when down.
 type fakeRegistry struct {
-	mu      sync.Mutex
-	digests map[string]string
-	down    bool
-	calls   map[string]int
+	mu        sync.Mutex
+	digests   map[string]string
+	tags      map[string][]string
+	truncated bool
+	created   map[string]time.Time
+	down      bool
+	calls     map[string]int
+}
+
+func (f *fakeRegistry) Tags(_ context.Context, r images.Ref) ([]string, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	repo := r.Registry + "/" + r.Repository
+	f.calls["tags:"+repo]++
+	if f.down {
+		return nil, false, errors.New("registry unreachable")
+	}
+	return slices.Clone(f.tags[repo]), f.truncated, nil
+}
+
+func (f *fakeRegistry) Created(_ context.Context, r images.Ref) (time.Time, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls["created:"+r.Digest]++
+	at, ok := f.created[r.Digest]
+	if !ok {
+		return time.Time{}, errors.New(r.Digest + ": no config")
+	}
+	return at, nil
+}
+
+// setTags lists tags for repo, serving digest for each of them.
+func (f *fakeRegistry) setTags(repo, digest string, tags ...string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.tags[repo] = tags
+	for _, t := range tags {
+		f.digests[repo+":"+t] = digest
+	}
+}
+
+func (f *fakeRegistry) count(key string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.calls[key]
 }
 
 func (f *fakeRegistry) Digest(_ context.Context, r images.Ref) (string, error) {
@@ -68,7 +112,8 @@ const nginx1 = "docker.io/library/nginx:1"
 func newImageEnv(t *testing.T, global bool) (*env, *fakeRegistry) {
 	t.Helper()
 	e := newEnv(t)
-	reg := &fakeRegistry{digests: map[string]string{nginx1: digestA}, calls: map[string]int{}}
+	reg := &fakeRegistry{digests: map[string]string{nginx1: digestA}, tags: map[string][]string{}, created: map[string]time.Time{},
+		calls: map[string]int{}}
 	e.c.ImageResolver = reg
 	e.c.Boot.ImageUpdates.Enabled = global
 	return e, reg

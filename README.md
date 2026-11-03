@@ -139,6 +139,9 @@ spec:
   projectRoot: /srv/composecd     # default /opt/composecd
   storage: volume                 # release history: volume (default, on the host) or local (see below)
   env: {TZ: America/Chicago}      # for every docker call; visible to ${VAR} and the env function
+  housekeeping:                   # optional; see Housekeeping below
+    imagePrune: {schedule: "0 4 * * 0", until: 168h}
+    diskWarning: {percent: 85}
 ```
 
 #### Release storage: volume or local
@@ -169,6 +172,46 @@ startup and nothing after that.
 Choose `local` to avoid the accessor and helper containers entirely. It also suits engines that can't run the
 helper image, such as Windows containers and hosts that can't pull images. The cost is that history is tied
 to composecd's data directory rather than the host.
+
+#### Housekeeping
+
+Images and build cache pile up on a host that composecd keeps updating. With a `housekeeping` section, composecd
+prunes them on a schedule and watches the disk:
+
+```yaml
+spec:
+  housekeeping:
+    imagePrune:
+      schedule: "0 4 * * 0"       # cron; without one, images are pruned only on request
+      timeZone: Europe/Berlin     # IANA zone for the schedule (default UTC)
+      until: 168h                 # spare images created in the last week
+      all: false                  # true also removes unused tagged images, not just dangling ones
+    builderPrune: {schedule: "0 4 * * 0", keepStorage: 10GB}
+    diskWarning: {percent: 85}
+```
+
+- **Pruning** runs `docker image prune --force --filter until=…` (with `--all` when set) and `docker builder
+  prune --force --keep-storage …`. It first waits, up to 15 minutes, for operations running on the host to
+  finish, and holds new ones back while it runs, so it never removes an image a sync is about to start.
+  Scheduled prunes skip hosts that are down or in maintenance, and a prune missed while composecd was down
+  isn't caught up. Each prune is recorded as an `image-prune` or `builder-prune` operation of the host, with
+  docker's output; the host page and `composecd host operations NAME` list them.
+- **Manual prunes** (admin): `composecd host prune NAME [--all] [--build-cache]`, `POST
+  /api/v1/hosts/{name}/prune` or the host page's buttons. They use the section's options (`--all` adds
+  `all`), and work without a schedule or in maintenance, like other manual operations.
+- **`image prune` never removes an image a container uses, running or stopped.** That keeps every deployed
+  app's images, and the `busybox` image of composetpl's stopped volume accessor. With `all: true` it does remove
+  the images of earlier revisions, so **a rollback has to pull its old image again**; if the registry no longer
+  has it, the rollback fails. Keep `all: false` (only dangling images, such as tags a newer pull replaced) if
+  that matters.
+- **Disk usage.** On a host ping, at most every 10 minutes, composecd runs `docker system df` (images,
+  containers, volumes and build cache, with what pruning could reclaim) and, for free space on the engine's
+  data root, a short-lived helper container from the volume accessor's image that runs `df` on `DockerRootDir`
+  mounted read-only (a `storage: local` host pulls that image the first time). The host page, `GET
+  /api/v1/hosts` and the metrics show it. Hosts without a `housekeeping` section aren't measured; an empty
+  one (`housekeeping: {}`) only measures.
+- **`diskWarning.percent`**: past it, the host shows a warning and composecd sends a `host-disk` notification,
+  once per crossing; it is sent again only after usage has dropped below the threshold and crossed it again.
 
 ### Application
 
@@ -213,6 +256,7 @@ spec:
       historyMax: 10              # revisions composetpl keeps
     imageUpdates:
       enabled: true               # pin moving tags to registry digests (default: composecd.yaml's imageUpdates.enabled)
+      strategy: semver            # or newest-build: move to newer tags (default: digest); see Image updates
 ```
 
 Values work as in Argo CD's Helm source: the chart's `values.yaml`, then `valueFiles` in order, then `values`.
@@ -273,7 +317,7 @@ Windows apply to automatic syncs, self-heal and prune.
 | Sync | Meaning |
 | --- | --- |
 | `Synced` | The deployed release matches Git, and its containers match the release. |
-| `OutOfSync` | Something differs: not deployed yet, compose resources, hooks, the project directory, a new digest for a moving image tag ([Image updates](#image-updates)), or live drift (a container missing, changed or orphaned). `app get` lists the reasons, and `app diff` shows the diffs. |
+| `OutOfSync` | Something differs: not deployed yet, compose resources, hooks, the project directory, a new digest for a moving image tag or a newer tag picked by its strategy ([Image updates](#image-updates)), or live drift (a container missing, changed or orphaned). `app get` lists the reasons, and `app diff` shows the diffs. |
 | `Unknown` | composecd couldn't compare: the host is down, the chart doesn't render, the revision isn't in Git, etc. See the app's error. |
 
 | Health | Meaning |
@@ -299,11 +343,12 @@ host maintenance, a retry or self-heal backoff, or a failed sync waiting for a c
 | `app history NAME` | composetpl revisions, with the Git commit each came from. |
 | `app operations NAME`, `operation list`, `operation get ID` | Sync and rollback history, with each operation's output. |
 | `app refresh NAME`, `refresh` | Fetch and reconcile now instead of waiting for the interval. |
-| `app check-images NAME`, `app check-images --all` | Ask registries for image tags' digests now, instead of on `imageUpdates.schedule` (admin). See [Image updates](#image-updates). |
+| `app check-images NAME`, `app check-images --all` | Ask registries for image tags' digests, and strategies' newer tags, now instead of on `imageUpdates.schedule` (admin). See [Image updates](#image-updates). |
 | `host list` | Reachability, engine versions, maintenance and orphaned releases. |
 | `host unmanaged NAME` | Unmanaged/orphaned releases and plain Compose projects, including config paths. `-o json\|yaml` |
 | `adopt HOST RELEASE` | Export Application YAML with saved user values (admin); warnings go to stderr. |
 | `host maintenance NAME on\|off` | While on, nothing on the host is synced, healed or pruned automatically. Manual operations still work. |
+| `host prune NAME [--all] [--build-cache]`, `host operations NAME` | Prune a host's unused images (or build cache) now (admin), and list its prunes. See [Housekeeping](#housekeeping). |
 | `window list` | Sync windows, whether they're open, and the apps they match. |
 | `validate DIR` | Check objects offline; `--render` also expands ApplicationSets and renders every chart. See [Validate in CI](#validate-in-ci). |
 | `login`, `logout`, `whoami` | Save, forget or check the server and token the CLI uses. |
@@ -311,7 +356,9 @@ host maintenance, a retry or self-heal backoff, or a failed sync waiting for a c
 | `user add NAME --role R`, `user passwd NAME`, `user delete NAME`, `user list` | Local users (admin; anyone can change their own password through the API). |
 
 Hooks are composetpl's: `x-composetpl` hook services run at `pre-install`/`pre-upgrade` (Argo's PreSync),
-`post-install`/`post-upgrade` (PostSync), and around rollbacks.
+`post-install`/`post-upgrade` (PostSync), and around rollbacks. A `sync-fail` hook (SyncFail) runs when a sync
+or rollback fails, before `atomic` rolls back, so it can alert or clean up; its output is in the operation's
+log. Self-heal runs no hooks.
 
 ### API
 
@@ -331,6 +378,8 @@ Every `/api/v1` endpoint needs `Authorization: Bearer <token>`, or a browser ses
 | `GET /api/v1/hosts`, `POST /api/v1/hosts/{name}/maintenance` (`{"enabled": true, "reason": "..."}`) | |
 | `GET /api/v1/hosts/{name}/unmanaged` | Release metadata and plain Compose config paths (readonly) |
 | `GET /api/v1/hosts/{name}/adopt/{release}` | Application YAML and warnings as JSON (admin; contains plaintext user values) |
+| `POST /api/v1/hosts/{name}/prune` (`{"kind": "image-prune" or "builder-prune", "all": false}`) | Prune unused images or build cache (admin; 202, returns the operation) |
+| `GET /api/v1/hosts/{name}/operations` | The host's prunes (readonly) |
 | `DELETE /api/v1/hosts/{name}/releases/{release}` | Uninstall an orphaned release, keeping its history and named volumes (admin; returns the operation) |
 | `GET /api/v1/windows`, `GET /api/v1/root`, `POST /api/v1/refresh`, `GET /api/v1/version` | |
 | `GET /api/v1/me` | Who you are, your role, and how you signed in |
@@ -451,6 +500,8 @@ binary; there is no CDN or Node build step.
   point at one to see its links. **Everything** draws every object boxed by its stack. Click a stack or a shared
   object, or pick one under **Focus**, to see just it and what it is connected to.
   Lists unmanaged composetpl releases and plain Compose projects with config paths. Admins can use **Adopt** to preview Application YAML, or **Delete** an orphaned release.
+  **Housekeeping** shows disk usage, a warning past `diskWarning`, the next scheduled prunes and past ones;
+  admins can prune images or build cache now.
 - **Sync windows** (`/windows`): open/closed state, next change, and matching applications.
 - **Operations** (`/operations`): the latest 50 operations across applications, including who acted and output.
 - **Settings** (`/settings`): your identity; admins can create/revoke tokens and add/delete users or change
@@ -894,6 +945,7 @@ serves a new digest, the app goes OutOfSync with a reason like
 `image nginx:1 (web): sha256:3f1c… → sha256:9ab0…`, and the diff shows the `image:` line. A new digest is then
 deployed like any other change: automatically if `syncPolicy.automated` is set and the sync windows allow it,
 or when you sync. Each deployment is a release revision, so rolling back restores the old digest.
+A strategy can also move a service to a newer tag ([Strategies](#strategies)).
 
 ```yaml
 # composecd.yaml
@@ -921,6 +973,46 @@ imageUpdates:
   image until a check succeeds.
 - **Not pinned:** images that use a `${VAR}`, services with `build:`, and hook services.
 
+### Strategies
+
+By default (`strategy: digest`) a service stays on the tag Git names. `semver` and `newest-build` move it to
+another tag of the same repository, pinned to its digest as above:
+
+```yaml
+syncPolicy:
+  imageUpdates:
+    enabled: true
+    strategy: semver                # digest (default) | semver | newest-build
+    constraint: "~1.27"             # semver only; default: the major version of Git's tag (1.x)
+    allowTags: '^\d+\.\d+\.\d+$'    # regexp tags must match (semver and newest-build)
+    ignoreTags: ["*-rc*"]           # globs of tags never picked
+```
+
+- **semver** picks the highest tag that parses as a semantic version, matches the constraint, `allowTags` and
+  no `ignoreTags`, and is newer than Git's tag. Prereleases (`1.28.0-rc.1`) are picked only when the constraint
+  names one (`>=1.28.0-0`). A tag that isn't a semantic version (`latest`) is only pinned to its digest, with a
+  note on the image.
+- **newest-build** picks, among the tags matching `allowTags` (required) and Git's own, the one whose image
+  config says it was built last. It reads one config per tag, so it looks at the 50 newest tags by name
+  (`main-1042` before `main-998`), and caches build times by digest.
+- **Per service.** The compose labels `composecd.image-updates.strategy`, `composecd.image-updates.constraint`
+  and `composecd.image-updates.allow-tags` beat the Application. A label naming another strategy starts from
+  that strategy's defaults. Invalid labels fall back to the digest strategy, with a note on the image.
+- **When tags are listed.** On the schedule and on **Check images** (and the CLI and API equivalents), never on
+  a refresh. A service whose strategy hasn't picked yet for the image and policy Git has (a new app, a changed
+  tag in Git) is checked the first time it renders, as a new tag is. Registries list tags a page at a time;
+  composecd reads up to 10,000 and notes on the image when there are more.
+- **Applying a pick.** The tag is changed in memory only: Git keeps the tag it had, and the deployed manifest
+  has `image: nginx:1.27.3@sha256:…`. The app goes OutOfSync with a reason like
+  `image nginx (web): 1.27.1 → 1.27.3`, and notifications read `nginx (web): 1.27.3 available (semver ~1.27)`.
+  The **images** tab, `app get` and the API show each image's strategy, the deployed tag and the candidate.
+  Rolling back restores the old tag and pauses auto-sync, so the pick isn't deployed again until you resume.
+- **An outage never downgrades.** When Git's tag or the policy changes while the registry can't be reached, a
+  deployed tag the policy still accepts, and that is newer than Git's, is kept until a check succeeds.
+- **Never moved:** digests pinned in Git (still reported), `${VAR}` images, `build:` services and hooks.
+
+[The example](examples/image-updates/README.md) follows patch releases of whoami.
+
 **Turning image updates on recreates each container once.** Its `image:` gains `@sha256:…` even when the
 digest is the one already running, so compose sees new configuration. Expect one sync of every app that takes
 part. Automated apps do it on their own, within their sync windows. Later syncs only recreate a service when
@@ -941,7 +1033,7 @@ notifications:
     type: ntfy                    # ntfy, gotify, discord, slack or webhook (JSON POST of the event)
     url: https://ntfy.example.lan/homelab
     tokenFile: /run/secrets/ntfy-token
-    events: [sync-failed, health-degraded, host-down, prune]   # the default
+    events: [sync-failed, health-degraded, host-down, prune, host-disk]   # the default
   - name: chat
     type: discord
     urlFile: /run/secrets/discord-webhook
@@ -951,12 +1043,15 @@ notifications:
 
 The events are `sync-succeeded`, `sync-failed` (which also covers failed rollbacks, heals and prunes),
 `self-healed`, `prune`, `health-degraded` and `out-of-sync`, each sent when an app enters that state,
-`host-down`, and `image-update` (a new digest for a service's tag, including one pinned in Git).
+`host-down`, `host-disk` (a host's disk past `housekeeping.diskWarning`), and `image-update` (a new digest for a
+service's tag, including one pinned in Git, or a newer tag its strategy picked).
 
 **Metrics.** `GET /metrics` serves Prometheus metrics:
 - `composecd_app_sync_status` and `composecd_app_health_status`, one series per app with its current status;
 - `composecd_app_paused` and `composecd_app_blocked`;
 - `composecd_host_up`, `composecd_host_maintenance` and `composecd_host_orphaned_releases`;
+- `composecd_host_disk_used_ratio` and `composecd_host_reclaimable_bytes{kind}` (images, containers, volumes,
+  build-cache), for hosts with `housekeeping`;
 - `composecd_operations_total` and `composecd_operation_duration_seconds_total`, by kind, trigger and phase;
 - `composecd_root_error`, `composecd_root_last_refresh_timestamp_seconds` and `composecd_sync_window_open`.
 
@@ -994,7 +1089,7 @@ The events are `sync-succeeded`, `sync-failed` (which also covers failed rollbac
 | Cluster | `Host`: a Docker engine over unix, ssh or tcp |
 | Sync status, diff, health | Same idea, per compose resource and container |
 | Automated sync, manual sync, rollback (disables auto-sync) | Same |
-| PreSync / PostSync hooks | composetpl `x-composetpl` hooks |
+| PreSync / PostSync / SyncFail hooks | composetpl `x-composetpl` hooks (`sync-fail` for SyncFail) |
 | Declarative setup (app of apps) | Everything is read from the root directory in Git |
 | Self-heal, prune | Same; prune keeps named volumes and release history |
 | Sync windows | `SyncWindow`, with the same allow/deny/manualSync rules, matched by app, host or labels |
@@ -1008,7 +1103,7 @@ The events are `sync-succeeded`, `sync-failed` (which also covers failed rollbac
 | OCI chart with Git values | `valuesFrom` repository, independent chart/values revisions, SOPS and automatic sync |
 | ApplicationSets | Git-directory and Host-label generators, safe templates and zero-result protection |
 | Adoption | Unmanaged discovery and admin Application YAML export; commit and sync to upgrade in place |
-| Image updater (digest strategy) | `imageUpdates`: moving tags pinned to registry digests on a schedule; digests pinned in Git are only reported. Writing back to Git is planned; see [docs/PLAN.md](docs/PLAN.md) |
+| Image updater | `imageUpdates`: moving tags pinned to registry digests on a schedule, and `semver` or `newest-build` strategies that move to newer tags in memory; digests pinned in Git are only reported. Writing back to Git is planned; see [docs/PLAN.md](docs/PLAN.md) |
 
 ## Development
 

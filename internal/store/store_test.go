@@ -1,6 +1,7 @@
 package store
 
 import (
+	"database/sql"
 	"errors"
 	"os"
 	"path/filepath"
@@ -194,5 +195,60 @@ func TestImageDigests(t *testing.T) {
 	}
 	if got, _ := s.ImageDigests(); len(got) != 0 {
 		t.Errorf("after delete = %+v", got)
+	}
+}
+
+func TestHostOperationsAfterMigration(t *testing.T) {
+	// A database from before operations had user, helper or host columns.
+	path := filepath.Join(t.TempDir(), "composecd.db")
+	db, err := sql.Open("sqlite", "file:"+filepath.ToSlash(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE TABLE operations (
+	id               INTEGER PRIMARY KEY AUTOINCREMENT,
+	app              TEXT NOT NULL,
+	kind             TEXT NOT NULL,
+	trigger          TEXT NOT NULL,
+	source_revision  TEXT NOT NULL DEFAULT '',
+	release_revision INTEGER NOT NULL DEFAULT 0,
+	phase            TEXT NOT NULL,
+	message          TEXT NOT NULL DEFAULT '',
+	log              TEXT NOT NULL DEFAULT '',
+	started_at       TEXT NOT NULL,
+	finished_at      TEXT
+);
+INSERT INTO operations (app, kind, trigger, phase, started_at, finished_at)
+VALUES ('media', 'sync', 'auto', 'Succeeded', '2026-01-02T03:04:05Z', '2026-01-02T03:05:05Z');`); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	old, err := s.Operation(1)
+	if err != nil || old.App != "media" || old.Host != "" || old.User != "" {
+		t.Fatalf("old operation = %+v, %v", old, err)
+	}
+	prune := &Operation{Host: "nas", Kind: KindImagePrune, Trigger: TriggerAuto}
+	if err := s.StartOperation(prune); err != nil {
+		t.Fatal(err)
+	}
+	other := &Operation{Host: "pi", Kind: KindBuilderPrune, Trigger: TriggerManual, User: "admin"}
+	if err := s.StartOperation(other); err != nil {
+		t.Fatal(err)
+	}
+	ops, err := s.HostOperations("nas", 0)
+	if err != nil || len(ops) != 1 || ops[0].ID != prune.ID || ops[0].App != "" || ops[0].Kind != KindImagePrune {
+		t.Errorf("nas operations = %+v, %v", ops, err)
+	}
+	if ops, _ := s.HostOperations("media", 0); len(ops) != 0 {
+		t.Errorf("an app's operations listed as a host's: %+v", ops)
+	}
+	if all, _ := s.Operations("", 10); len(all) != 3 {
+		t.Errorf("all operations = %d", len(all))
 	}
 }

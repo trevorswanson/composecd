@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"log/slog"
 	"os"
@@ -521,5 +522,73 @@ func TestSyncThatCannotRenderShowsItFailed(t *testing.T) {
 	// The status must not keep the operation as it was while it ran.
 	if op := e.app("manual").Operation; op == nil || op.Phase != store.PhaseFailed {
 		t.Fatalf("operation = %+v", op)
+	}
+}
+
+func TestSyncFailHookRunsOnFailedSync(t *testing.T) {
+	e := newEnv(t)
+	e.commit(map[string]string{"charts/web/templates/hooks.yaml": `services:
+  alert:
+    image: curlimages/curl
+    x-composetpl: {hook: sync-fail}
+`})
+	e.fake().FailUp = "nginx:1"
+	e.fake().RunOutput = "told the pager\n"
+	e.refresh()
+	web := e.app("web")
+	if web.Operation == nil || web.Operation.Phase != store.PhaseFailed || !strings.Contains(web.Operation.Message, "unhealthy") {
+		t.Fatalf("operation = %+v", web.Operation)
+	}
+	op, err := e.c.Store.Operation(web.Operation.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(e.fake().CallLog(), "run web alert") || !strings.Contains(op.Log, "Running sync-fail hook alert") ||
+		!strings.Contains(op.Log, "told the pager") {
+		t.Errorf("sync-fail hook didn't run into the operation log:\ncalls %s\nlog %s", e.fake().CallLog(), op.Log)
+	}
+
+	// A successful sync doesn't run it.
+	e.fake().FailUp, e.fake().Calls = "", nil
+	e.commit(map[string]string{"charts/web/values.yaml": "tag: '2'\n"})
+	e.refresh()
+	if web := e.app("web"); web.Sync.Status != Synced || strings.Contains(e.fake().CallLog(), "run web alert") {
+		t.Errorf("after fix: %+v calls %s", web.Sync, e.fake().CallLog())
+	}
+}
+
+// The operations Sync and Rollback return are the caller's to read (the API
+// encodes them) while the operation runs on.
+func TestManualOperationsReturnCopies(t *testing.T) {
+	e := newEnv(t)
+	e.refresh()
+	read := func(op *store.Operation) {
+		if _, err := json.Marshal(op); err != nil {
+			t.Error(err)
+		}
+	}
+	op, err := e.c.Sync("manual", "trevor")
+	if err != nil {
+		t.Fatal(err)
+	}
+	read(op)
+	e.c.ops.Wait()
+	read(op)
+	if op.Phase != store.PhaseRunning {
+		t.Errorf("returned sync = %s, want the running snapshot", op.Phase)
+	}
+	if got, err := e.c.Operation(op.ID); err != nil || got.Phase != store.PhaseSucceeded {
+		t.Errorf("stored sync = %+v, %v", got, err)
+	}
+
+	op, err = e.c.Rollback("manual", 1, "trevor")
+	if err != nil {
+		t.Fatal(err)
+	}
+	read(op)
+	e.c.ops.Wait()
+	read(op)
+	if op.Phase != store.PhaseRunning {
+		t.Errorf("returned rollback = %s, want the running snapshot", op.Phase)
 	}
 }

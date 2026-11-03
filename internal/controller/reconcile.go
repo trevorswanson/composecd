@@ -45,8 +45,8 @@ type plan struct {
 	release func()
 	// lookup served the render assess compared, and serves the sync's too.
 	lookup *appLookup
-	// pins are the digests assess pinned services' moving tags to, which the
-	// sync pins too.
+	// pins are the digests (and tags) assess pinned services' images to, which
+	// the sync pins too.
 	pins map[string]images.Pin
 }
 

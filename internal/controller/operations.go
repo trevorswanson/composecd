@@ -12,9 +12,9 @@ import (
 	"time"
 
 	"github.com/trevorswanson/composetpl/pkg/action"
-	"github.com/trevorswanson/composetpl/pkg/release"
 
 	"github.com/trevorswanson/composecd/internal/config"
+	"github.com/trevorswanson/composecd/internal/images"
 	"github.com/trevorswanson/composecd/internal/source"
 	"github.com/trevorswanson/composecd/internal/store"
 	"github.com/trevorswanson/composecd/internal/windows"
@@ -71,16 +71,7 @@ func (c *Controller) finishOperation(app string, op *store.Operation) {
 		delete(c.liveLogs, op.ID)
 		b.finish()
 	}
-	k := metricKey{op.Kind, op.Trigger, op.Phase}
-	m := c.metrics[k]
-	if m == nil {
-		m = &opMetric{}
-		c.metrics[k] = m
-	}
-	m.Count++
-	if op.FinishedAt != nil {
-		m.Seconds += op.FinishedAt.Sub(op.StartedAt).Seconds()
-	}
+	c.countLocked(op)
 	host := ""
 	if s, ok := c.apps[app]; ok {
 		host = s.status.Host
@@ -111,6 +102,20 @@ func (c *Controller) finishOperation(app string, op *store.Operation) {
 	c.notify(ev)
 }
 
+// countLocked adds finished op to the operation metrics.
+func (c *Controller) countLocked(op *store.Operation) {
+	k := metricKey{op.Kind, op.Trigger, op.Phase}
+	m := c.metrics[k]
+	if m == nil {
+		m = &opMetric{}
+		c.metrics[k] = m
+	}
+	m.Count++
+	if op.FinishedAt != nil {
+		m.Seconds += op.FinishedAt.Sub(op.StartedAt).Seconds()
+	}
+}
+
 func firstLine(s string) string {
 	if i := strings.IndexByte(s, '\n'); i >= 0 {
 		return s[:i]
@@ -134,13 +139,7 @@ func (c *Controller) runSync(ctx context.Context, p *plan, op *store.Operation) 
 	u := c.newUpgrade(cfg, p, op)
 
 	op.SourceRevision = p.prep.Revision
-	// Upgrade.Run, with the images pinned as assess pinned them in between.
-	rel, err := c.prepareUpgrade(ctx, cfg, u, p)
-	if err == nil {
-		a := action.NewApply(cfg)
-		a.DeployOptions, a.Atomic, a.HistoryMax, a.Description = u.DeployOptions, u.Atomic, u.HistoryMax, u.Description
-		rel, err = a.Run(ctx, name, rel.Revision)
-	}
+	rel, err := u.Run(ctx, name, p.prep.ChartRef, p.prep.Values)
 	if rel != nil {
 		op.ReleaseRevision = rel.Revision
 	}
@@ -150,24 +149,6 @@ func (c *Controller) runSync(ctx context.Context, p *plan, op *store.Operation) 
 		return
 	}
 	op.Phase, op.Message = store.PhaseSucceeded, rel.Description
-}
-
-// prepareUpgrade saves p's next revision as pending, with its moving tags
-// pinned to p.pins, abandoning it if they can't be.
-func (c *Controller) prepareUpgrade(ctx context.Context, cfg *action.Configuration, u *action.Upgrade, p *plan) (*release.Release, error) {
-	name := p.app.Metadata.Name
-	rel, err := u.Prepare(ctx, name, p.prep.ChartRef, p.prep.Values)
-	if err != nil {
-		return rel, err
-	}
-	if err := pinRelease(ctx, cfg, rel, p.pins); err != nil {
-		err = fmt.Errorf("pinning images: %w", err)
-		if aerr := action.Abandon(cfg, name, rel.Revision, err.Error()); aerr != nil {
-			c.Log.Error("abandoning a revision whose images couldn't be pinned", "app", name, "error", aerr)
-		}
-		return rel, err
-	}
-	return rel, nil
 }
 
 // newUpgrade is the upgrade (or install) that syncs p as operation op.
@@ -183,6 +164,16 @@ func (c *Controller) newUpgrade(cfg *action.Configuration, p *plan, op *store.Op
 		u.Lookup = p.lookup.Func
 	}
 	u.ProjectDir = p.host.ProjectDir(name)
+	// Pin moving tags, and move tags a strategy picked, as assess did, so what
+	// deploys is what it compared.
+	pins := p.pins
+	u.PostRender = func(m string) (string, error) {
+		m, err := images.Override(m, pins)
+		if err != nil {
+			return "", fmt.Errorf("pinning images: %w", err)
+		}
+		return m, nil
+	}
 	u.Description = "composecd sync"
 	if p.prep.Revision != "" {
 		u.Description += " to " + short(p.prep.Revision)
@@ -221,6 +212,8 @@ func (c *Controller) Sync(name, user string) (*store.Operation, error) {
 	if err != nil {
 		return nil, err
 	}
+	// The caller gets a copy: the operation may finish op before it is encoded.
+	started := *op
 	c.ops.Add(1)
 	go func() {
 		defer c.ops.Done()
@@ -251,7 +244,7 @@ func (c *Controller) Sync(name, user string) (*store.Operation, error) {
 		p.done()
 		c.setStatus(st)
 	}()
-	return op, nil
+	return &started, nil
 }
 
 // manualAllowed checks the sync windows for a manual operation on app, and
@@ -290,6 +283,8 @@ func (c *Controller) Rollback(name string, revision int, user string) (*store.Op
 	if err != nil {
 		return nil, err
 	}
+	// The caller gets a copy: the operation may finish op before it is encoded.
+	started := *op
 	c.ops.Add(1)
 	go func() {
 		defer c.ops.Done()
@@ -338,7 +333,7 @@ func (c *Controller) Rollback(name string, revision int, user string) (*store.Op
 		p.done()
 		c.setStatus(st)
 	}()
-	return op, nil
+	return &started, nil
 }
 
 // Pause stops automatic sync of app until Resume.
