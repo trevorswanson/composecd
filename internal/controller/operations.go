@@ -231,6 +231,10 @@ func (c *Controller) Sync(name, user string) (*store.Operation, error) {
 		if p == nil {
 			op.Phase, op.Message = store.PhaseFailed, st.Error
 			c.finishOperation(name, op)
+			// st was assessed while op ran; show how it ended.
+			if last, err := c.Store.LastOperation(name); err == nil {
+				st.Operation = last
+			}
 			c.setStatus(st)
 			return
 		}
@@ -382,12 +386,37 @@ func (c *Controller) RefreshApp(name string) error {
 	return nil
 }
 
+// RefreshAppWait is RefreshApp, returning once app is reconciled with the error
+// its status then reports, or ctx's error if that comes first. The reconcile
+// carries on in the background either way.
+func (c *Controller) RefreshAppWait(ctx context.Context, name string) error {
+	app, err := c.application(name)
+	if err != nil {
+		return err
+	}
+	select {
+	case <-c.reconcileAsync(app, true):
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	st, err := c.App(name)
+	if err != nil {
+		return err
+	}
+	if st.Error != "" {
+		return errors.New(st.Error)
+	}
+	return nil
+}
+
 // reconcileAsync reconciles app in the background, fetching its repository
-// first if fetch.
-func (c *Controller) reconcileAsync(app *config.Application, fetch bool) {
+// first if fetch. The channel it returns closes once the reconcile is done.
+func (c *Controller) reconcileAsync(app *config.Application, fetch bool) <-chan struct{} {
+	done := make(chan struct{})
 	c.ops.Add(1)
 	go func() {
 		defer c.ops.Done()
+		defer close(done)
 		ctx := c.baseContext()
 		var fetchErr error
 		if fetch {
@@ -397,6 +426,7 @@ func (c *Controller) reconcileAsync(app *config.Application, fetch bool) {
 		defer func() { <-c.sem }()
 		c.reconcile(ctx, app, fetchErr, true)
 	}()
+	return done
 }
 
 func (c *Controller) updateStatus(name string, f func(*AppStatus)) {

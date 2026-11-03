@@ -498,3 +498,17 @@ func TestRenderErrorKeepsTheLastDesiredState(t *testing.T) {
 		t.Errorf("after a render error: %+v", manual.Sync)
 	}
 }
+
+func TestSyncThatCannotRenderShowsItFailed(t *testing.T) {
+	e := newEnv(t)
+	e.refresh()
+	e.commit(map[string]string{"charts/web/templates/a.yaml": "{{ .Values.missing.key }}\n"})
+	if _, err := e.c.Sync("manual", "trevor"); err != nil {
+		t.Fatal(err)
+	}
+	e.c.ops.Wait()
+	// The status must not keep the operation as it was while it ran.
+	if op := e.app("manual").Operation; op == nil || op.Phase != store.PhaseFailed {
+		t.Fatalf("operation = %+v", op)
+	}
+}

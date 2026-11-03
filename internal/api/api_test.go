@@ -132,6 +132,23 @@ func (s *stub) CheckImages(name string) error {
 	return nil
 }
 
+func (s *stub) RefreshWait(context.Context) (controller.RootStatus, error) {
+	s.Refresh()
+	return s.Root(), nil
+}
+
+func (s *stub) RefreshAppWait(_ context.Context, name string) error { return s.RefreshApp(name) }
+
+func (s *stub) CheckImagesWait(_ context.Context, name string) (controller.ImageCheck, error) {
+	if err := s.CheckImages(name); err != nil {
+		return controller.ImageCheck{}, err
+	}
+	if name == "" {
+		return controller.ImageCheck{Checked: 3, Failed: map[string]string{"ghcr.io/me/private:1": "unauthorized"}}, nil
+	}
+	return controller.ImageCheck{Checked: 2, Updated: []string{"docker.io/library/nginx:1"}}, nil
+}
+
 func (s *stub) RefreshRepos(urls []string) bool {
 	for _, u := range urls {
 		if u == "https://git.lan/me/homelab.git" {

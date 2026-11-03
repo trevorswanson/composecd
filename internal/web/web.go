@@ -44,14 +44,16 @@ type Controller interface {
 	Unmanaged(context.Context, string) (*controller.Unmanaged, error)
 	Adopt(context.Context, string, string) (*controller.Adoption, error)
 	Root() controller.RootStatus
-	Refresh()
+	RefreshWait(context.Context) (controller.RootStatus, error)
 	Windows() []windows.Status
 	Sync(string, string) (*store.Operation, error)
 	Rollback(string, int, string) (*store.Operation, error)
 	Pause(string, string) error
 	Resume(string) error
 	RefreshApp(string) error
+	RefreshAppWait(context.Context, string) error
 	CheckImages(string) error
+	CheckImagesWait(context.Context, string) (controller.ImageCheck, error)
 	SetMaintenance(string, bool, string) error
 	DeleteRelease(host, name, user string) (*store.Operation, error)
 	Subscribe() (<-chan controller.Update, func())
@@ -196,6 +198,9 @@ type Data struct {
 	Adoption                                                   *controller.Adoption
 	// Op is the operation an action started, whose output the result follows.
 	Op *store.Operation
+	// Toast is an action's outcome, shown briefly; Message titles a result
+	// that stays, for a token or an operation's output.
+	Toast string
 	// Object is the object a dialog shows, in View.
 	Object *controller.Object
 	View   string
@@ -684,6 +689,12 @@ func pageError(w http.ResponseWriter, err error) {
 	http.Error(w, err.Error(), code)
 }
 
+// actionWait is how long an action that finishes in the background (a
+// refresh, an image check, a rescan) holds its response to report the outcome.
+// One that takes longer is reported as still running; the page's live updates
+// show its result.
+var actionWait = 30 * time.Second
+
 // Action accepts ordinary forms and htmx forms through the same role and CSRF
 // checks. The inherited hx-headers sends the per-session token on every action.
 func (s *Server) Action(w http.ResponseWriter, r *http.Request) {
@@ -699,7 +710,10 @@ func (s *Server) Action(w http.ResponseWriter, r *http.Request) {
 	name, action := r.PathValue("name"), r.PathValue("action")
 	var err error
 	target := "/apps/" + url.PathEscape(name)
-	message, token := "Action requested", ""
+	ctx, cancel := context.WithTimeout(r.Context(), actionWait)
+	defer cancel()
+	// toast is the outcome; late is it for an action still running at actionWait.
+	var toast, late, token string
 	var op *store.Operation
 	switch {
 	case strings.HasPrefix(r.URL.Path, "/ui/apps/"):
@@ -716,13 +730,20 @@ func (s *Server) Action(w http.ResponseWriter, r *http.Request) {
 			}
 		case "pause":
 			err = s.C.Pause(name, "paused (by "+p.Name+")")
+			toast = "Paused automated sync of " + name
 		case "resume":
 			err = s.C.Resume(name)
+			toast = "Resumed automated sync of " + name
 		case "refresh":
-			err = s.C.RefreshApp(name)
+			err = s.C.RefreshAppWait(ctx, name)
+			toast, late = "Refreshed "+name, "Still refreshing "+name+"; this page updates when it's done"
 		case "check-images":
-			err = s.C.CheckImages(name)
-			message = "Checking image registries"
+			var check controller.ImageCheck
+			check, err = s.C.CheckImagesWait(ctx, name)
+			toast, late = imageToast(check), "Still waiting on image registries; this page updates when they answer"
+			if err == nil {
+				err = imageErr(check)
+			}
 		default:
 			err = controller.ErrNotFound
 		}
@@ -731,22 +752,24 @@ func (s *Server) Action(w http.ResponseWriter, r *http.Request) {
 		switch action {
 		case "maintenance":
 			target = "/hosts"
-			err = s.C.SetMaintenance(name, r.FormValue("enabled") == "true", "maintenance (by "+p.Name+")")
-		case "rescan":
-			if h, ok := s.hostStatus(name); !ok || h.Retired {
-				err = fmt.Errorf("host %q: %w", name, controller.ErrNotFound)
-				break
+			on := r.FormValue("enabled") == "true"
+			err = s.C.SetMaintenance(name, on, "maintenance (by "+p.Name+")")
+			toast = "Ended maintenance on " + name
+			if on {
+				toast = "Started maintenance on " + name
 			}
-			s.inventories([]string{name}, true, false)
-			message = "Rescan started"
+		case "rescan":
+			err = s.rescan(ctx, name)
+			toast, late = "Rescanned "+name, "Still scanning "+name+"; this page updates when it's done"
 		case "delete-release":
 			op, err = s.C.DeleteRelease(name, r.FormValue("release"), p.Name)
 			if err == nil {
-				// Rescan once it's gone, so the release leaves the list.
-				go func(host string, id int64) {
-					_ = s.C.FollowOperation(context.Background(), id, io.Discard)
+				// Rescan once it's gone, so the release leaves the list, even
+				// after this request has ended.
+				go func(ctx context.Context, host string, id int64) {
+					_ = s.C.FollowOperation(ctx, id, io.Discard)
 					s.inventories([]string{host}, true, false)
-				}(name, op.ID)
+				}(context.WithoutCancel(r.Context()), name, op.ID)
 			}
 		default:
 			err = controller.ErrNotFound
@@ -755,11 +778,19 @@ func (s *Server) Action(w http.ResponseWriter, r *http.Request) {
 		target = "/apps"
 		switch action {
 		case "refresh":
-			s.C.Refresh()
-			message = "Fetching the root repository"
+			var root controller.RootStatus
+			root, err = s.C.RefreshWait(ctx)
+			toast, late = "Fetched the root repository", "Still fetching the root repository; this page updates when it's done"
+			if rev := root.Revision; rev != "" {
+				toast += " at " + rev[:min(len(rev), 7)]
+			}
 		case "check-images":
-			err = s.C.CheckImages("")
-			message = "Checking image registries"
+			var check controller.ImageCheck
+			check, err = s.C.CheckImagesWait(ctx, "")
+			toast, late = imageToast(check), "Still waiting on image registries; this page updates when they answer"
+			if err == nil {
+				err = imageErr(check)
+			}
 		default:
 			err = controller.ErrNotFound
 		}
@@ -778,29 +809,54 @@ func (s *Server) Action(w http.ResponseWriter, r *http.Request) {
 			}
 		case "token-revoke":
 			err = s.Auth.RevokeToken(r.FormValue("name"))
+			toast = "Revoked the token " + r.FormValue("name")
 		case "user-add":
 			var role auth.Role
 			role, err = auth.ParseRole(r.FormValue("role"))
 			if err == nil {
 				err = s.Auth.AddUser(r.FormValue("name"), role, r.FormValue("password"))
 			}
+			toast = "Added " + r.FormValue("name") + " as " + string(role)
 		case "user-password":
 			err = s.Auth.SetPassword(r.FormValue("name"), r.FormValue("password"))
+			toast = "Changed " + r.FormValue("name") + "'s password"
 		case "user-delete":
 			err = s.Auth.Store.DeleteUser(r.FormValue("name"))
+			toast = "Deleted " + r.FormValue("name")
 		default:
 			err = controller.ErrNotFound
 		}
+	}
+	// An action that outlasts actionWait carries on; the page shows how it ends.
+	if errors.Is(err, context.DeadlineExceeded) && r.Context().Err() == nil {
+		err, toast = nil, late
 	}
 	if err != nil {
 		pageError(w, err)
 		return
 	}
-	if op != nil {
-		message = fmt.Sprintf("%s #%d started", map[string]string{"sync": "Sync", "rollback": "Rollback", "delete-release": "Delete"}[action], op.ID)
-	}
 	if r.Header.Get("HX-Request") == "true" {
-		render(w, 200, "result", &Data{Message: message, Token: token, Op: op})
+		d := &Data{Toast: toast, Token: token, Op: op}
+		if target == "/settings" {
+			// Settings has no live updates, so the result re-renders it.
+			r.URL.Path = "/settings"
+			r.SetPathValue("name", "")
+			if d, err = s.data(r, p); err != nil {
+				pageError(w, err)
+				return
+			}
+			d.OOB, d.Toast, d.Token = true, toast, token
+		}
+		switch {
+		case op != nil:
+			d.Message = fmt.Sprintf("%s #%d", map[string]string{"sync": "Sync", "rollback": "Rollback", "delete-release": "Delete"}[action], op.ID)
+		case token != "":
+			d.Message = "Created the token " + r.FormValue("name")
+		default:
+			// Only the toast, and settings, change; a result already showing stays.
+			w.Header().Set("HX-Reswap", "none")
+		}
+		render(w, 200, "result", d)
 		return
 	}
 	if token != "" {
@@ -811,11 +867,72 @@ func (s *Server) Action(w http.ResponseWriter, r *http.Request) {
 			pageError(w, e)
 			return
 		}
-		d.Token = token
+		d.Token, d.Message = token, "Created the token "+r.FormValue("name")
 		render(w, 200, "page", d)
 		return
 	}
 	http.Redirect(w, r, target, http.StatusSeeOther)
+}
+
+// rescan rediscovers host's releases and projects, returning once the scan
+// finishes with its error, or ctx's error if that comes first.
+func (s *Server) rescan(ctx context.Context, host string) error {
+	if h, ok := s.hostStatus(host); !ok || h.Retired {
+		return fmt.Errorf("host %q: %w", host, controller.ErrNotFound)
+	}
+	s.inventories([]string{host}, true, false)
+	s.inventoryMu.Lock()
+	running := s.inventory[host].running
+	s.inventoryMu.Unlock()
+	if running != nil {
+		select {
+		case <-running:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	s.inventoryMu.Lock()
+	defer s.inventoryMu.Unlock()
+	return s.inventory[host].err
+}
+
+// imageToast sums up an image check that every registry answered.
+func imageToast(check controller.ImageCheck) string {
+	switch n := len(check.Updated); {
+	case check.Checked == 0:
+		return "No images to check"
+	case n == 0:
+		return fmt.Sprintf("Checked %s; no new digests", plural(check.Checked, "image"))
+	case n == 1:
+		return fmt.Sprintf("Checked %s; %s has a new digest", plural(check.Checked, "image"), check.Updated[0])
+	default:
+		return fmt.Sprintf("Checked %s; %d have new digests", plural(check.Checked, "image"), n)
+	}
+}
+
+// imageErr is why the registries failed for an image check's tags, if any did.
+func imageErr(check controller.ImageCheck) error {
+	if len(check.Failed) == 0 {
+		return nil
+	}
+	refs := make([]string, 0, len(check.Failed))
+	for ref := range check.Failed {
+		refs = append(refs, ref)
+	}
+	sort.Strings(refs)
+	var b strings.Builder
+	fmt.Fprintf(&b, "%d of %s couldn't be checked:", len(refs), plural(check.Checked, "image"))
+	for _, ref := range refs {
+		b.WriteString("\n" + ref + ": " + check.Failed[ref])
+	}
+	return errors.New(b.String())
+}
+
+func plural(n int, noun string) string {
+	if n == 1 {
+		return "1 " + noun
+	}
+	return fmt.Sprintf("%d %ss", n, noun)
 }
 
 // Dialog renders the body of a dialog about an app: its details, an
