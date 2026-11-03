@@ -26,6 +26,10 @@ type HelperSpec struct {
 	Labels      map[string]string
 	// Env is the helper's environment, as KEY=VALUE.
 	Env []string
+	// Volumes are mounts, as `docker run --volume` reads them.
+	Volumes []string
+	// Network is the network to join ("" for the default).
+	Network string
 }
 
 // HelperInfo is a helper container found on a host.
@@ -77,9 +81,38 @@ func parseHelpers(out string) ([]HelperInfo, error) {
 
 // StartHelper starts spec in the background on h.
 func (c *CLI) StartHelper(ctx context.Context, h *Host, spec HelperSpec) error {
-	args := append(h.Global(), "run", "--detach", "--name", spec.Name)
+	args := append(append(h.Global(), "run", "--detach"), helperArgs(spec)...)
+	if _, err := c.docker(ctx, h, args...); err != nil {
+		return fmt.Errorf("starting helper container %s: %w", spec.Name, err)
+	}
+	return nil
+}
+
+// RunHelper runs spec on h until it exits, removes it, and returns its
+// output. The image is pulled only if h doesn't have it.
+func (c *CLI) RunHelper(ctx context.Context, h *Host, spec HelperSpec) (string, error) {
+	args := append(append(h.Global(), "run", "--rm", "--pull", "missing"), helperArgs(spec)...)
+	out, err := c.docker(ctx, h, args...)
+	if err != nil {
+		return "", fmt.Errorf("running helper container %s: %w", spec.Image, err)
+	}
+	return out, nil
+}
+
+// helperArgs are the `docker run` arguments for spec, after its mode flags.
+func helperArgs(spec HelperSpec) []string {
+	var args []string
+	if spec.Name != "" {
+		args = append(args, "--name", spec.Name)
+	}
 	if spec.VolumesFrom != "" {
 		args = append(args, "--volumes-from", spec.VolumesFrom)
+	}
+	for _, v := range spec.Volumes {
+		args = append(args, "--volume", v)
+	}
+	if spec.Network != "" {
+		args = append(args, "--network", spec.Network)
 	}
 	keys := make([]string, 0, len(spec.Labels))
 	for k := range spec.Labels {
@@ -92,11 +125,7 @@ func (c *CLI) StartHelper(ctx context.Context, h *Host, spec HelperSpec) error {
 	for _, e := range spec.Env {
 		args = append(args, "--env", e)
 	}
-	args = append(append(args, "--", spec.Image), spec.Args...)
-	if _, err := c.docker(ctx, h, args...); err != nil {
-		return fmt.Errorf("starting helper container %s: %w", spec.Name, err)
-	}
-	return nil
+	return append(append(args, "--", spec.Image), spec.Args...)
 }
 
 // WaitHelper blocks until container name on h exits, and returns its exit code.

@@ -12,6 +12,17 @@ spec:
   projectRoot: /opt/composecd
   env:
     TZ: Etc/UTC
+  # Weekly cleanup of images no container uses, and build cache, plus a
+  # warning (the host-disk notification) when the disk is 85% full. Remove
+  # schedules to prune only on request (composecd host prune nas).
+  housekeeping:
+    imagePrune:
+      schedule: "0 4 * * 0"
+      timeZone: Etc/UTC
+      until: 168h      # spare images created in the last week
+      all: false       # true also removes unused tagged images (rollbacks then pull again)
+    builderPrune: {schedule: "30 4 * * 0", keepStorage: 10GB}
+    diskWarning: {percent: 85}
 
 # A second machine, reached over SSH. The controller needs an SSH key for it
 # (mount ~/.ssh), and the remote user must be able to run docker.

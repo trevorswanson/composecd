@@ -84,6 +84,20 @@ func (h *Host) Use() func() {
 	return h.ops.RUnlock
 }
 
+// Exclusive waits, checking every poll, until no operation is using the host,
+// and keeps new ones from starting until the returned function is called. It
+// gives up with ctx's error when ctx ends first.
+func (h *Host) Exclusive(ctx context.Context, poll time.Duration) (func(), error) {
+	for !h.ops.TryLock() {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(poll):
+		}
+	}
+	return h.ops.Unlock, nil
+}
+
 // Name is the host's name.
 func (h *Host) Name() string { return h.Spec.Metadata.Name }
 

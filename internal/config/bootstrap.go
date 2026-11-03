@@ -93,7 +93,8 @@ type Notifier struct {
 	URLFile string `yaml:"urlFile,omitempty"`
 	// TokenFile holds an ntfy access token or a Gotify application token.
 	TokenFile string `yaml:"tokenFile,omitempty"`
-	// Events to send (default: sync-failed, health-degraded, host-down, prune).
+	// Events to send (default: sync-failed, health-degraded, host-down, prune,
+	// host-disk).
 	Events []string `yaml:"events,omitempty"`
 	// Applications are name globs; events about other apps aren't sent
 	// (default: every app). Host events are always sent.
@@ -111,13 +112,15 @@ const (
 	EventHostDown       = "host-down"
 	// EventImageUpdate is a new digest for an image tag a service uses.
 	EventImageUpdate = "image-update"
+	// EventHostDisk is a host's disk filling past housekeeping.diskWarning.
+	EventHostDisk = "host-disk"
 )
 
 // AllEvents lists every notification event.
-var AllEvents = []string{EventSyncSucceeded, EventSyncFailed, EventHealed, EventPruned, EventHealthDegraded, EventOutOfSync, EventHostDown, EventImageUpdate}
+var AllEvents = []string{EventSyncSucceeded, EventSyncFailed, EventHealed, EventPruned, EventHealthDegraded, EventOutOfSync, EventHostDown, EventImageUpdate, EventHostDisk}
 
 // DefaultEvents are sent when a notifier lists none.
-var DefaultEvents = []string{EventSyncFailed, EventHealthDegraded, EventHostDown, EventPruned}
+var DefaultEvents = []string{EventSyncFailed, EventHealthDegraded, EventHostDown, EventPruned, EventHostDisk}
 
 // Notifier types.
 var notifierTypes = map[string]bool{"webhook": true, "ntfy": true, "gotify": true, "discord": true, "slack": true}

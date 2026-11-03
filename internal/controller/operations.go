@@ -71,16 +71,7 @@ func (c *Controller) finishOperation(app string, op *store.Operation) {
 		delete(c.liveLogs, op.ID)
 		b.finish()
 	}
-	k := metricKey{op.Kind, op.Trigger, op.Phase}
-	m := c.metrics[k]
-	if m == nil {
-		m = &opMetric{}
-		c.metrics[k] = m
-	}
-	m.Count++
-	if op.FinishedAt != nil {
-		m.Seconds += op.FinishedAt.Sub(op.StartedAt).Seconds()
-	}
+	c.countLocked(op)
 	host := ""
 	if s, ok := c.apps[app]; ok {
 		host = s.status.Host
@@ -109,6 +100,20 @@ func (c *Controller) finishOperation(app string, op *store.Operation) {
 		ev.Type, ev.Message = config.EventSyncSucceeded, fmt.Sprintf("%s of %s succeeded: %s", what, app, op.Message)
 	}
 	c.notify(ev)
+}
+
+// countLocked adds finished op to the operation metrics.
+func (c *Controller) countLocked(op *store.Operation) {
+	k := metricKey{op.Kind, op.Trigger, op.Phase}
+	m := c.metrics[k]
+	if m == nil {
+		m = &opMetric{}
+		c.metrics[k] = m
+	}
+	m.Count++
+	if op.FinishedAt != nil {
+		m.Seconds += op.FinishedAt.Sub(op.StartedAt).Seconds()
+	}
 }
 
 func firstLine(s string) string {

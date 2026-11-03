@@ -94,6 +94,9 @@ func (c *Controller) beginSelfUpdate(ctx context.Context, self string) error {
 				break
 			}
 		}
+		for host := range c.hostOps {
+			busy = "host " + host
+		}
 		c.mu.RUnlock()
 		if busy == "" {
 			return nil

@@ -58,6 +58,50 @@ type HostSpec struct {
 	// Env is added to the environment of every docker call to this host, and is
 	// visible to compose ${VAR} interpolation and the env template function.
 	Env map[string]string `yaml:"env,omitempty" json:"env,omitempty"`
+	// Housekeeping prunes unused images and build cache on a schedule, and
+	// watches the engine's disk. Without it, composecd never measures or
+	// prunes the host.
+	Housekeeping *Housekeeping `yaml:"housekeeping,omitempty" json:"housekeeping,omitempty"`
+}
+
+// Housekeeping keeps a host's disk in check.
+type Housekeeping struct {
+	// ImagePrune runs `docker image prune` on a schedule.
+	ImagePrune *ImagePrune `yaml:"imagePrune,omitempty" json:"imagePrune,omitempty"`
+	// BuilderPrune runs `docker builder prune` on a schedule.
+	BuilderPrune *BuilderPrune `yaml:"builderPrune,omitempty" json:"builderPrune,omitempty"`
+	// DiskWarning warns when the engine's data root fills up.
+	DiskWarning *DiskWarning `yaml:"diskWarning,omitempty" json:"diskWarning,omitempty"`
+}
+
+// ImagePrune removes images no container uses.
+type ImagePrune struct {
+	// Schedule is a cron expression for when to prune; empty prunes only on
+	// request.
+	Schedule string `yaml:"schedule,omitempty" json:"schedule,omitempty"`
+	// TimeZone is an IANA zone for Schedule (default UTC).
+	TimeZone string `yaml:"timeZone,omitempty" json:"timeZone,omitempty"`
+	// Until spares images created more recently than this (until=<Until>).
+	Until Duration `yaml:"until,omitempty" json:"until,omitempty"`
+	// All removes unused tagged images too, not just dangling ones.
+	All bool `yaml:"all,omitempty" json:"all,omitempty"`
+}
+
+// BuilderPrune removes build cache.
+type BuilderPrune struct {
+	// Schedule is a cron expression for when to prune; empty prunes only on
+	// request.
+	Schedule string `yaml:"schedule,omitempty" json:"schedule,omitempty"`
+	// TimeZone is an IANA zone for Schedule (default UTC).
+	TimeZone string `yaml:"timeZone,omitempty" json:"timeZone,omitempty"`
+	// KeepStorage is how much cache to keep, as docker reads sizes ("10GB").
+	KeepStorage string `yaml:"keepStorage,omitempty" json:"keepStorage,omitempty"`
+}
+
+// DiskWarning is when a host's disk counts as nearly full.
+type DiskWarning struct {
+	// Percent of the data root's filesystem in use, 1-100.
+	Percent int `yaml:"percent" json:"percent"`
 }
 
 // Defaults for HostSpec.

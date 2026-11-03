@@ -53,10 +53,13 @@ func (s *stub) Operations(app string, limit int) ([]*store.Operation, error) {
 }
 
 func (s *stub) Operation(id int64) (*store.Operation, error) {
-	if id != 7 {
-		return nil, controller.ErrNotFound
+	switch id {
+	case 7:
+		return &store.Operation{ID: 7, App: "media", Log: "done"}, nil
+	case 10:
+		return &store.Operation{ID: 10, Host: "nas", Kind: store.KindImagePrune, Phase: store.PhaseSucceeded, Log: "Total reclaimed space: 1.2GB"}, nil
 	}
-	return &store.Operation{ID: 7, App: "media", Log: "done"}, nil
+	return nil, controller.ErrNotFound
 }
 
 func (s *stub) LiveObject(_ context.Context, app, id string, all, redact bool) (*controller.Live, error) {
@@ -79,7 +82,25 @@ func (s *stub) FollowOperation(_ context.Context, id int64, w io.Writer) error {
 }
 
 func (s *stub) HostStatuses() []controller.HostStatus {
-	return []controller.HostStatus{{Status: hosts.Status{Name: "nas", State: hosts.StateUp}, Apps: 1}}
+	return []controller.HostStatus{{Status: hosts.Status{Name: "nas", State: hosts.StateUp}, Apps: 1,
+		DiskWarning: "the disk is 87% full (warning at 85%)",
+		Disk:        &hosts.DiskUsage{Size: 100, Used: 87, Available: 13, Kinds: []hosts.DiskKind{{Kind: "images", Reclaimable: 2e9}, {Kind: "build-cache"}}}}}
+}
+
+func (s *stub) PruneHost(host, kind string, all bool, user string) (*store.Operation, error) {
+	if host != "nas" {
+		return nil, fmt.Errorf("host %q: %w", host, controller.ErrNotFound)
+	}
+	s.calls = append(s.calls, fmt.Sprintf("prune %s %s %v %s", host, kind, all, user))
+	return &store.Operation{ID: 10, Host: host, Kind: kind, Phase: store.PhaseRunning}, nil
+}
+
+func (s *stub) HostOperations(host string, limit int) ([]*store.Operation, error) {
+	if host != "nas" {
+		return nil, fmt.Errorf("host %q: %w", host, controller.ErrNotFound)
+	}
+	s.calls = append(s.calls, fmt.Sprintf("host-operations %s %d", host, limit))
+	return []*store.Operation{{ID: 10, Host: host, Kind: store.KindImagePrune, Phase: store.PhaseSucceeded}}, nil
 }
 
 func (s *stub) Root() controller.RootStatus {
@@ -443,7 +464,11 @@ func TestAccounts(t *testing.T) {
 	if status, _ := do(t, srv, "GET", "/api/v1/apps", created.Token, ""); status != 200 {
 		t.Errorf("readonly token read: %d", status)
 	}
-	for _, c := range [][2]string{{"POST", "/api/v1/apps/media/sync"}, {"GET", "/api/v1/tokens"}, {"POST", "/api/v1/hosts/nas/maintenance"}} {
+	if status, _ := do(t, srv, "GET", "/api/v1/hosts/nas/operations", created.Token, ""); status != 200 {
+		t.Errorf("readonly host operations: %d", status)
+	}
+	for _, c := range [][2]string{{"POST", "/api/v1/apps/media/sync"}, {"GET", "/api/v1/tokens"}, {"POST", "/api/v1/hosts/nas/maintenance"},
+		{"POST", "/api/v1/hosts/nas/prune"}} {
 		if status, _ := do(t, srv, c[0], c[1], created.Token, ""); status != 403 {
 			t.Errorf("readonly %s %s: %d", c[0], c[1], status)
 		}
@@ -524,6 +549,9 @@ func TestPhase2Endpoints(t *testing.T) {
 		`composecd_app_sync_status{app="media",host="nas",status="Synced"} 1`,
 		`composecd_app_health_status{app="media",host="nas",status="Healthy"} 1`,
 		`composecd_host_up{host="nas"} 1`,
+		`composecd_host_disk_used_ratio{host="nas"} 0.87`,
+		`composecd_host_reclaimable_bytes{host="nas",kind="images"} 2e+09`,
+		`composecd_host_reclaimable_bytes{host="nas",kind="build-cache"} 0`,
 		`composecd_operations_total{kind="sync",trigger="auto",phase="Succeeded"} 3`,
 		`composecd_operation_duration_seconds_total{kind="sync",trigger="auto",phase="Succeeded"} 4.5`,
 		`composecd_sync_window_open{window="nightly",kind="allow"} 1`,
@@ -610,4 +638,35 @@ func (s *stub) Mask(_ string, text string) string {
 
 func (s *stub) ApplicationSets() []controller.ApplicationSetStatus {
 	return []controller.ApplicationSetStatus{{Name: "stacks", Generated: 1, Ready: true, Applications: []string{"media"}}}
+}
+
+func TestHostPrune(t *testing.T) {
+	srv, st := newServer(t, Options{})
+	cases := []struct {
+		body     string
+		status   int
+		contains string
+	}{
+		{"", 202, `"kind": "image-prune"`},
+		{`{"kind": "builder-prune", "all": true}`, 202, `"host": "nas"`},
+		{`{"kind": "volume-prune"}`, 400, `kind must be image-prune or builder-prune`},
+	}
+	for _, tc := range cases {
+		if status, body := do(t, srv, "POST", "/api/v1/hosts/nas/prune", "secret", tc.body); status != tc.status || !strings.Contains(body, tc.contains) {
+			t.Errorf("prune %s: %d %s", tc.body, status, body)
+		}
+	}
+	if status, _ := do(t, srv, "POST", "/api/v1/hosts/pi/prune", "secret", ""); status != 404 {
+		t.Errorf("unknown host: %d", status)
+	}
+	if status, body := do(t, srv, "GET", "/api/v1/hosts/nas/operations?limit=3", "secret", ""); status != 200 || !strings.Contains(body, `"kind": "image-prune"`) {
+		t.Errorf("host operations: %d %s", status, body)
+	}
+	if status, _ := do(t, srv, "GET", "/api/v1/hosts/pi/operations", "secret", ""); status != 404 {
+		t.Errorf("unknown host's operations: %d", status)
+	}
+	want := "prune nas image-prune false admin;prune nas builder-prune true admin;host-operations nas 3"
+	if got := strings.Join(st.calls, ";"); got != want {
+		t.Errorf("calls:\n got %s\nwant %s", got, want)
+	}
 }
