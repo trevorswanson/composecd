@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"fmt"
 	"io"
 	"os"
@@ -15,6 +16,7 @@ import (
 	"github.com/trevorswanson/composecd/internal/config"
 	"github.com/trevorswanson/composecd/internal/controller"
 	"github.com/trevorswanson/composecd/internal/source"
+	"github.com/trevorswanson/composecd/internal/store"
 )
 
 func newHostCmd(cf *clientFlags) *cobra.Command {
@@ -49,6 +51,9 @@ func newHostCmd(cf *clientFlags) *cobra.Command {
 					}
 					if len(h.Orphans) > 0 {
 						notes = append(notes, "orphaned releases: "+strings.Join(h.Orphans, ","))
+					}
+					if h.DiskWarning != "" {
+						notes = append(notes, h.DiskWarning)
 					}
 					if h.Error != "" {
 						notes = append(notes, firstLine(h.Error))
@@ -88,7 +93,69 @@ reconciles the host's apps right away.`,
 	maint.Flags().StringVar(&reason, "reason", "", "why, shown in the status")
 
 	cmd := &cobra.Command{Use: "host", Aliases: []string{"hosts"}, Short: "Inspect Docker hosts"}
-	cmd.AddCommand(list, maint, newUnmanagedCmd(cf))
+	cmd.AddCommand(list, maint, newUnmanagedCmd(cf), newHostPruneCmd(cf), newHostOperationsCmd(cf))
+	return cmd
+}
+
+func newHostPruneCmd(cf *clientFlags) *cobra.Command {
+	var (
+		wf         waitFlags
+		all, cache bool
+	)
+	cmd := &cobra.Command{
+		Use:   "prune NAME",
+		Short: "Remove a host's unused images, or its build cache, now",
+		Long: `Run docker image prune on the host, with the until filter and all setting of
+its housekeeping.imagePrune; --all also removes unused tagged images. With
+--build-cache, run docker builder prune with housekeeping.builderPrune's
+keepStorage instead. The prune waits for the host's running operations and
+holds new ones back while it runs. It works in maintenance mode too.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			kind := store.KindImagePrune
+			if cache {
+				kind = store.KindBuilderPrune
+			}
+			op, err := cf.client().PruneHost(ctx(cmd), args[0], kind, all)
+			if err != nil {
+				return err
+			}
+			return wf.finish(cmd, cf, op)
+		},
+	}
+	cmd.Flags().BoolVar(&all, "all", false, "remove every unused image (or all unused build cache), not just dangling ones")
+	cmd.Flags().BoolVar(&cache, "build-cache", false, "prune build cache instead of images")
+	wf.register(cmd)
+	return cmd
+}
+
+func newHostOperationsCmd(cf *clientFlags) *cobra.Command {
+	var (
+		format outputFormat
+		limit  int
+	)
+	cmd := &cobra.Command{
+		Use:     "operations NAME",
+		Aliases: []string{"ops"},
+		Short:   "List a host's image and build cache prunes, newest first",
+		Args:    cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ops, err := cf.client().HostOperations(ctx(cmd), args[0], limit)
+			if err != nil {
+				return err
+			}
+			return format.write(cmd.OutOrStdout(), ops, func(w io.Writer) {
+				tw := tabwriter.NewWriter(w, 0, 8, 2, ' ', 0)
+				fmt.Fprintln(tw, "ID\tKIND\tBY\tPHASE\tSTARTED\tMESSAGE")
+				for _, op := range ops {
+					fmt.Fprintf(tw, "%d\t%s\t%s\t%s\t%s\t%s\n", op.ID, op.Kind, cmp.Or(op.User, op.Trigger), op.Phase, ago(op.StartedAt), firstLine(op.Message))
+				}
+				_ = tw.Flush()
+			})
+		},
+	}
+	cmd.Flags().IntVar(&limit, "limit", 20, "how many operations to show")
+	format.register(cmd)
 	return cmd
 }
 

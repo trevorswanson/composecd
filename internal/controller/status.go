@@ -155,6 +155,14 @@ type HostStatus struct {
 	Orphans []string `json:"orphans,omitempty"`
 	// Self is the release composecd itself runs as on this host, if any.
 	Self string `json:"self,omitempty"`
+	// Disk is the host's last disk measurement; only hosts with housekeeping
+	// are measured.
+	Disk *hosts.DiskUsage `json:"disk,omitempty"`
+	// DiskWarning says the disk is past housekeeping.diskWarning.
+	DiskWarning string `json:"diskWarning,omitempty"`
+	// NextPrune is when each scheduled prune (image-prune, builder-prune)
+	// runs next.
+	NextPrune map[string]time.Time `json:"nextPrune,omitempty"`
 }
 
 // Event is something notifications report.

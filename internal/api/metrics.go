@@ -48,6 +48,22 @@ func (s *server) metrics(w http.ResponseWriter, _ *http.Request) {
 		m.sample("composecd_host_orphaned_releases", float64(len(h.Orphans)), "host", h.Name)
 	}
 
+	m.help("composecd_host_disk_used_ratio", "gauge", "Share of the filesystem holding the engine's data root in use (hosts with housekeeping).")
+	for _, h := range hs {
+		if ratio, ok := h.Disk.UsedRatio(); ok {
+			m.sample("composecd_host_disk_used_ratio", ratio, "host", h.Name)
+		}
+	}
+	m.help("composecd_host_reclaimable_bytes", "gauge", "Space docker system df says pruning could free, by kind (hosts with housekeeping).")
+	for _, h := range hs {
+		if h.Disk == nil {
+			continue
+		}
+		for _, k := range h.Disk.Kinds {
+			m.sample("composecd_host_reclaimable_bytes", float64(k.Reclaimable), "host", h.Name, "kind", k.Kind)
+		}
+	}
+
 	ops := s.c.OperationMetrics()
 	m.help("composecd_operations_total", "counter", "Operations finished since composecd started.")
 	for _, o := range ops {

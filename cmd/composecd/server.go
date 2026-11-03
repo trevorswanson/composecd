@@ -138,6 +138,8 @@ func runServer(parent context.Context, boot *config.Bootstrap, log *slog.Logger)
 		SelfContainer: controller.ContainerID(),
 		// Starts the container that updates composecd itself.
 		Helpers: backend,
+		// Measures and prunes hosts that have housekeeping.
+		Housekeeper: backend,
 	})
 	authn := &auth.Authenticator{Store: st, AdminToken: token, Disabled: boot.Auth.Disabled}
 	if boot.Auth.OIDC != nil {
