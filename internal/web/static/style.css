@@ -553,6 +553,23 @@ details[open] summary { border-bottom: 1px solid var(--mf-line); }
 .gnode.s-missing, .gnode.s-prune { border-style: dashed; }
 .gnode.s-prune { opacity: .75; }
 .gnode.dim { opacity: .25; }
+.gnode.static { cursor: inherit; }
+/* Another stack's containers on an app's graph stay faint until pointed at. */
+.gnode.neighbor { opacity: .4; border-style: dashed; }
+.gnode.neighbor:hover, .gnode.neighbor:focus-visible { opacity: 1; }
+.gedge.e-neighbor { stroke-dasharray: 3 4; opacity: .5; }
+.gedge.dim { opacity: .12; }
+.gstack { position: absolute; border: 1.5px dashed var(--mf-line-strong); border-radius: var(--mf-radius-card);
+  background: color-mix(in srgb, var(--mf-surface) 55%, transparent); transition: opacity .15s; }
+.gstack.dim { opacity: .3; }
+.gstack-name { position: absolute; left: 10px; top: 4px; font-weight: 600; font-size: 13px; color: var(--mf-text); }
+a.gstack-name { color: var(--mf-accent); text-decoration: none; }
+a.gstack-name:hover { text-decoration: underline; }
+.gstack-kind { position: absolute; right: 10px; top: 5px; font-size: 11px; color: var(--mf-text-3); }
+.graph-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.graph-actions [data-neighbors][aria-pressed="true"] { border-color: var(--mf-accent); color: var(--mf-accent); }
+.stack-pick { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--mf-text-2); }
+.legend .k-stack::before { background: none; border: 1.5px dashed var(--mf-line-strong); border-radius: 3px; }
 .gtext { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .gname { font-weight: 600; font-size: 14px; line-height: 18px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .gsub { font: 400 11px/16px var(--mf-mono); color: var(--mf-text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

@@ -63,7 +63,7 @@ func TestWebPagesAndActions(t *testing.T) {
 	b.login("", "secret")
 	cases := map[string]string{
 		"/": "Applications", "/apps?host=nas&sync=Synced&health=Healthy": "<strong>media</strong>",
-		"/apps?label=missing": "No applications match", "/hosts": "Start maintenance", "/hosts/nas": "composetpl releases", "/windows": "nightly",
+		"/apps?label=missing": "No applications match", "/hosts": "Start maintenance", "/hosts/nas": "traefik-proxy-1", "/windows": "nightly",
 		"/operations": "operator", "/settings": "Create token",
 		"/apps/media": "Sync status", "/ui/apps/media/details": "Desired revision", "/apps/media?tab=containers": "media-web-1",
 		"/apps/media?tab=graph": `class="graph-data"`, "/ui/apps/media/objects/services/web": "nginx:1", "/ui/apps/media/objects/services/web?view=desired": "image: nginx:1",

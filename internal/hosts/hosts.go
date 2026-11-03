@@ -57,6 +57,8 @@ type Backend interface {
 	Watch(ctx context.Context, h *Host, on events.Handlers) error
 	// Logs streams stdout and stderr until completion or cancellation.
 	Logs(ctx context.Context, h *Host, container string, tail int, follow bool, w io.Writer) error
+	// Resources lists every container, network and volume on h.
+	Resources(ctx context.Context, h *Host) (*Resources, error)
 }
 
 // Host is one engine.

@@ -4,7 +4,7 @@
 <title>composecd · {{if .User}}{{if eq .Page "detail"}}{{.Name}}{{else}}{{.Page}}{{end}}{{else}}Sign in{{end}}</title>
 <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="/static/style.css">
-<script defer src="/static/htmx-2.0.11.min.js"></script><script defer src="/static/sse-2.2.4.js"></script><script defer src="/static/ui.js"></script>{{if eq .Page "detail"}}<script defer src="/static/dagre-1.1.4.min.js"></script><script defer src="/static/graph.js"></script>{{end}}
+<script defer src="/static/htmx-2.0.11.min.js"></script><script defer src="/static/sse-2.2.4.js"></script><script defer src="/static/ui.js"></script>{{if or (eq .Page "detail") (eq .Page "host")}}<script defer src="/static/dagre-1.1.4.min.js"></script><script defer src="/static/graph.js"></script>{{end}}
 <noscript><style>.sidebar-menu { display: flex !important; } .nav-toggle { display: none !important; }</style></noscript>
 </head><body {{with .User}}hx-headers="{{headers .}}"{{end}}>
 {{if not .User}}

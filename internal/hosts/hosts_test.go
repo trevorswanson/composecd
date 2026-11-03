@@ -173,6 +173,8 @@ func TestMarkStale(t *testing.T) {
 
 func (b *pingBackend) Logs(context.Context, *Host, string, int, bool, io.Writer) error { return nil }
 
+func (b *pingBackend) Resources(context.Context, *Host) (*Resources, error) { return &Resources{}, nil }
+
 func TestCLILogs(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("uses a shell script as a fake docker")
