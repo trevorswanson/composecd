@@ -130,6 +130,23 @@ func IsSemver(tag string) bool {
 	return err == nil
 }
 
+// Accepts is true when the policy would pick tag over current: for semver, a
+// newer version allowed by the constraint and tag filters; for newest-build,
+// a tag the filters allow.
+func (p Policy) Accepts(current, tag string) bool {
+	if !p.allowed()(tag) {
+		return false
+	}
+	switch p.Strategy {
+	case StrategySemver:
+		got, err := p.PickSemver(current, []string{tag})
+		return err == nil && got == tag && tag != current
+	case StrategyNewestBuild:
+		return true
+	}
+	return false
+}
+
 // PickSemver returns the highest of tags that the policy allows and that is
 // newer than current, or current when none is. Tags that aren't semantic
 // versions are ignored, and prereleases are picked only when the constraint

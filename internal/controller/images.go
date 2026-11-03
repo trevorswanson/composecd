@@ -130,38 +130,6 @@ func (c *Controller) pinImages(ctx context.Context, app *config.Application, ren
 			return res
 		}
 	}
-	// tagOf is the tag a service deploys: what its strategy picked, or Git's.
-	tagOf := func(s images.Service) string {
-		if p, ok := picks[s.Name]; s.MovesTags() && ok && pickedFor(p, s) && p.Tag != "" {
-			return p.Tag
-		}
-		return s.Ref.Tag
-	}
-	refOf := func(s images.Service) images.Ref {
-		r := s.Ref
-		r.Tag = tagOf(s)
-		return r
-	}
-
-	cache, err := c.Store.ImageDigests()
-	if err != nil {
-		res.warnings = append(res.warnings, "reading image digests: "+err.Error())
-		return res
-	}
-	var unseen []images.Ref
-	for _, s := range svcs {
-		if _, ok := cache[refOf(s).Name()]; s.Checked() && !ok {
-			unseen = append(unseen, refOf(s))
-		}
-	}
-	if len(unseen) > 0 {
-		c.resolveImages(ctx, unseen)
-		if cache, err = c.Store.ImageDigests(); err != nil {
-			res.warnings = append(res.warnings, "reading image digests: "+err.Error())
-			return res
-		}
-	}
-
 	// The images the deployed release runs, by service.
 	var deployedImages map[string]string
 	if deployed != nil {
@@ -191,6 +159,55 @@ func (c *Controller) pinImages(ctx context.Context, app *config.Application, ren
 			return ""
 		}
 		return r.Tag
+	}
+
+	// keepsDeployed is true when s's strategy has no pick for the image and
+	// policy Git has because the registry couldn't be asked, and the deployed
+	// release runs a newer tag the policy still accepts: an outage must never
+	// deploy an older image.
+	keepsDeployed := func(s images.Service) bool {
+		p, ok := picks[s.Name]
+		if !s.MovesTags() || ok && pickedFor(p, s) && p.Tag != "" {
+			return false
+		}
+		t := deployedTag(s)
+		return t != "" && t != s.Ref.Tag && s.Policy.Accepts(s.Ref.Tag, t) &&
+			deployedDigest(s, images.WithTag(s.Image, t)) != ""
+	}
+	// tagOf is the tag a service deploys: what its strategy picked, the
+	// deployed one it keeps, or Git's.
+	tagOf := func(s images.Service) string {
+		if p, ok := picks[s.Name]; s.MovesTags() && ok && pickedFor(p, s) && p.Tag != "" {
+			return p.Tag
+		}
+		if keepsDeployed(s) {
+			return deployedTag(s)
+		}
+		return s.Ref.Tag
+	}
+	refOf := func(s images.Service) images.Ref {
+		r := s.Ref
+		r.Tag = tagOf(s)
+		return r
+	}
+
+	cache, err := c.Store.ImageDigests()
+	if err != nil {
+		res.warnings = append(res.warnings, "reading image digests: "+err.Error())
+		return res
+	}
+	var unseen []images.Ref
+	for _, s := range svcs {
+		if _, ok := cache[refOf(s).Name()]; s.Checked() && !ok && !keepsDeployed(s) {
+			unseen = append(unseen, refOf(s))
+		}
+	}
+	if len(unseen) > 0 {
+		c.resolveImages(ctx, unseen)
+		if cache, err = c.Store.ImageDigests(); err != nil {
+			res.warnings = append(res.warnings, "reading image digests: "+err.Error())
+			return res
+		}
 	}
 
 	res.pins = map[string]images.Pin{}
@@ -239,6 +256,9 @@ func (c *Controller) pinImages(ctx context.Context, app *config.Application, ren
 			continue
 		}
 		st.Digest = entry.Digest
+		if keepsDeployed(s) {
+			st.Digest, st.Note = st.Deployed, "registry unreachable; keeping the deployed "+tag
+		}
 		if st.Digest == "" && st.Candidate != "" {
 			st.Digest = pick.Digest
 		}

@@ -185,6 +185,44 @@ func TestImageStrategyGitPinsAndWarnings(t *testing.T) {
 	})
 }
 
+func TestImageStrategyOutageNeverDowngrades(t *testing.T) {
+	deploy := func(t *testing.T) (*env, *fakeRegistry) {
+		t.Helper()
+		e, reg := newStrategyEnv(t, "1.27.1", `strategy: semver, constraint: "~1.27"`, "1.27.1", "1.27.3")
+		e.refresh()
+		if !strings.Contains(e.fake().Running["web"], "image: nginx:1.27.3@"+digestA) {
+			t.Fatalf("not deployed:\n%s", e.fake().Running["web"])
+		}
+		reg.setDown(true)
+		return e, reg
+	}
+
+	t.Run("a changed Git tag keeps the newer deployed tag", func(t *testing.T) {
+		e, _ := deploy(t)
+		e.commit(map[string]string{"charts/web/values.yaml": "tag: '1.27.2'\n"})
+		e.refresh()
+		web := e.app("web")
+		if !strings.Contains(e.fake().Running["web"], "image: nginx:1.27.3@"+digestA) || e.ups("web") != 1 {
+			t.Errorf("outage downgraded (ups %d):\n%s", e.ups("web"), e.fake().Running["web"])
+		}
+		im := imageOf(web, "web")
+		if web.Sync.Status != Synced || im == nil || im.Tag != "1.27.3" || im.Digest != digestA || im.Error == "" ||
+			!strings.Contains(im.Note, "registry unreachable; keeping the deployed 1.27.3") {
+			t.Errorf("sync %+v, image %+v", web.Sync, im)
+		}
+	})
+
+	t.Run("a narrowed constraint deploys Git's tag", func(t *testing.T) {
+		e, _ := deploy(t)
+		e.apps(strategyApp("web", `strategy: semver, constraint: "<1.27.3"`))
+		e.refresh()
+		running := e.fake().Running["web"]
+		if strings.Contains(running, "1.27.3") || !strings.Contains(running, "image: nginx:1.27.1") {
+			t.Errorf("want Git's tag:\n%s", running)
+		}
+	})
+}
+
 func TestImageNewestBuildStrategy(t *testing.T) {
 	defer func(n int) { images.NewestBuildCandidates = n }(images.NewestBuildCandidates)
 	images.NewestBuildCandidates = 2

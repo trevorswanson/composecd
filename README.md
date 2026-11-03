@@ -959,6 +959,8 @@ syncPolicy:
   `image nginx (web): 1.27.1 → 1.27.3`, and notifications read `nginx (web): 1.27.3 available (semver ~1.27)`.
   The **images** tab, `app get` and the API show each image's strategy, the deployed tag and the candidate.
   Rolling back restores the old tag and pauses auto-sync, so the pick isn't deployed again until you resume.
+- **An outage never downgrades.** When Git's tag or the policy changes while the registry can't be reached, a
+  deployed tag the policy still accepts, and that is newer than Git's, is kept until a check succeeds.
 - **Never moved:** digests pinned in Git (still reported), `${VAR}` images, `build:` services and hooks.
 
 [The example](examples/image-updates/README.md) follows patch releases of whoami.

@@ -71,6 +71,29 @@ func TestPickSemver(t *testing.T) {
 	}
 }
 
+func TestPolicyAccepts(t *testing.T) {
+	semverP := Policy{Strategy: StrategySemver, Constraint: "~1.27", IgnoreTags: []string{"*.9"}}
+	newest := Policy{Strategy: StrategyNewestBuild, AllowTags: "^main-"}
+	for _, c := range []struct {
+		p            Policy
+		current, tag string
+		want         bool
+	}{
+		{semverP, "1.27.1", "1.27.3", true},
+		{semverP, "1.27.3", "1.27.1", false}, // older
+		{semverP, "1.27.1", "1.28.0", false}, // outside the constraint
+		{semverP, "1.27.1", "1.27.9", false}, // ignored
+		{semverP, "1.27.1", "latest", false},
+		{newest, "main-1", "main-0", true},
+		{newest, "main-1", "dev", false},
+		{Policy{}, "1", "2", false},
+	} {
+		if got := c.p.Accepts(c.current, c.tag); got != c.want {
+			t.Errorf("%+v.Accepts(%s, %s) = %v", c.p, c.current, c.tag, got)
+		}
+	}
+}
+
 func TestNewestCandidates(t *testing.T) {
 	defer func(n int) { NewestBuildCandidates = n }(NewestBuildCandidates)
 	NewestBuildCandidates = 3
