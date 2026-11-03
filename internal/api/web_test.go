@@ -477,16 +477,17 @@ func TestHostsEventsReuseDiscovery(t *testing.T) {
 		t.Fatal("missing frame", sc.Err())
 	}
 	next()
-	st.updates <- controller.Update{Kind: "app", Name: "media"}
+	// (A frame the same as the last isn't sent, so this one's kind differs.)
+	st.updates <- controller.Update{Kind: "host", Name: "nas"}
 	next()
 	if got := st.calls.Load(); got != 1 {
 		t.Fatalf("live updates ran discovery %d more times", got-1)
 	}
-	// A rescan runs in the background and wakes the open page.
+	// A rescan runs discovery again; the open page gets a frame only if
+	// what it shows changed, which with this stub it doesn't.
 	if code, body := do(t, srv, "POST", "/ui/hosts/nas/rescan", "secret", ""); code != 200 {
 		t.Fatal(code, body)
 	}
-	next()
 	for st.calls.Load() < 2 && ctx.Err() == nil {
 		time.Sleep(10 * time.Millisecond)
 	}
