@@ -64,6 +64,8 @@ type AppStatus struct {
 	// Error is why the app could not be fully reconciled.
 	Error        string    `json:"error,omitempty"`
 	ReconciledAt time.Time `json:"reconciledAt"`
+	// generation is the controller's generation when the assessment began.
+	generation uint64
 }
 
 // SyncStatus compares Git with what is deployed.

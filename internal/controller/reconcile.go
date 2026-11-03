@@ -71,6 +71,7 @@ func (c *Controller) reconcile(ctx context.Context, app *config.Application, fet
 		st.Error = strings.TrimPrefix(st.Error+"; "+msg, "; ")
 	}
 	c.setStatus(st)
+	c.endRollout(app)
 }
 
 func baseStatus(app *config.Application) *AppStatus {
@@ -93,6 +94,9 @@ func (c *Controller) assess(ctx context.Context, app *config.Application, fetchE
 	name := app.Metadata.Name
 	st := baseStatus(app)
 	st.ReconciledAt = time.Now()
+	c.mu.RLock()
+	st.generation = c.generation
+	c.mu.RUnlock()
 	if state, err := c.Store.AppState(name); err == nil {
 		st.Paused, st.PausedReason = state.Paused, state.PausedReason
 	}

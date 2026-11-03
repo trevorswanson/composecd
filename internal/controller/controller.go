@@ -83,7 +83,10 @@ type Controller struct {
 	retiredHosts map[string]*hosts.Host
 	root         RootStatus
 	apps         map[string]*appState
-	running      map[string]int64
+	// generation counts changes to the desired state (refreshes, fetches,
+	// image updates); see bumpGeneration.
+	generation uint64
+	running    map[string]int64
 	// liveLogs are running operations' output, by operation ID, so it can be
 	// followed before the operation finishes.
 	liveLogs map[int64]*logBuffer
@@ -147,6 +150,13 @@ type appState struct {
 	reader   bool
 	// images are the images of the app's last render, which CheckImages checks.
 	images []images.Service
+	// rollingOut is set while a rolling sync has let the app sync and its
+	// status doesn't show the result yet, so its siblings count it as updating.
+	rollingOut bool
+	// healthySince is when the app last became Healthy, or was last synced
+	// while Healthy; zero while it isn't. Rolling sync's minHealthyTime
+	// counts from it.
+	healthySince time.Time
 }
 
 // infisicalClient returns the shared client for the bootstrap's infisical
@@ -390,6 +400,7 @@ func (c *Controller) RefreshAll(ctx context.Context) {
 		c.objects = objs
 		c.windows = windows.Compile(objs.SyncWindows)
 	}
+	c.generation++
 	objs = c.objects
 	c.mu.Unlock()
 	if objs == nil {
@@ -611,6 +622,16 @@ func (c *Controller) setStatus(st *AppStatus) {
 	}
 	prev := s.status
 	s.status = *st
+	switch {
+	case st.Health.Status != health.Healthy:
+		s.healthySince = time.Time{}
+	case s.healthySince.IsZero() || releaseRevision(&prev) != releaseRevision(st):
+		s.healthySince = time.Now()
+	}
+	if prev.Sync.Status != st.Sync.Status || prev.Health.Status != st.Health.Status || releaseRevision(&prev) != releaseRevision(st) ||
+		prev.generation != st.generation {
+		c.wakeRolloutLocked(st.Labels[config.LabelApplicationSet], st.Name)
+	}
 	c.mu.Unlock()
 	c.publish("app", st.Name)
 	if !ok || prev.Name == "" {
@@ -834,7 +855,17 @@ func sourceRepo(app *config.Application) string {
 
 func (c *Controller) fetchSource(ctx context.Context, app *config.Application) error {
 	if url := sourceRepo(app); url != "" {
-		return c.Git.Fetch(ctx, url)
+		err := c.Git.Fetch(ctx, url)
+		c.bumpGeneration()
+		return err
 	}
 	return nil
+}
+
+// bumpGeneration says the desired state may have changed (new commits, new
+// image digests), so statuses assessed before are stale for rolling sync.
+func (c *Controller) bumpGeneration() {
+	c.mu.Lock()
+	c.generation++
+	c.mu.Unlock()
 }

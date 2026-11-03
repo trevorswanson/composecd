@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/trevorswanson/composetpl/pkg/release"
 
@@ -22,10 +23,12 @@ type ApplicationSetStatus = appset.Status
 // generated applications that can't be reconciled, so a set whose charts don't
 // render doesn't look healthy.
 func (c *Controller) ApplicationSets() []ApplicationSetStatus {
+	now := time.Now()
 	c.mu.RLock()
 	out := make([]ApplicationSetStatus, len(c.appsets))
 	for i, s := range c.appsets {
 		out[i] = s
+		out[i].Rollout = c.rolloutStatusLocked(s.Name, now)
 		out[i].Applications = append([]string{}, s.Applications...)
 		out[i].Warnings = append([]string(nil), s.Warnings...)
 		out[i].AppErrors = nil
@@ -42,6 +45,13 @@ func (c *Controller) ApplicationSets() []ApplicationSetStatus {
 	for i := range out {
 		for name, err := range out[i].AppErrors {
 			out[i].AppErrors[name] = c.Mask(name, err)
+		}
+		if r := out[i].Rollout; r != nil {
+			for _, step := range r.Steps {
+				for j, a := range step.Applications {
+					step.Applications[j].Message = c.Mask(a.Name, a.Message)
+				}
+			}
 		}
 	}
 	return out
