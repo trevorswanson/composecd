@@ -239,7 +239,20 @@ button { font: inherit; }
 .btn.is-busy::before { content: ""; flex: none; width: 14px; height: 14px; background: currentColor;
   -webkit-mask: var(--g-arc) center / contain no-repeat; mask: var(--g-arc) center / contain no-repeat; animation: mf-spin 1s linear infinite; }
 @media (prefers-reduced-motion: reduce) { .btn.is-busy::before { animation: none; } }
-.htmx-request .btn, .btn.htmx-request { opacity: .6; pointer-events: none; }
+.htmx-request .btn:not(.is-pending), .btn.htmx-request { opacity: .6; pointer-events: none; }
+/* A button reports the action it started: its icon (or an arc, if it has none)
+   spins until the action ends, then a check or a cross shows how. */
+.btn.is-pending, .btn.is-done, .btn.is-failed { pointer-events: none; }
+.btn.is-pending:disabled { background: var(--mf-accent-soft); border-color: var(--mf-accent-soft); color: var(--mf-accent); cursor: progress; }
+.btn.is-pending::before, .btn.is-done::before, .btn.is-failed::before { content: ""; flex: none; width: 16px; height: 16px; background: currentColor;
+  -webkit-mask: var(--i, var(--g-arc)) center / contain no-repeat; mask: var(--i, var(--g-arc)) center / contain no-repeat; }
+.btn-sm.is-pending::before, .btn-sm.is-done::before, .btn-sm.is-failed::before { width: 14px; height: 14px; }
+.btn.is-pending::before { animation: mf-spin 1s linear infinite; }
+.btn.is-done { border-color: var(--mf-ok); color: var(--mf-ok); background: var(--mf-ok-soft); }
+.btn.is-done::before { -webkit-mask-image: var(--i-ok); mask-image: var(--i-ok); }
+.btn.is-failed { border-color: var(--mf-bad); color: var(--mf-bad); background: var(--mf-bad-soft); }
+.btn.is-failed::before { -webkit-mask-image: var(--i-alert); mask-image: var(--i-alert); }
+@media (prefers-reduced-motion: reduce) { .btn.is-pending::before { animation: none; } }
 
 /* Fields */
 label { font-size: 13px; line-height: 18px; font-weight: 500; }
@@ -370,6 +383,25 @@ a.name:hover { color: var(--mf-accent); }
 .callout.ok { --tone: var(--mf-ok); --ci: var(--i-ok); background: var(--mf-ok-soft); }
 .callout.warn { --tone: var(--mf-warn); --ci: var(--i-windows); background: var(--mf-warn-soft); }
 .callout.bad { --tone: var(--mf-bad); --ci: var(--i-alert); background: var(--mf-bad-soft); }
+.callout.busy { --ci: var(--g-arc); }
+.callout.busy::before { animation: mf-spin 1s linear infinite; }
+@media (prefers-reduced-motion: reduce) { .callout.busy::before { animation: none; } }
+.callout .detail { white-space: pre-line; }
+.callout-close { flex: none; margin: -6px -10px -6px auto; }
+#action-result { display: flex; flex-direction: column; gap: 8px; }
+/* Toasts report an action's outcome briefly, then fade. */
+.toasts { position: fixed; z-index: 30; right: 16px; bottom: 16px; display: flex; flex-direction: column; align-items: flex-end;
+  gap: 8px; max-width: min(420px, calc(100vw - 32px)); pointer-events: none; }
+.toast { display: flex; gap: 10px; align-items: flex-start; padding: 10px 14px; border-radius: var(--mf-radius);
+  background: var(--mf-surface); border: 1px solid var(--mf-line); box-shadow: var(--mf-shadow-raised); color: var(--mf-text);
+  font-size: 14px; line-height: 20px; overflow-wrap: anywhere; pointer-events: auto; cursor: pointer;
+  animation: mf-toast-in .15s ease-out, mf-toast-out .3s ease-in 5s forwards; }
+.toast::before { content: ""; flex: none; width: 16px; height: 16px; margin-top: 2px; background: var(--mf-ok);
+  -webkit-mask: var(--i-ok) center / contain no-repeat; mask: var(--i-ok) center / contain no-repeat; }
+.toast:hover { animation-play-state: running, paused; }
+@keyframes mf-toast-in { from { opacity: 0; transform: translateY(8px); } }
+@keyframes mf-toast-out { to { opacity: 0; transform: translateY(8px); } }
+@media (prefers-reduced-motion: reduce) { .toast { animation: mf-toast-out 0s linear 5s forwards; } }
 #action-result:empty { display: none; }
 .secret { display: block; margin-top: 6px; padding: 8px 12px; border-radius: var(--mf-radius-chip); background: var(--mf-surface);
   border: 1px solid var(--mf-line); font-size: 13px; overflow-wrap: anywhere; user-select: all; }
@@ -409,6 +441,7 @@ a.name:hover { color: var(--mf-accent); }
   font: 400 12px/20px var(--mf-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
 .log span { display: block; }
 .log:empty::before { content: "Waiting for output…"; color: var(--mf-text-3); }
+.log[data-ended]:empty::before { content: "No output"; }
 details { border-top: 1px solid var(--mf-line); }
 summary { padding: 10px 16px; cursor: pointer; color: var(--mf-accent); font-size: 13px; font-weight: 500; }
 summary:hover { color: var(--mf-accent-hover); }

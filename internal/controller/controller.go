@@ -83,6 +83,11 @@ type Controller struct {
 	retiredHosts map[string]*hosts.Host
 	root         RootStatus
 	apps         map[string]*appState
+	// refreshesStarted and refreshesFetched count RefreshAll's runs, and how
+	// far they have fetched the root; refreshed is closed, and replaced, when
+	// one fetches. RefreshWait waits on them.
+	refreshesStarted, refreshesFetched uint64
+	refreshed                          chan struct{}
 	// generation counts changes to the desired state (refreshes, fetches,
 	// image updates); see bumpGeneration.
 	generation uint64
@@ -362,6 +367,37 @@ func (c *Controller) Refresh() {
 	}
 }
 
+// RefreshWait is Refresh, returning once a refresh that started after the call
+// has fetched the root, with the root's status and its error, or ctx's error
+// if that comes first. The refresh carries on in the background either way.
+func (c *Controller) RefreshWait(ctx context.Context) (RootStatus, error) {
+	c.mu.RLock()
+	want := c.refreshesStarted + 1
+	c.mu.RUnlock()
+	c.Refresh()
+	for {
+		c.mu.Lock()
+		if c.refreshesFetched >= want {
+			root := c.root
+			c.mu.Unlock()
+			if root.Error != "" {
+				return root, errors.New(root.Error)
+			}
+			return root, nil
+		}
+		if c.refreshed == nil {
+			c.refreshed = make(chan struct{})
+		}
+		wake := c.refreshed
+		c.mu.Unlock()
+		select {
+		case <-wake:
+		case <-ctx.Done():
+			return RootStatus{}, ctx.Err()
+		}
+	}
+}
+
 func (c *Controller) baseContext() context.Context {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -372,6 +408,10 @@ func (c *Controller) baseContext() context.Context {
 // every Application, auto-syncing those that want it.
 func (c *Controller) RefreshAll(ctx context.Context) {
 	defer c.publish("app", "")
+	c.mu.Lock()
+	c.refreshesStarted++
+	refresh := c.refreshesStarted
+	c.mu.Unlock()
 	objs, sha, err := c.loadRoot(ctx)
 	rootErr := err
 	var generatorFetches map[string]error
@@ -391,6 +431,13 @@ func (c *Controller) RefreshAll(ctx context.Context) {
 	if reported := errors.Join(err, setErr); reported != nil {
 		c.root.Error = reported.Error()
 		c.Log.Error("refreshing the root", "repo", c.Boot.Root.RepoURL, "error", reported)
+	}
+	if refresh > c.refreshesFetched {
+		c.refreshesFetched = refresh
+		if c.refreshed != nil {
+			close(c.refreshed)
+			c.refreshed = nil
+		}
 	}
 	// A failed fetch still yields the objects at the cached revision. Prune only
 	// runs on objects read fresh from Git. A failed ApplicationSet alone doesn't

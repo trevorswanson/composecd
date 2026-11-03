@@ -208,12 +208,23 @@ func (c *Controller) rememberImages(name string, svcs []images.Service) {
 	s.images = svcs
 }
 
+// ImageCheck is what a registry check found.
+type ImageCheck struct {
+	// Checked counts the tags asked about.
+	Checked int `json:"checked"`
+	// Updated are the tags whose digest moved since the last check.
+	Updated []string `json:"updated,omitempty"`
+	// Failed are why the tags a registry didn't answer for failed.
+	Failed map[string]string `json:"failed,omitempty"`
+}
+
 // resolveImages asks registries for refs' digests and records them, or the
 // error, keeping the last digest. It returns the refs whose digest, or whether
-// their check failed, changed.
-func (c *Controller) resolveImages(ctx context.Context, refs []images.Ref) map[string]bool {
+// their check failed, changed, and what the check found.
+func (c *Controller) resolveImages(ctx context.Context, refs []images.Ref) (map[string]bool, ImageCheck) {
 	before, _ := c.Store.ImageDigests()
 	changed := map[string]bool{}
+	check := ImageCheck{Checked: len(refs)}
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, imageConcurrency)
@@ -231,6 +242,12 @@ func (c *Controller) resolveImages(ctx context.Context, refs []images.Ref) map[s
 			now, prev := time.Now(), before[r.Name()]
 			if err != nil {
 				c.Log.Warn("checking an image", "image", r.Name(), "error", err)
+				mu.Lock()
+				if check.Failed == nil {
+					check.Failed = map[string]string{}
+				}
+				check.Failed[r.Name()] = err.Error()
+				mu.Unlock()
 				if serr := c.Store.SetImageError(r.Name(), err.Error(), now); serr != nil {
 					c.Log.Error("recording an image check", "image", r.Name(), "error", serr)
 				}
@@ -247,37 +264,64 @@ func (c *Controller) resolveImages(ctx context.Context, refs []images.Ref) map[s
 				return
 			}
 			if prev.Digest != d || prev.Error != "" {
+				mu.Lock()
 				if prev.Digest != d {
 					c.Log.Info("image digest changed", "image", r.Name(), "from", prev.Digest, "to", d)
 				}
-				mu.Lock()
+				// A first digest is news to no one.
+				if prev.Digest != d && prev.Digest != "" {
+					check.Updated = append(check.Updated, r.Name())
+				}
 				changed[r.Name()] = true
 				mu.Unlock()
 			}
 		}()
 	}
 	wg.Wait()
-	return changed
+	sort.Strings(check.Updated)
+	return changed, check
 }
 
 // CheckImages asks registries for the digests of the tags app's services use
 // (every app's, when app is ""), in the background, then reconciles the apps
 // whose digests changed, and app itself.
 func (c *Controller) CheckImages(app string) error {
+	_, err := c.startImageCheck(app)
+	return err
+}
+
+// CheckImagesWait is CheckImages, returning what the registries said once they
+// have all answered, or ctx's error if that comes first. The check carries on
+// in the background either way.
+func (c *Controller) CheckImagesWait(ctx context.Context, app string) (ImageCheck, error) {
+	done, err := c.startImageCheck(app)
+	if err != nil {
+		return ImageCheck{}, err
+	}
+	select {
+	case check := <-done:
+		return check, nil
+	case <-ctx.Done():
+		return ImageCheck{}, ctx.Err()
+	}
+}
+
+func (c *Controller) startImageCheck(app string) (<-chan ImageCheck, error) {
 	if app != "" {
 		if _, err := c.application(app); err != nil {
-			return err
+			return nil, err
 		}
 	}
+	done := make(chan ImageCheck, 1)
 	c.ops.Add(1)
 	go func() {
 		defer c.ops.Done()
-		c.checkImages(c.baseContext(), app)
+		done <- c.checkImages(c.baseContext(), app)
 	}()
-	return nil
+	return done, nil
 }
 
-func (c *Controller) checkImages(ctx context.Context, only string) {
+func (c *Controller) checkImages(ctx context.Context, only string) ImageCheck {
 	c.mu.RLock()
 	uses := map[string][]string{}
 	var refs []images.Ref
@@ -300,7 +344,8 @@ func (c *Controller) checkImages(ctx context.Context, only string) {
 	if only != "" {
 		apps[only] = true
 	}
-	for ref := range c.resolveImages(ctx, refs) {
+	changed, check := c.resolveImages(ctx, refs)
+	for ref := range changed {
 		for _, a := range uses[ref] {
 			apps[a] = true
 		}
@@ -313,6 +358,7 @@ func (c *Controller) checkImages(ctx context.Context, only string) {
 			c.reconcileAsync(a, false)
 		}
 	}
+	return check
 }
 
 // runImageSchedule calls CheckImages for every app on composecd.yaml's
