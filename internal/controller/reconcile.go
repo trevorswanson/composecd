@@ -126,10 +126,16 @@ func (c *Controller) assess(ctx context.Context, app *config.Application, fetchE
 	// Prepare first: it learns the secret paths that reading history masks.
 	p, err := c.prepare(ctx, app, h)
 	hist, herr := c.releaseHistory(h, name)
-	if herr == nil {
-		c.rememberManifest(name, deployedManifest(hist), false)
+	// An app that can't render from Git shows lookup its deployed manifest.
+	// Only once a render has failed: one still running isn't known yet, so a
+	// reader doesn't see its deployed (older) labels in place of Git's.
+	renderFailed := func() {
+		if herr == nil {
+			c.rememberManifest(name, deployedManifest(hist), false)
+		}
 	}
 	if err != nil {
+		renderFailed()
 		return fail(err)
 	}
 	if herr != nil {
@@ -161,6 +167,7 @@ func (c *Controller) assess(ctx context.Context, app *config.Application, fetchE
 	c.markReader(name, p.lookup.reads())
 	if err != nil {
 		p.done()
+		renderFailed()
 		return fail(p.prep.RelativeErr(err))
 	}
 	pinned := c.pinImages(ctx, app, manifest, deployed)

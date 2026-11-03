@@ -35,6 +35,8 @@ type fakeBackend struct {
 	watching chan struct{}
 	watched  sync.Once
 	stores   int // storage drivers built
+	// wrap, when set, wraps every host's runner.
+	wrap func(compose.Runner) compose.Runner
 }
 
 func (b *fakeBackend) Watch(ctx context.Context, h *hosts.Host, on events.Handlers) error {
@@ -58,7 +60,11 @@ func (b *fakeBackend) Watch(ctx context.Context, h *hosts.Host, on events.Handle
 func (b *fakeBackend) Runner(h *hosts.Host, env []string, _ io.Writer) compose.Runner {
 	b.mu.Lock()
 	b.envs[h.Name()] = env
+	wrap := b.wrap
 	b.mu.Unlock()
+	if wrap != nil {
+		return wrap(b.fakes[h.Name()])
+	}
 	return b.fakes[h.Name()]
 }
 
