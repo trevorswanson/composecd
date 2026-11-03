@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/trevorswanson/composecd/internal/auth"
@@ -28,6 +29,9 @@ import (
 )
 
 type stub struct {
+	// mu guards calls for methods that pages and their event stream call
+	// concurrently.
+	mu    sync.Mutex
 	calls []string
 }
 
@@ -99,7 +103,9 @@ func (s *stub) HostOperations(host string, limit int) ([]*store.Operation, error
 	if host != "nas" {
 		return nil, fmt.Errorf("host %q: %w", host, controller.ErrNotFound)
 	}
+	s.mu.Lock()
 	s.calls = append(s.calls, fmt.Sprintf("host-operations %s %d", host, limit))
+	s.mu.Unlock()
 	return []*store.Operation{{ID: 10, Host: host, Kind: store.KindImagePrune, Phase: store.PhaseSucceeded}}, nil
 }
 
