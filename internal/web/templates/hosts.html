@@ -39,7 +39,9 @@
 {{else if not .Error}}<div class="empty"><strong>Scanning {{$.Name}}…</strong><span>Listing releases and Compose projects. This page fills in when the scan finishes.</span></div>{{end}}{{end}}{{end}}{{end}}
 
 {{define "host-graph"}}{{$d := index . 0}}{{$inv := index . 1}}{{with $inv.GraphError}}<div class="callout bad" role="alert"><div><strong>Couldn't list what runs here</strong><code>{{.}}</code></div></div>{{end}}{{with $inv.Graph}}<section class="graph-wrap card" aria-label="Everything on {{$d.Name}}">
-<div class="graph-tools"><label class="stack-pick">Highlight <select data-stack><option value="">All stacks</option>{{range .Stacks}}<option value="{{.ID}}">{{.Name}}</option>{{end}}</select></label><span class="muted">{{len .Nodes}} objects in {{len .Stacks}} stack{{if ne (len .Stacks) 1}}s{{end}}</span>{{template "zoom"}}</div>
+<div class="graph-tools"><div class="graph-actions"><div class="seg" role="group" aria-label="Show"><button type="button" data-mode="stacks" aria-pressed="false">Stacks</button><button type="button" data-mode="all" aria-pressed="false">Everything</button></div>
+<label class="stack-pick">Focus <select data-stack><option value="">All stacks</option>{{range .Stacks}}<option value="{{.ID}}">{{.Name}}</option>{{end}}</select></label><button type="button" class="btn btn-sm" data-clear hidden>Show all</button></div>
+{{$s := "s"}}{{if eq (len .Stacks) 1}}{{$s = ""}}{{end}}{{$summary := printf "%d objects in %d stack%s" (len .Nodes) (len .Stacks) $s}}<span class="muted" data-summary="{{$summary}}">{{$summary}}</span>{{template "zoom"}}</div>
 <div class="graph" tabindex="0" aria-label="Containers, networks and volumes on {{$d.Name}}"><ul class="graph-list">{{range .Nodes}}<li><span class="kind">{{.Kind}}</span> <strong>{{.Name}}</strong>{{with .Stack}} <span class="muted">{{.}}</span>{{end}}</li>{{end}}</ul></div>
 <div class="legend" aria-hidden="true">{{range $k := lines "network\nvolume\ncontainer"}}<span class="k-{{$k}}">{{$k}}</span>{{end}}<span class="k-stack">stack</span></div>
 <script type="application/json" class="graph-data">{{.}}</script>

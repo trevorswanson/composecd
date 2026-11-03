@@ -112,7 +112,8 @@ type liveKey struct{}
 // cached returns each host's cached result in cache, starting a background run
 // for any that is missing or stale (or every one, with force). With wait, it
 // waits briefly on hosts with nothing cached so quick hosts render complete.
-func cached[T any](s *Server, cache *map[string]*scan[T], hostNames []string, force, wait bool, run func(string) (*T, error)) map[string]scan[T] {
+// Live views wake when a run ends and, with announce, when one starts.
+func cached[T any](s *Server, cache *map[string]*scan[T], hostNames []string, force, wait, announce bool, run func(string) (*T, error)) map[string]scan[T] {
 	s.inventoryMu.Lock()
 	if *cache == nil {
 		*cache = map[string]*scan[T]{}
@@ -136,7 +137,9 @@ func cached[T any](s *Server, cache *map[string]*scan[T], hostNames []string, fo
 				close(done)
 				s.wakeLocked()
 			}(host, sc.running)
-			s.wakeLocked()
+			if announce {
+				s.wakeLocked()
+			}
 		}
 		if wait && sc.at.IsZero() && sc.running != nil {
 			pending = append(pending, sc.running)
@@ -164,7 +167,7 @@ wait:
 
 // inventories returns each host's cached discovery; see cached.
 func (s *Server) inventories(hostNames []string, force, wait bool) map[string]Inventory {
-	got := cached(s, &s.inventory, hostNames, force, wait, func(host string) (*controller.Unmanaged, error) {
+	got := cached(s, &s.inventory, hostNames, force, wait, true, func(host string) (*controller.Unmanaged, error) {
 		return s.C.Unmanaged(context.Background(), host)
 	})
 	out := map[string]Inventory{}
@@ -180,7 +183,8 @@ func (s *Server) inventories(hostNames []string, force, wait bool) map[string]In
 
 // hostResources returns each host's cached resource listing; see cached.
 func (s *Server) hostResources(hostNames []string, force, wait bool) map[string]scan[hosts.Resources] {
-	return cached(s, &s.resources, hostNames, force, wait, func(host string) (*hosts.Resources, error) {
+	// Nothing shows a resource scan running, so only its end wakes views.
+	return cached(s, &s.resources, hostNames, force, wait, false, func(host string) (*hosts.Resources, error) {
 		return s.C.HostResources(context.Background(), host)
 	})
 }

@@ -67,6 +67,7 @@
   --i-k-volume: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23000' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='1.8' y='4' width='12.4' height='8' rx='1.6'/%3E%3Cpath d='M4.5 8h.01M7 8h4.5'/%3E%3C/svg%3E");
   --i-k-config: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23000' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 1.8h5.2L12 4.6v9.6H4Z'/%3E%3Cpath d='M9 1.8v3h3M6 8h4M6 10.6h4'/%3E%3C/svg%3E");
   --i-k-secret: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23000' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='5.2' cy='10.8' r='2.6'/%3E%3Cpath d='m7.1 8.9 6.1-6.1M11 5l1.6 1.6M9.4 6.6 10.6 7.8'/%3E%3C/svg%3E");
+  --i-k-stack: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23000' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M8 1.8 14.2 5 8 8.2 1.8 5z'/%3E%3Cpath d='M1.8 8 8 11.2 14.2 8M1.8 11 8 14.2 14.2 11'/%3E%3C/svg%3E");
   --i-k-container: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23000' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='2' y='3.5' width='12' height='9' rx='1.2'/%3E%3Cpath d='M5 3.5v9M8 3.5v9M11 3.5v9'/%3E%3C/svg%3E");
   --i-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%238A919D' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m4 6 4 4 4-4'/%3E%3C/svg%3E");
 }
@@ -601,6 +602,23 @@ a.gstack-name:hover { text-decoration: underline; }
 .gstack-kind { position: absolute; right: 10px; top: 5px; font-size: 11px; color: var(--mf-text-3); }
 .graph-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .graph-actions [data-neighbors][aria-pressed="true"] { border-color: var(--mf-accent); color: var(--mf-accent); }
+.gnode.outside { border-style: dashed; }
+.gnode.outside[data-focus] { cursor: pointer; }
+.graph.natural { cursor: default; background-attachment: local; }
+.graph.natural ~ .legend { display: none; }
+.gband { position: absolute; left: 24px; font-size: 12px; color: var(--mf-text-3); text-transform: uppercase; letter-spacing: .04em; }
+.gstack-card { --k: var(--mf-line-strong); align-items: flex-start; padding-top: 10px; padding-bottom: 10px; }
+.gstack-card.none { border-style: dashed; }
+.gstack-card .gname .tag { margin-left: 6px; font-weight: 500; vertical-align: 1px; }
+[data-clear][hidden], .zoom[hidden] { display: none; }
+.gfan { position: absolute; font-size: 12px; font-weight: 600; color: var(--mf-text-2); padding: 2px 8px;
+  background: var(--mf-surface); border: 1px solid var(--mf-line); border-radius: 999px; }
+.gedge.e-fan { stroke-dasharray: 4 3; }
+.gicon.k-stack { --ki: var(--i-k-stack); margin-top: 2px; }
+.gchips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; overflow: hidden; max-height: 20px; }
+.gchip { font: 400 11px/16px var(--mf-mono); padding: 1px 6px; border-radius: var(--mf-radius-chip); color: var(--mf-text-2);
+  border: 1px solid color-mix(in srgb, var(--k, var(--mf-line-strong)) 60%, transparent); white-space: nowrap; }
+.gchip.shares { --k: var(--mf-line-strong); color: var(--mf-text-3); }
 .stack-pick { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--mf-text-2); }
 .legend .k-stack::before { background: none; border: 1.5px dashed var(--mf-line-strong); border-radius: 3px; }
 .gtext { flex: 1; min-width: 0; display: flex; flex-direction: column; }

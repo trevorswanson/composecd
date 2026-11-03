@@ -82,7 +82,11 @@ func (s *Server) Events(w http.ResponseWriter, r *http.Request) {
 	}
 	streamHeaders(w)
 	// Subscribe before the first snapshot so reconnects and changes during page
-	// navigation cannot leave the browser showing stale data.
+	// navigation cannot leave the browser showing stale data. A frame the same
+	// as the last one isn't sent: re-rendering a page in the browser resets
+	// what it draws (a graph's hover, an open picker) for nothing, and health
+	// checks and scans would otherwise do that every few seconds.
+	var last string
 	send := func(kind string) error {
 		current, err := s.Auth.Identify(r)
 		if err != nil || current.Role != p.Role {
@@ -97,6 +101,10 @@ func (s *Server) Events(w http.ResponseWriter, r *http.Request) {
 		if err = templates.ExecuteTemplate(&b, "panel", d); err != nil {
 			return err
 		}
+		if kind+"\n"+b.String() == last {
+			return nil
+		}
+		last = kind + "\n" + b.String()
 		return frame(w, kind, b.String())
 	}
 	if err := send("app"); err != nil {
