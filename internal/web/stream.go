@@ -2,7 +2,9 @@ package web
 
 import (
 	"bytes"
+	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"html"
 	"io"
@@ -14,6 +16,7 @@ import (
 
 	"github.com/trevorswanson/composecd/internal/auth"
 	"github.com/trevorswanson/composecd/internal/controller"
+	"github.com/trevorswanson/composecd/internal/store"
 )
 
 func streamHeaders(w http.ResponseWriter) {
@@ -225,9 +228,16 @@ func (s *Server) OperationLog(w http.ResponseWriter, r *http.Request) {
 		pageError(w, fmt.Errorf("operation %d: %w", id, controller.ErrNotFound))
 		return
 	}
-	// FollowOperation masks already.
+	// FollowOperation masks already. A failed operation ends with its error,
+	// so the page following it can say how it ended.
 	s.stream(w, r, p, func(text string) string { return text }, func(ctx context.Context, out io.Writer) error {
-		return s.C.FollowOperation(ctx, id, out)
+		if err := s.C.FollowOperation(ctx, id, out); err != nil {
+			return err
+		}
+		if op, err := s.C.Operation(id); err == nil && op.Phase == store.PhaseFailed {
+			return errors.New(s.C.Mask(op.App, cmp.Or(op.Message, "the operation failed")))
+		}
+		return nil
 	})
 }
 

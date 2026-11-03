@@ -50,6 +50,7 @@
 <noscript><p class="card-body"><a href="/api/v1/apps/{{path $.Name}}/containers/{{path .}}/logs?tail=200">Read the log stream</a></p></noscript></section>{{end}}{{end}}
 </main></div></div>
 <dialog id="dialog" class="dialog" aria-labelledby="dialog-body"><button type="button" class="btn btn-ghost btn-sm btn-icon dialog-close i-close" aria-label="Close" data-close></button><div id="dialog-body"></div></dialog>
+<div id="toasts" class="toasts" aria-live="polite"></div>
 {{end}}</body></html>{{end}}
 
 {{define "logo"}}<svg class="logo" viewBox="0 0 40 40" aria-hidden="true"><rect class="logo-bg" width="40" height="40" rx="10"/><rect class="logo-line" x="10" y="10.5" width="20" height="7.5" rx="2"/><rect class="logo-fill" x="10" y="22" width="20" height="7.5" rx="2"/></svg>{{end}}
@@ -65,7 +66,13 @@
 
 {{define "pill"}}<span class="pill {{lower .}}">{{.}}</span>{{end}}
 
-{{define "result"}}<div class="callout ok"><div><strong>{{.Message}}</strong>{{if .Token}}<p>Copy this token now. It won't be shown again.</p><code class="secret">{{.Token}}</code>{{end}}{{with .Op}}<details class="op-live" open><summary>Output</summary>{{template "oplog" .}}</details>{{end}}</div></div>{{end}}
+{{/* result is an action's outcome: a toast that fades, and what stays to read
+   (an operation's output, a new token), with the settings it changed. */}}
+{{define "result"}}{{if .Op}}<div class="callout busy" data-op="{{.Message}}"><div><strong>{{.Message}} running</strong><details class="op-live" open><summary>Output</summary>{{template "oplog" .Op}}</details></div>{{template "dismiss"}}</div>
+{{else if .Token}}<div class="callout ok"><div><strong>{{.Message}}</strong><p>Copy this token now. It won't be shown again.</p><code class="secret">{{.Token}}</code></div>{{template "dismiss"}}</div>{{end}}
+{{with .Toast}}<div id="toasts" hx-swap-oob="beforeend"><div class="toast">{{.}}</div></div>{{end}}{{if .OOB}}{{template "panel" .}}{{end}}{{end}}
+
+{{define "dismiss"}}<button type="button" class="btn btn-ghost btn-sm btn-icon i-close callout-close" aria-label="Dismiss" data-dismiss></button>{{end}}
 
 {{/* oplog follows an operation's output; it ends when the operation does. */}}
 {{define "oplog"}}<div hx-ext="sse" sse-connect="/api/v1/apps/{{path .App}}/operations/{{.ID}}/log" sse-close="end"><pre class="log" sse-swap="log" hx-swap="beforeend"></pre><p class="error" sse-swap="error" role="alert"></p></div>{{end}}

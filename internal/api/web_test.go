@@ -94,26 +94,27 @@ func TestWebPagesAndActions(t *testing.T) {
 	if code, _, _ := b.do("POST", "/ui/apps/media/sync", "", nil); code != 403 {
 		t.Fatalf("CSRF: %d", code)
 	}
-	for path, form := range map[string][2]string{
-		"/ui/apps/media/sync":         {"", `Sync #7 started`},
-		"/ui/apps/media/rollback":     {"revision=1", `sse-connect="/api/v1/apps/media/operations/8/log"`},
-		"/ui/apps/media/pause":        {"", "Action requested"},
-		"/ui/apps/media/resume":       {"", "Action requested"},
-		"/ui/apps/media/refresh":      {"", "Action requested"},
-		"/ui/apps/media/check-images": {"", "Checking image registries"},
-		"/ui/hosts/nas/maintenance":   {"enabled=true", "Action requested"},
+	// An operation's result stays to show its output; anything else is a toast
+	// that leaves a result already showing in place.
+	for path, form := range map[string][3]string{
+		"/ui/apps/media/sync":         {"", `<strong>Sync #7 running</strong>`, ""},
+		"/ui/apps/media/rollback":     {"revision=1", `sse-connect="/api/v1/apps/media/operations/8/log"`, ""},
+		"/ui/apps/media/pause":        {"", "Paused automated sync of media", "none"},
+		"/ui/apps/media/resume":       {"", "Resumed automated sync of media", "none"},
+		"/ui/apps/media/refresh":      {"", "Refreshed media", "none"},
+		"/ui/apps/media/check-images": {"", "Checked 2 images; docker.io/library/nginx:1 has a new digest", "none"},
+		"/ui/hosts/nas/maintenance":   {"enabled=true", "Started maintenance on nas", "none"},
+		"/ui/hosts/nas/rescan":        {"", "Rescanned nas", "none"},
+		"/ui/root/refresh":            {"", "Fetched the root repository at abc", "none"},
 	} {
-		code, _, body := b.do("POST", path, form[0], map[string]string{"Content-Type": "application/x-www-form-urlencoded", auth.CSRFHeader: b.csrf, "HX-Request": "true"})
-		if code != 200 || !strings.Contains(body, form[1]) {
-			t.Errorf("%s: %d %s", path, code, body)
+		code, h, body := b.do("POST", path, form[0], map[string]string{"Content-Type": "application/x-www-form-urlencoded", auth.CSRFHeader: b.csrf, "HX-Request": "true"})
+		if code != 200 || !strings.Contains(body, form[1]) || h.Get("HX-Reswap") != form[2] {
+			t.Errorf("%s: %d %v %s", path, code, h, body)
 		}
 	}
-	for path, want := range map[string]string{"/ui/hosts/nas/rescan": "Rescan started", "/ui/root/refresh": "Fetching the root repository",
-		"/ui/root/check-images": "Checking image registries"} {
-		code, _, body := b.do("POST", path, "", map[string]string{"Content-Type": "application/x-www-form-urlencoded", auth.CSRFHeader: b.csrf, "HX-Request": "true"})
-		if code != 200 || !strings.Contains(body, want) {
-			t.Errorf("%s: %d %s", path, code, body)
-		}
+	// A registry that didn't answer fails the check, naming the image.
+	if code, _, body := b.do("POST", "/ui/root/check-images", "", map[string]string{"Content-Type": "application/x-www-form-urlencoded", auth.CSRFHeader: b.csrf, "HX-Request": "true"}); code != 500 || !strings.Contains(body, "ghcr.io/me/private:1: unauthorized") {
+		t.Errorf("failed image check: %d %s", code, body)
 	}
 	if !slices.Contains(st.calls, "check-images media") || !slices.Contains(st.calls, "check-images ") {
 		t.Errorf("image checks not requested: %v", st.calls)
@@ -170,17 +171,26 @@ func TestWebSettings(t *testing.T) {
 		return body
 	}
 	body := post("token-create", "name=reader&role=readonly")
-	if !strings.Contains(body, "ccd_") {
+	if !strings.Contains(body, "ccd_") || !strings.Contains(body, "Created the token reader") {
 		t.Fatal("token not shown once")
 	}
 	_, _, body = b.do("GET", "/settings", "", nil)
 	if strings.Contains(body, "ccd_") || !strings.Contains(body, "reader") {
 		t.Fatal("token list leaks token or omits name")
 	}
-	post("token-revoke", "name=reader")
-	post("user-add", "name=reader&role=readonly&password=long-password")
-	post("user-password", "name=reader&password=another-password")
-	post("user-delete", "name=reader")
+	// Settings has no live updates, so each result re-renders it.
+	if body = post("token-revoke", "name=reader"); !strings.Contains(body, "Revoked the token reader") || !strings.Contains(body, "No named tokens.") {
+		t.Errorf("token-revoke: %s", body)
+	}
+	if body = post("user-add", "name=reader&role=readonly&password=long-password"); !strings.Contains(body, "Added reader as readonly") || !strings.Contains(body, `id="pw-reader"`) || !strings.Contains(body, `hx-swap-oob="outerHTML"`) {
+		t.Errorf("user-add: %s", body)
+	}
+	if body = post("user-password", "name=reader&password=another-password"); !strings.Contains(body, "Changed reader&#39;s password") {
+		t.Errorf("user-password: %s", body)
+	}
+	if body = post("user-delete", "name=reader"); !strings.Contains(body, "Deleted reader") || strings.Contains(body, `id="pw-reader"`) {
+		t.Errorf("user-delete: %s", body)
+	}
 }
 
 func TestWebEventStream(t *testing.T) {
