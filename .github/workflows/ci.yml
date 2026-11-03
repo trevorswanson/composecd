@@ -34,7 +34,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -54,6 +54,19 @@ jobs:
         with:
           name: coverage
           path: coverage.out
+
+  # macOS runners are sometimes unavailable for hours. ci-ok doesn't wait for
+  # this job to start; it holds only when the job runs and fails.
+  test-macos:
+    name: test (macos-latest)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: go test
+        run: go test -race ./...
 
   integration:
     runs-on: ubuntu-latest
@@ -123,6 +136,9 @@ jobs:
     if: always()
     needs: [lint, test, integration, govulncheck, release-check, image, action]
     runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      actions: read # read test-macos's state
     steps:
       - name: All jobs passed
         env:
@@ -131,6 +147,41 @@ jobs:
           echo "job results: $RESULTS"
           for r in $RESULTS; do
             [ "$r" = "success" ] || { echo "a required job did not succeed"; exit 1; }
+          done
+      # test-macos isn't in needs, so a queue with no macOS runner can't hold
+      # this job. Wait for it if it started; pass with a warning if it hasn't
+      # started within the grace period; fail if it failed.
+      - name: macOS tests passed or never started
+        env:
+          GH_TOKEN: ${{ github.token }}
+          JOBS: repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/attempts/${{ github.run_attempt }}/jobs
+          GRACE: 300 # seconds test-macos may stay queued after the other jobs finish
+        run: |
+          deadline=$(( $(date +%s) + GRACE ))
+          while :; do
+            if ! job=$(gh api --paginate "$JOBS" \
+              --jq '.jobs[] | select(.name == "test (macos-latest)") | "\(.status) \(.conclusion // "-")"'); then
+              echo "reading the run's jobs failed; retrying"
+              sleep 20
+              continue
+            fi
+            status=${job%% *} conclusion=${job#* }
+            echo "test (macos-latest): ${status:-missing} ${conclusion}"
+            case "$status" in
+              completed)
+                case "$conclusion" in
+                  success|skipped) exit 0 ;;
+                  *) echo "test (macos-latest) $conclusion"; exit 1 ;;
+                esac ;;
+              in_progress) ;; # started: wait for its result
+              "") echo "::warning::test (macos-latest) not found in this run"; exit 0 ;;
+              *) # queued, waiting or pending: no runner has picked it up
+                if [ "$(date +%s)" -ge "$deadline" ]; then
+                  echo "::warning::test (macos-latest) never started (no macOS runner); passing without it"
+                  exit 0
+                fi ;;
+            esac
+            sleep 20
           done
 
   # Every merge to main refreshes the dev image. Versioned images and GitHub
