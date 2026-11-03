@@ -57,6 +57,14 @@ func (c *Controller) markReader(name string, reads bool) {
 	}
 }
 
+// isKnown reports whether lookup has a manifest for app: see rememberManifest.
+func (c *Controller) isKnown(name string) bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	s, ok := c.apps[name]
+	return ok && s.known
+}
+
 func (c *Controller) isReader(name string) bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
