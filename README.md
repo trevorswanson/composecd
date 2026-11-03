@@ -311,7 +311,9 @@ host maintenance, a retry or self-heal backoff, or a failed sync waiting for a c
 | `user add NAME --role R`, `user passwd NAME`, `user delete NAME`, `user list` | Local users (admin; anyone can change their own password through the API). |
 
 Hooks are composetpl's: `x-composetpl` hook services run at `pre-install`/`pre-upgrade` (Argo's PreSync),
-`post-install`/`post-upgrade` (PostSync), and around rollbacks.
+`post-install`/`post-upgrade` (PostSync), and around rollbacks. A `sync-fail` hook (SyncFail) runs when a sync
+or rollback fails, before `atomic` rolls back, so it can alert or clean up; its output is in the operation's
+log. Self-heal runs no hooks.
 
 ### API
 
@@ -994,7 +996,7 @@ The events are `sync-succeeded`, `sync-failed` (which also covers failed rollbac
 | Cluster | `Host`: a Docker engine over unix, ssh or tcp |
 | Sync status, diff, health | Same idea, per compose resource and container |
 | Automated sync, manual sync, rollback (disables auto-sync) | Same |
-| PreSync / PostSync hooks | composetpl `x-composetpl` hooks |
+| PreSync / PostSync / SyncFail hooks | composetpl `x-composetpl` hooks (`sync-fail` for SyncFail) |
 | Declarative setup (app of apps) | Everything is read from the root directory in Git |
 | Self-heal, prune | Same; prune keeps named volumes and release history |
 | Sync windows | `SyncWindow`, with the same allow/deny/manualSync rules, matched by app, host or labels |
