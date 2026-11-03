@@ -694,6 +694,18 @@ func (c *Controller) application(name string) (*config.Application, error) {
 	return nil, fmt.Errorf("application %q: %w", name, ErrNotFound)
 }
 
+// Objects are the objects last read from Git, generated Applications
+// included, or nil before the first read. Each refresh replaces them whole, so
+// they don't change under the caller, who must not change them either.
+func (c *Controller) Objects() *config.Objects {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.objects
+}
+
+// Bootstrap is the server's configuration, from composecd.yaml.
+func (c *Controller) Bootstrap() *config.Bootstrap { return c.Boot }
+
 // setStatus records st and notifies about transitions into a bad state.
 func (c *Controller) setStatus(st *AppStatus) {
 	c.mu.Lock()

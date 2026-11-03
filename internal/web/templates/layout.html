@@ -1,7 +1,7 @@
 {{define "page"}}<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 {{with .User}}<meta name="csrf-token" content="{{.CSRF}}">{{end}}
-<title>composecd · {{if .User}}{{if eq .Page "detail"}}{{.Name}}{{else}}{{.Page}}{{end}}{{else}}Sign in{{end}}</title>
+<title>composecd · {{if .User}}{{if or (eq .Page "detail") (eq .Page "host") (eq .Page "applicationset")}}{{.Name}}{{else}}{{.Page}}{{end}}{{else}}Sign in{{end}}</title>
 <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="/static/style.css">
 <script defer src="/static/htmx-2.0.11.min.js"></script><script defer src="/static/sse-2.2.4.js"></script><script defer src="/static/ui.js"></script>{{if or (eq .Page "detail") (eq .Page "host")}}<script defer src="/static/dagre-1.1.4.min.js"></script><script defer src="/static/graph.js"></script>{{end}}
@@ -25,7 +25,7 @@
 <div class="sidebar-menu" id="sidebar-menu">
 <nav class="nav" aria-label="Main">
 <a class="i-apps" href="/apps" {{if or (eq .Page "apps") (eq .Page "detail")}}aria-current="page"{{end}}>Applications</a>
-<a class="i-appsets" href="/applicationsets" {{if eq .Page "applicationsets"}}aria-current="page"{{end}}>ApplicationSets</a>
+<a class="i-appsets" href="/applicationsets" {{if or (eq .Page "applicationsets") (eq .Page "applicationset")}}aria-current="page"{{end}}>ApplicationSets</a>
 <a class="i-host" href="/hosts" {{if or (eq .Page "hosts") (eq .Page "host") (eq .Page "adopt")}}aria-current="page"{{end}}>Hosts</a>
 <a class="i-windows" href="/windows" {{if eq .Page "windows"}}aria-current="page"{{end}}>Sync windows</a>
 <a class="i-operations" href="/operations" {{if eq .Page "operations"}}aria-current="page"{{end}}>Operations</a>
@@ -86,6 +86,7 @@
 {{if eq .Page "apps"}}{{template "apps" .}}{{end}}
 {{if eq .Page "detail"}}{{template "detail" .}}{{end}}
 {{if eq .Page "applicationsets"}}{{template "appsets" .}}{{end}}
+{{if eq .Page "applicationset"}}{{template "appset" .}}{{end}}
 {{if eq .Page "hosts"}}{{template "hosts" .}}{{end}}
 {{if eq .Page "host"}}{{template "host" .}}{{end}}
 {{if eq .Page "windows"}}{{template "windows" .}}{{end}}

@@ -655,3 +655,26 @@ a.gstack-name:hover { text-decoration: underline; }
 .card-diff .empty { margin: 16px; }
 .card-diff .dialog-text { padding: 12px 16px; }
 .card-head h2 .gicon { width: 18px; height: 18px; }
+
+/* Settings: each one an object sets, inherits or leaves at its default. Set
+   ones carry an accent bar; their value, or "Default: ...", says which. */
+.settings-head { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px; margin-top: 8px; }
+.settings-head .grow { flex: 1 1 280px; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.settings-head > .summary { flex: 1 1 280px; }
+.settings { list-style: none; margin: 0; padding: 0; }
+.setting { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); gap: 8px 24px; padding: 14px 20px;
+  border-bottom: 1px solid var(--mf-line); }
+.setting:last-child { border-bottom: 0; }
+.setting.set { box-shadow: inset 3px 0 0 var(--mf-accent); }
+.setting.inherited { box-shadow: inset 3px 0 0 var(--mf-line-strong); }
+.setting-name, .setting-value { display: flex; flex-direction: column; gap: 4px; align-items: flex-start; min-width: 0; }
+.setting-name code { font-size: 11px; color: var(--mf-text-3); overflow-wrap: anywhere; }
+.setting-value > code { overflow-wrap: anywhere; }
+.setting-value .output { align-self: stretch; max-height: 240px; padding: 8px 12px; border-radius: var(--mf-radius-chip); }
+.setting-value .more { align-self: stretch; }
+.setting-value .more .output { margin-top: 6px; }
+.setting-title { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
+.setting-title .doc { font-size: 12px; }
+.fields { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 4px 12px; margin: 6px 0 0; }
+.fields dd { margin: 0; }
+@media (max-width: 800px) { .setting { grid-template-columns: minmax(0, 1fr); } }

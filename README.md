@@ -489,11 +489,12 @@ binary; there is no CDN or Node build step.
   faint until pointed at (a `traefik_proxy` network shows what else joins it; many are listed in a grid); containers and live log tails; diffs, either of the compose file against the deployed
   release (side by side, compact or every resource in full) or of each object's live state against Git; release history with rollback; operations with
   their output; and, with image updates on, the services' **images**: who pins each digest, the deployed and
-  latest digests, and whether an update can be synced or is pinned in Git. **Details** shows the source,
-  automation policy and retries.
+  latest digests, and whether an update can be synced or is pinned in Git; and its **configuration**
+  ([below](#settings-in-the-ui)). **Details** shows the source, automation policy and retries.
   Admins can sync, pause, resume, refresh and check images; a running sync disables the button and streams its output.
 - **ApplicationSets** (`/applicationsets`): generated apps, counts, expansion/validation errors and each
-  rolling sync's progress, step by step.
+  rolling sync's progress, step by step. Each set's page (`/applicationsets/NAME`) lists the Applications it
+  generated with their sync and health, and the set's and its template's configuration.
 - **Hosts** (`/hosts`): connectivity, Docker/Compose versions, orphaned releases and admin maintenance toggles.
   Each host's page draws every container, network and named volume on it. **Stacks** (the default with more
   than six stacks) lists each stack (Application or Compose project) under the networks and volumes they share;
@@ -501,11 +502,22 @@ binary; there is no CDN or Node build step.
   object, or pick one under **Focus**, to see just it and what it is connected to.
   Lists unmanaged composetpl releases and plain Compose projects with config paths. Admins can use **Adopt** to preview Application YAML, or **Delete** an orphaned release.
   **Housekeeping** shows disk usage, a warning past `diskWarning`, the next scheduled prunes and past ones;
-  admins can prune images or build cache now.
+  admins can prune images or build cache now. **Configuration** shows the host's settings.
 - **Sync windows** (`/windows`): open/closed state, next change, and matching applications.
 - **Operations** (`/operations`): the latest 50 operations across applications, including who acted and output.
 - **Settings** (`/settings`): your identity; admins can create/revoke tokens and add/delete users or change
-  passwords. A newly created token is shown once.
+  passwords. A newly created token is shown once. **Server** shows `composecd.yaml`'s settings.
+
+### Settings in the UI
+
+Every setting composecd reads is listed where it applies: an Application's on its **configuration** tab (with
+the compose service labels its services set), a Host's and an ApplicationSet's on their pages, and
+`composecd.yaml`'s on **Settings**. Each one says what it does, its value, or its default when it isn't set,
+and links to its documentation. One that isn't set has the YAML that sets it, ready to copy into the object.
+**Set** and **Not set** filter the list. Values an object takes from elsewhere show as inherited: image
+updates from `composecd.yaml`, and a source's repository and revision from the root. The UI never changes a
+setting: change it in Git (or `composecd.yaml`, then restart composecd). Notification URLs and passwords in
+repository URLs are hidden, and inline values are masked like diffs.
 
 Pages are server-rendered and readable without JavaScript; actions also accept ordinary forms. With
 JavaScript enabled, authenticated `GET /events` delivers `app`, `host` and `operation` SSE events containing

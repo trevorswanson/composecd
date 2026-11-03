@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/trevorswanson/composecd/internal/auth"
+	"github.com/trevorswanson/composecd/internal/config"
 	"github.com/trevorswanson/composecd/internal/controller"
 	"github.com/trevorswanson/composecd/internal/health"
 	"github.com/trevorswanson/composecd/internal/hosts"
@@ -65,6 +66,8 @@ type Controller interface {
 	Mask(string, string) string
 	LiveObject(ctx context.Context, app, id string, all, redact bool) (*controller.Live, error)
 	DecideImage(app, service, choice, user string) (*store.ImageDecision, error)
+	Objects() *config.Objects
+	Bootstrap() *config.Bootstrap
 }
 
 type Server struct {
@@ -250,6 +253,13 @@ type Data struct {
 	Files   []FileDiff
 	Full    bool
 	Filters url.Values
+	// Settings are the page's object's (or the server's) settings, set or
+	// not, filtered by Show: "", "set" or "unset". On an ApplicationSet's
+	// page, Template are its template's.
+	Settings, Template Settings
+	Show               string
+	// AppSet is the ApplicationSet an applicationset page shows.
+	AppSet controller.ApplicationSetStatus
 }
 
 var templates = template.Must(template.New("web").Funcs(template.FuncMap{
@@ -491,7 +501,7 @@ func toTime(v interface{}) time.Time {
 func (s *Server) Register(mux *http.ServeMux) {
 	static, _ := fs.Sub(files, "static")
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(http.FS(static))))
-	for _, route := range []string{"/{$}", "/apps", "/apps/{name}", "/hosts", "/hosts/{name}", "/windows", "/operations", "/settings", "/applicationsets"} {
+	for _, route := range []string{"/{$}", "/apps", "/apps/{name}", "/hosts", "/hosts/{name}", "/windows", "/operations", "/settings", "/applicationsets", "/applicationsets/{name}"} {
 		mux.HandleFunc("GET "+route, s.Page)
 	}
 	mux.HandleFunc("GET /hosts/{name}/adopt/{release}", s.Adopt)
@@ -539,11 +549,17 @@ func (s *Server) data(r *http.Request, p *auth.Principal) (*Data, error) {
 	switch {
 	case d.Name != "" && strings.HasPrefix(r.URL.Path, "/hosts/"):
 		d.Page = "host"
+	case d.Name != "" && strings.HasPrefix(r.URL.Path, "/applicationsets/"):
+		d.Page = "applicationset"
 	case d.Name != "":
 		d.Page = "detail"
 	}
 	if d.Page == "" {
 		d.Page = "apps"
+	}
+	d.Show = r.URL.Query().Get("show")
+	if !slices.Contains(showFilters, d.Show) {
+		d.Show = ""
 	}
 	d.Tab = r.URL.Query().Get("tab")
 	if d.Tab == "" || d.Tab == "summary" {
@@ -571,6 +587,10 @@ func (s *Server) data(r *http.Request, p *auth.Principal) (*Data, error) {
 			res := s.hostResources([]string{a.Host}, false, false)[a.Host]
 			d.Graph = appGraph(a, res.out, s.C.Apps())
 		case "containers", "images":
+		case "configuration":
+			groups, owner, err := s.appSettings(a, d.Admin)
+			d.Settings = show(groups, d.Show, err)
+			d.Settings.Origin, d.Settings.Owner = a.Origin, owner
 		case "diff":
 			d.Mode = r.URL.Query().Get("mode")
 			if d.Mode == "objects" {
@@ -601,6 +621,24 @@ func (s *Server) data(r *http.Request, p *auth.Principal) (*Data, error) {
 		}
 	case "applicationsets":
 		d.ApplicationSets = s.C.ApplicationSets()
+	case "applicationset":
+		found := false
+		for _, set := range s.C.ApplicationSets() {
+			if set.Name == d.Name {
+				d.AppSet, found = set, true
+			}
+		}
+		if !found {
+			return nil, fmt.Errorf("applicationset %q: %w", d.Name, controller.ErrNotFound)
+		}
+		generated := s.generated(d.Name)
+		for _, a := range s.C.Apps() {
+			if generated[a.Name] {
+				d.Apps = append(d.Apps, a)
+			}
+		}
+		set, template, err := s.appSetSettings(d.Name, d.Admin)
+		d.Settings, d.Template = show(set, d.Show, err), show(template, d.Show, err)
 	case "hosts", "host":
 		live := r.Context().Value(liveKey{}) != nil
 		var scan []string
@@ -626,6 +664,11 @@ func (s *Server) data(r *http.Request, p *auth.Principal) (*Data, error) {
 		if d.Page == "host" {
 			// Start listing resources first, so both scans wait together.
 			s.hostResources(scan, false, false)
+			if !d.Host.Retired {
+				groups, origin, err := s.hostSettings(d.Name, d.Admin)
+				d.Settings = show(groups, d.Show, err)
+				d.Settings.Origin = origin
+			}
 		}
 		d.Inventory = s.inventories(scan, false, !live)
 		if d.Page == "host" && len(scan) == 1 {
@@ -659,6 +702,11 @@ func (s *Server) data(r *http.Request, p *auth.Principal) (*Data, error) {
 			if err != nil {
 				return nil, err
 			}
+		}
+		groups, err := s.serverSettings()
+		d.Settings = show(groups, d.Show, err)
+		if b := s.C.Bootstrap(); b != nil {
+			d.Settings.Origin = b.Path
 		}
 	default:
 		return nil, controller.ErrNotFound
