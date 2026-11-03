@@ -9,12 +9,15 @@ import (
 	"io"
 	"net/http"
 	"strings"
+
+	"github.com/trevorswanson/composecd/internal/controller"
 )
 
 // webhook handles push events from GitHub, Gitea, Forgejo and GitLab. GitHub,
 // Gitea and Forgejo sign the body with the shared secret (HMAC-SHA256); GitLab
 // sends the secret itself as a token. A push to the root or any Application's
-// repository triggers a refresh.
+// repository triggers a refresh, except a push of nothing but a commit
+// composecd's image write-back made, which it applied already.
 func (s *server) webhook(w http.ResponseWriter, r *http.Request) {
 	if s.WebhookSecret == "" {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "webhooks are not configured (webhook.secretFile)"})
@@ -51,9 +54,19 @@ func (s *server) webhook(w http.ResponseWriter, r *http.Request) {
 			GitHTTPURL string `json:"git_http_url"`
 			GitSSHURL  string `json:"git_ssh_url"`
 		} `json:"project"`
+		After   string `json:"after"`
+		Commits []struct {
+			ID      string `json:"id"`
+			Message string `json:"message"`
+		} `json:"commits"`
 	}
 	if err := json.Unmarshal(body, &payload); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON payload"})
+		return
+	}
+	if own(payload.After, len(payload.Commits), func(i int) (string, string) { return payload.Commits[i].ID, payload.Commits[i].Message },
+		s.c.ImageUpdateCommit) {
+		writeJSON(w, http.StatusOK, map[string]string{"status": "composecd's own image update, already applied"})
 		return
 	}
 	rp, pp := payload.Repository, payload.Project
@@ -62,6 +75,22 @@ func (s *server) webhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "no application uses this repository"})
+}
+
+// own is true when a push of n commits (commit(i) is the i'th's ID and
+// message) brought nothing but commits composecd's image write-back pushed,
+// up to after.
+func own(after string, n int, commit func(i int) (string, string), known func(string) bool) bool {
+	if n == 0 || !known(after) {
+		return false
+	}
+	for i := range n {
+		id, msg := commit(i)
+		if !known(id) || !strings.Contains(msg, controller.TrailerImageUpdate) {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *server) verify(r *http.Request, body []byte) bool {

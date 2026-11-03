@@ -159,6 +159,20 @@ func (s *stub) CheckImages(name string) error {
 	return nil
 }
 
+func (s *stub) DecideImage(app, service, choice, user string) (*store.ImageDecision, error) {
+	switch {
+	case app != "media":
+		return nil, fmt.Errorf("application %q: %w", app, controller.ErrNotFound)
+	case service != "web":
+		return nil, fmt.Errorf("%s/%s: %w", app, service, controller.ErrNotHeld)
+	}
+	s.calls = append(s.calls, fmt.Sprintf("decide %s/%s %s by %s", app, service, choice, user))
+	return &store.ImageDecision{App: app, Service: service, Candidate: "1.27.3", Choice: choice, User: user}, nil
+}
+
+// ImageUpdateCommit knows the commits starting with "c0de".
+func (s *stub) ImageUpdateCommit(sha string) bool { return strings.HasPrefix(sha, "c0de") }
+
 func (s *stub) RefreshWait(context.Context) (controller.RootStatus, error) {
 	s.Refresh()
 	return s.Root(), nil
@@ -272,6 +286,11 @@ func TestAPI(t *testing.T) {
 		{"POST", "/api/v1/apps/media/images/check", "", 202, `image check requested`},
 		{"POST", "/api/v1/apps/nope/images/check", "", 404, `not found`},
 		{"POST", "/api/v1/images/check", "", 202, `image check requested`},
+		{"POST", "/api/v1/apps/media/images/web/decision", `{"choice": "memory"}`, 200, `"choice": "memory"`},
+		{"POST", "/api/v1/apps/media/images/web/decision", `{"choice": "dismiss"}`, 200, `"user": "admin"`},
+		{"POST", "/api/v1/apps/media/images/web/decision", `{"choice": "yolo"}`, 400, `choice must be`},
+		{"POST", "/api/v1/apps/media/images/db/decision", `{"choice": "memory"}`, 409, `no image update is held`},
+		{"POST", "/api/v1/apps/nope/images/web/decision", `{"choice": "memory"}`, 404, `not found`},
 		{"GET", "/api/v1/operations/7", "", 200, `"log": "done"`},
 		{"GET", "/api/v1/operations/9", "", 404, `not found`},
 		{"GET", "/api/v1/operations/x", "", 400, `invalid operation id`},
@@ -287,7 +306,7 @@ func TestAPI(t *testing.T) {
 			t.Errorf("%s %s: %d %s, want %d containing %q", tc.method, tc.path, status, body, tc.status, tc.contains)
 		}
 	}
-	want := "operations media 5;sync media;sync busy;rollback media 2;pause media maintenance (by admin);resume media;refresh media;refresh all;check-images media;check-images ;operations  0"
+	want := "operations media 5;sync media;sync busy;rollback media 2;pause media maintenance (by admin);resume media;refresh media;refresh all;check-images media;check-images ;decide media/web memory by admin;decide media/web dismiss by admin;operations  0"
 	if got := strings.Join(st.calls, ";"); got != want {
 		t.Errorf("calls:\n got %s\nwant %s", got, want)
 	}
@@ -474,7 +493,7 @@ func TestAccounts(t *testing.T) {
 		t.Errorf("readonly host operations: %d", status)
 	}
 	for _, c := range [][2]string{{"POST", "/api/v1/apps/media/sync"}, {"GET", "/api/v1/tokens"}, {"POST", "/api/v1/hosts/nas/maintenance"},
-		{"POST", "/api/v1/hosts/nas/prune"}} {
+		{"POST", "/api/v1/hosts/nas/prune"}, {"POST", "/api/v1/apps/media/images/web/decision"}} {
 		if status, _ := do(t, srv, c[0], c[1], created.Token, ""); status != 403 {
 			t.Errorf("readonly %s %s: %d", c[0], c[1], status)
 		}
@@ -599,13 +618,14 @@ func TestWebhook(t *testing.T) {
 	}
 
 	srv, st := newServer(t, Options{WebhookSecret: "hook-secret"})
-	cases := []struct {
+	type hookCase struct {
 		name    string
 		body    string
 		headers map[string]string
 		status  int
 		says    string
-	}{
+	}
+	cases := []hookCase{
 		{"github push", push, map[string]string{"X-GitHub-Event": "push", "X-Hub-Signature-256": "sha256=" + sign(push, "hook-secret")}, 202, "refresh requested"},
 		{"github ping", push, map[string]string{"X-GitHub-Event": "ping", "X-Hub-Signature-256": "sha256=" + sign(push, "hook-secret")}, 200, "pong"},
 		{"gitea push", push, map[string]string{"X-Gitea-Event": "push", "X-Gitea-Signature": sign(push, "hook-secret")}, 202, "refresh requested"},
@@ -617,13 +637,27 @@ func TestWebhook(t *testing.T) {
 		{"wrong gitlab token", gitlab, map[string]string{"X-Gitlab-Event": "Push Hook", "X-Gitlab-Token": "nope"}, 401, "invalid"},
 		{"tampered body", push + " ", map[string]string{"X-GitHub-Event": "push", "X-Hub-Signature-256": "sha256=" + sign(push, "hook-secret")}, 401, "invalid"},
 	}
+	// A push of nothing but composecd's own image updates is already applied.
+	ownPush := `{"repository": {"clone_url": "https://git.lan/me/homelab.git"}, "after": "c0de2",
+		"commits": [{"id": "c0de1", "message": "composecd: update images\n\nComposecd-Image-Update: true\n"},
+		{"id": "c0de2", "message": "composecd: update images\n\nComposecd-Image-Update: true\n"}]}`
+	mixed := `{"repository": {"clone_url": "https://git.lan/me/homelab.git"}, "after": "beef",
+		"commits": [{"id": "c0de1", "message": "composecd: update images\n\nComposecd-Image-Update: true\n"},
+		{"id": "beef", "message": "Bump the db"}]}`
+	forged := `{"repository": {"clone_url": "https://git.lan/me/homelab.git"}, "after": "f00d",
+		"commits": [{"id": "f00d", "message": "composecd: update images\n\nComposecd-Image-Update: true\n"}]}`
+	cases = append(cases,
+		hookCase{"own image update", ownPush, map[string]string{"X-GitHub-Event": "push", "X-Hub-Signature-256": "sha256=" + sign(ownPush, "hook-secret")}, 200, "own image update"},
+		hookCase{"own and another commit", mixed, map[string]string{"X-GitHub-Event": "push", "X-Hub-Signature-256": "sha256=" + sign(mixed, "hook-secret")}, 202, "refresh requested"},
+		hookCase{"a trailer composecd didn't push", forged, map[string]string{"X-GitHub-Event": "push", "X-Hub-Signature-256": "sha256=" + sign(forged, "hook-secret")}, 202, "refresh requested"},
+	)
 	for _, tc := range cases {
 		status, body := post(srv, tc.body, tc.headers)
 		if status != tc.status || !strings.Contains(body, tc.says) {
 			t.Errorf("%s: %d %s, want %d %q", tc.name, status, body, tc.status, tc.says)
 		}
 	}
-	if n := strings.Count(strings.Join(st.calls, ";"), "webhook refresh"); n != 3 {
+	if n := strings.Count(strings.Join(st.calls, ";"), "webhook refresh"); n != 5 {
 		t.Errorf("refreshes = %d (%v)", n, st.calls)
 	}
 }

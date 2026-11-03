@@ -28,6 +28,9 @@ type Controller interface {
 	web.Controller
 	Refresh()
 	RefreshRepos(urls []string) bool
+	// ImageUpdateCommit is true for a commit composecd's image write-back
+	// pushed, and applied already.
+	ImageUpdateCommit(sha string) bool
 	OperationMetrics() []controller.OperationMetric
 }
 
@@ -206,6 +209,19 @@ func New(c Controller, o Options) http.Handler {
 		err := c.CheckImages(r.PathValue("name"))
 		return http.StatusAccepted, map[string]string{"status": "image check requested"}, err
 	})
+	act("POST /api/v1/apps/{name}/images/{service}/decision", func(r *http.Request, p *auth.Principal) (int, interface{}, error) {
+		var body struct {
+			Choice string `json:"choice"`
+		}
+		if err := decode(r, &body); err != nil {
+			return 0, nil, err
+		}
+		if body.Choice != store.DecisionMemory && body.Choice != store.DecisionDismiss {
+			return 0, nil, badRequest("choice must be %s or %s", store.DecisionMemory, store.DecisionDismiss)
+		}
+		d, err := c.DecideImage(r.PathValue("name"), r.PathValue("service"), body.Choice, p.Name)
+		return http.StatusOK, d, err
+	})
 	read("GET /api/v1/operations", func(r *http.Request, _ *auth.Principal) (int, interface{}, error) {
 		limit, err := intParam(r, "limit")
 		if err != nil {
@@ -277,7 +293,7 @@ func (s *server) json(need auth.Role, h handler) http.HandlerFunc {
 			case errors.Is(err, store.ErrExists):
 				status = http.StatusConflict
 			case errors.Is(err, controller.ErrBusy), errors.Is(err, controller.ErrBlocked), errors.Is(err, controller.ErrAdoptionBlocked),
-				errors.Is(err, controller.ErrSelf), errors.Is(err, controller.ErrHostBusy):
+				errors.Is(err, controller.ErrSelf), errors.Is(err, controller.ErrHostBusy), errors.Is(err, controller.ErrNotHeld):
 				status = http.StatusConflict
 			default:
 				status = http.StatusInternalServerError
