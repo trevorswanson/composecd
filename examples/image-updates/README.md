@@ -21,6 +21,40 @@ automated sync deploys it. Nothing is written to Git: the pick lives in
 composecd's database, and rolling back pauses auto-sync so it isn't deployed
 again.
 
+## Writing the tag back to Git
+
+`writeback.yaml` runs the same chart with `writeBack: git`: each new tag is
+committed to Git, and the commit is what deploys. Copy it into `composecd/`
+and `values/whoami-writeback.yaml` into the repository's `values/`. The tag is
+set in `charts/whoami/values.yaml`, which the other whoami Applications read
+too, so composecd adds it to this app's own values file instead:
+
+```
+$ git log -1 -p
+    composecd: update images
+
+    whoami-writeback/web: traefik/whoami v1.10 → v1.10.3 (values/whoami-writeback.yaml tag)
+
+    Composecd-Image-Update: true
+...
+ port: 8083
++tag: v1.10.3
+```
+
+composecd's Git credentials need write access to the branch. To review the
+updates before they deploy, set `imageUpdates.writeBack.branch` in
+`composecd.yaml` to another branch and merge from it.
+
+When a tag can't be written (say the values file is SOPS-encrypted), the update
+is held: nothing new deploys for the service, and an admin decides:
+
+```
+$ composecd app image-decision whoami-writeback web --dismiss
+Dismissed v1.10.3 for whoami-writeback/web until a newer tag. To update from Git, set tag in values/whoami-writeback.yaml.
+$ composecd app image-decision whoami-writeback web --in-memory
+Applying v1.10.3 to whoami-writeback/web in memory; the deployment diverges from Git.
+```
+
 One service can use another policy with compose labels, which beat the
 Application's settings:
 

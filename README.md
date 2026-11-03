@@ -1002,8 +1002,9 @@ syncPolicy:
   a refresh. A service whose strategy hasn't picked yet for the image and policy Git has (a new app, a changed
   tag in Git) is checked the first time it renders, as a new tag is. Registries list tags a page at a time;
   composecd reads up to 10,000 and notes on the image when there are more.
-- **Applying a pick.** The tag is changed in memory only: Git keeps the tag it had, and the deployed manifest
-  has `image: nginx:1.27.3@sha256:…`. The app goes OutOfSync with a reason like
+- **Applying a pick.** By default the tag is changed in memory only: Git keeps the tag it had, and the deployed
+  manifest has `image: nginx:1.27.3@sha256:…`. With `writeBack: git` it is committed to Git instead
+  ([Write-back to Git](#write-back-to-git)). The app goes OutOfSync with a reason like
   `image nginx (web): 1.27.1 → 1.27.3`, and notifications read `nginx (web): 1.27.3 available (semver ~1.27)`.
   The **images** tab, `app get` and the API show each image's strategy, the deployed tag and the candidate.
   Rolling back restores the old tag and pauses auto-sync, so the pick isn't deployed again until you resume.
@@ -1017,6 +1018,69 @@ syncPolicy:
 digest is the one already running, so compose sees new configuration. Expect one sync of every app that takes
 part. Automated apps do it on their own, within their sync windows. Later syncs only recreate a service when
 its digest changes.
+
+### Write-back to Git
+
+With `writeBack: git`, a tag a strategy picks is committed to Git rather than applied in memory, so Git stays
+the record of what runs. The default, `writeBack: memory`, behaves as above.
+
+```yaml
+syncPolicy:
+  imageUpdates:
+    enabled: true
+    strategy: semver
+    writeBack: git                  # memory (default) | git
+```
+
+```yaml
+# composecd.yaml (all optional)
+imageUpdates:
+  writeBack:
+    branch: image-updates           # default: each source's targetRevision, which must then be a branch
+    author: {name: composecd, email: composecd@example.lan}   # the defaults are composecd, composecd@localhost
+    signingKeyFile: /run/secrets/composecd-signing-key        # an SSH key; commits are unsigned without it
+```
+
+- **Finding the key.** composecd renders the Application offline once per values key whose value appears in the
+  image, with that value replaced by a placeholder, and keeps the key that becomes the image's tag. It follows
+  `printf`, `include` and `default` in templates, and the chart's `appVersion` (`.Chart.AppVersion`) in a Git
+  chart. When more than one key could be it, or the tag is written in a template, name the key with the
+  service label `composecd.image-updates.tag-key: image.tag` (or `Chart.appVersion`). Before committing,
+  composecd renders the edit and checks that every service gets the image it should.
+- **Which file.** The last file that sets the key wins, as in a render: an inline `values` key is edited in the
+  Application's own YAML, a `valueFiles` key in that file, and otherwise the chart's `values.yaml` (or
+  `Chart.yaml`). When that file is also read by another Application, such as a shared chart's `values.yaml`,
+  composecd edits the app's own last values file instead, adding the key there. A key that sets the image of
+  more than one service is only changed when every one of them picks the same tag.
+- **The edit.** Only the value's bytes change: comments, quoting, key order and the rest of the file are kept.
+  A key the file doesn't have yet is appended to its mapping. All of a check's changes to one repository go in
+  one commit, `composecd: update images`, with a line per service and the trailer
+  `Composecd-Image-Update: true`. A push the server rejects because the branch moved is fetched, re-traced and
+  retried up to three times; composecd never force-pushes.
+- **Deploying.** On the deployed branch the commit is the change: the app goes OutOfSync once composecd has
+  refreshed, and syncs as usual, within its sync windows. On another `branch` (for review), nothing deploys
+  until you merge, and the image shows **Committed** with the commit. The webhook skips a push of composecd's own
+  commits, which it has already applied.
+- **Access.** composecd pushes with the same Git credentials it fetches with, so they need write access to the
+  branch. A protected branch that refuses composecd's pushes holds every update; use a `branch` composecd may
+  push to and merge from there. Signed commits use `gpg.format=ssh`; checking signatures on the way in isn't
+  built yet.
+
+**When an update can't be written, it is held.** composecd never falls back to memory on its own. A held
+image deploys nothing new for that service, shows **Held** with the reason in the **images** tab, `app get`
+and the API, and sends a `write-back-blocked` notification once per candidate tag. composecd can't write a
+tag that is in a SOPS-encrypted file, comes from Infisical, sits in an ApplicationSet template's inline values
+or an OCI chart's packaged values (with no Git values file of the app's own to override it in), in an OCI
+chart's `appVersion`, or that it can't trace. Pushes that keep failing also hold. An admin decides, in the UI or
+with `composecd app image-decision NAME SERVICE --in-memory|--dismiss`
+(`POST /api/v1/apps/{name}/images/{service}/decision` with `{"choice": "memory"|"dismiss"}`):
+
+- **Apply in memory** deploys the tag as `writeBack: memory` would. The app and the image show
+  **Diverged from Git**, and the decision is recorded with your name in the operation log.
+- **Dismiss** ignores this tag until a newer one appears, and shows the file and key to change in Git.
+
+A decision lasts until the service's source changes in Git (its file, key, values, chart or label), and a
+hold clears once Git renders the new image. Readonly users see holds but can't decide them.
 
 ## Webhooks, notifications and metrics
 
@@ -1033,7 +1097,7 @@ notifications:
     type: ntfy                    # ntfy, gotify, discord, slack or webhook (JSON POST of the event)
     url: https://ntfy.example.lan/homelab
     tokenFile: /run/secrets/ntfy-token
-    events: [sync-failed, health-degraded, host-down, prune, host-disk]   # the default
+    events: [sync-failed, health-degraded, host-down, prune, host-disk, write-back-blocked]   # the default
   - name: chat
     type: discord
     urlFile: /run/secrets/discord-webhook
@@ -1043,8 +1107,9 @@ notifications:
 
 The events are `sync-succeeded`, `sync-failed` (which also covers failed rollbacks, heals and prunes),
 `self-healed`, `prune`, `health-degraded` and `out-of-sync`, each sent when an app enters that state,
-`host-down`, `host-disk` (a host's disk past `housekeeping.diskWarning`), and `image-update` (a new digest for a
-service's tag, including one pinned in Git, or a newer tag its strategy picked).
+`host-down`, `host-disk` (a host's disk past `housekeeping.diskWarning`), `image-update` (a new digest for a
+service's tag, including one pinned in Git, or a newer tag its strategy picked), and `write-back-blocked` (a
+picked tag that can't be written to Git and waits for an admin's decision).
 
 **Metrics.** `GET /metrics` serves Prometheus metrics:
 - `composecd_app_sync_status` and `composecd_app_health_status`, one series per app with its current status;
