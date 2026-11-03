@@ -38,7 +38,9 @@
 <section class="card"><div class="card-head"><h2>Compose projects<span class="count">{{len .Projects}}</span></h2><span class="muted">convert one to a chart with <code>composetpl create</code></span></div>
 <div class="table-wrap"><table class="compact"><thead><tr><th scope="col">Project</th><th scope="col">Status</th><th scope="col">Config files</th></tr></thead><tbody>{{range .Projects}}<tr><td><strong>{{.Name}}</strong></td><td data-label="Status"><span class="pill plain c-{{state .Status}}">{{.Status}}</span></td><td data-label="Config files"><div class="cell">{{range .ConfigFiles}}<code>{{.}}</code>{{else}}<span class="muted">Unavailable</span>{{end}}</div></td></tr>{{else}}<tr><td colspan="3" class="empty-row">No plain Compose projects.</td></tr>{{end}}</tbody></table></div></section>
 {{else if not .Error}}<div class="empty"><strong>Scanning {{$.Name}}…</strong><span>Listing releases and Compose projects. This page fills in when the scan finishes.</span></div>{{end}}{{end}}
-{{template "housekeeping" .}}{{end}}{{end}}
+{{template "housekeeping" .}}
+<div class="settings-head"><div class="grow"><h2>Configuration</h2><p class="summary">Defined in {{with .Settings.Origin}}<code>{{.}}</code>{{else}}Git{{end}}. Change it there; composecd applies it on the next refresh.</p></div>{{template "settings-filter" .}}</div>
+{{template "setting-groups" (pair . .Settings)}}{{end}}{{end}}
 
 {{/* housekeeping is a host's disk usage, scheduled and manual prunes, and their operations. */}}
 {{define "housekeeping"}}{{if or .Host.Disk .Host.NextPrune .Operations .Admin}}<section class="card" aria-label="Housekeeping"><div class="card-head"><h2>Housekeeping</h2>{{with .Host.Disk}}<span class="muted">disk measured <time datetime="{{iso .CheckedAt}}" title="{{iso .CheckedAt}}">{{ago .CheckedAt}}</time></span>{{end}}</div>

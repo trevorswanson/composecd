@@ -40,6 +40,8 @@ Some guidelines:
 - **Match the code around you:** its naming, comment density and structure. `gofmt` and `goimports`
   formatting; CI enforces both.
 - **Errors** should say what failed and why, for someone who only sees `composecd app get` or the server log.
+- **New settings** need an entry in `internal/features/registry.go`, which the UI lists them from: what it
+  does, its default and an example. A test fails until every field of the config types has one.
 
 ## Pull requests
 

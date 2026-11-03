@@ -54,13 +54,14 @@ func (s *Server) Events(w http.ResponseWriter, r *http.Request) {
 	if page == "" {
 		page = "/apps"
 	}
-	if page != "/" && page != "/apps" && page != "/hosts" && page != "/windows" && page != "/operations" && page != "/applicationsets" && !strings.HasPrefix(page, "/apps/") && !strings.HasPrefix(page, "/hosts/") {
+	if page != "/" && page != "/apps" && page != "/hosts" && page != "/windows" && page != "/operations" && page != "/applicationsets" && !strings.HasPrefix(page, "/apps/") && !strings.HasPrefix(page, "/hosts/") &&
+		!strings.HasPrefix(page, "/applicationsets/") {
 		http.Error(w, "Invalid event page", 400)
 		return
 	}
 	view := r.Clone(context.WithValue(r.Context(), liveKey{}, true))
 	view.URL.Path = page
-	if strings.HasPrefix(page, "/apps/") || strings.HasPrefix(page, "/hosts/") {
+	if strings.HasPrefix(page, "/apps/") || strings.HasPrefix(page, "/hosts/") || strings.HasPrefix(page, "/applicationsets/") {
 		name, err := urlPathName(page)
 		if err != nil {
 			pageError(w, err)

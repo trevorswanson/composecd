@@ -676,6 +676,33 @@ func (s *stub) Mask(_ string, text string) string {
 	return strings.ReplaceAll(text, "secret-value", "••••••")
 }
 
+func (s *stub) Objects() *config.Objects {
+	return &config.Objects{
+		Hosts: []*config.Host{{Metadata: config.Metadata{Name: "nas"}, Origin: "composecd/hosts.yaml:1",
+			Spec: config.HostSpec{URL: "ssh://deploy@nas", Env: map[string]string{"API_TOKEN": "env-secret"}, Housekeeping: &config.Housekeeping{DiskWarning: &config.DiskWarning{Percent: 85}}}}},
+		Applications: []*config.Application{{Metadata: config.Metadata{Name: "media", Labels: map[string]string{config.LabelApplicationSet: "stacks"}},
+			Origin: "applicationset stacks (composecd/stacks.yaml:1)",
+			Spec: config.AppSpec{
+				Source:      config.AppSource{Path: "charts/media", Values: map[string]interface{}{"password": "secret-value"}},
+				Destination: config.Destination{Host: "nas"},
+				SyncPolicy:  config.SyncPolicy{Automated: &config.Automated{SelfHeal: true}},
+			}}},
+		ApplicationSets: []*config.ApplicationSet{{Metadata: config.Metadata{Name: "stacks"}, Spec: config.ApplicationSetSpec{
+			Generators: []config.Generator{{GitDirectories: &config.GitDirectories{Directories: []string{"charts/*"}}}},
+			Template: config.Application{Spec: config.AppSpec{
+				Source:      config.AppSource{Path: "{{ .path.path }}"},
+				Destination: config.Destination{Host: "nas"},
+				SyncPolicy:  config.SyncPolicy{Automated: &config.Automated{SelfHeal: true}},
+			}},
+		}}},
+	}
+}
+
+func (s *stub) Bootstrap() *config.Bootstrap {
+	return &config.Bootstrap{Root: config.Root{RepoURL: "https://git.lan/me/home.git"}, ImageUpdates: config.ImageUpdates{Enabled: true},
+		Notifications: []config.Notifier{{Name: "chat", Type: "discord", URL: "https://discord.com/api/webhooks/1/notify-secret"}}}
+}
+
 func (s *stub) ApplicationSets() []controller.ApplicationSetStatus {
 	return []controller.ApplicationSetStatus{{Name: "stacks", Generated: 1, Ready: true, Applications: []string{"media"}}}
 }
