@@ -80,7 +80,12 @@ func (e *env) quiet() {
 	}
 	// A timer counts its reconcile as running before it is gone, so after a
 	// second Wait with still no timers, nothing that ran scheduled more.
-	eventually(e.t, "the rollout to settle", func() bool { return idle() && idle() })
+	eventually(e.t, "the rollout to settle", func() bool {
+		if !idle() {
+			return false
+		}
+		return idle()
+	})
 }
 
 func lastOp(t *testing.T, e *env, name string) *store.Operation {
