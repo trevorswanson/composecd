@@ -55,6 +55,11 @@ func (c *Controller) opLog(op *store.Operation) *logBuffer {
 }
 
 func (c *Controller) finishOperation(app string, op *store.Operation) {
+	if op.Phase == store.PhaseRunning && op.Helper != "" {
+		// Left to the next composecd, which finishes it (see awaitHelper).
+		c.Log.Info("leaving an operation to its helper container", "app", app, "id", op.ID, "helper", op.Helper)
+		return
+	}
 	op.Log = c.Mask(app, op.Log)
 	op.Message = c.Mask(app, op.Message)
 	if err := c.Store.FinishOperation(op); err != nil {
