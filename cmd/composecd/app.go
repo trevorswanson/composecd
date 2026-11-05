@@ -462,7 +462,8 @@ func newAppCheckImagesCmd(cf *clientFlags) *cobra.Command {
 		Long: `Check the registries of the tags an application's services use now, instead of on
 imageUpdates.schedule. A new digest for a moving tag, or a newer tag picked by a
 semver or newest-build strategy, makes the app OutOfSync; an update to a digest
-pinned in Git is only reported.`,
+pinned in Git is only reported, unless the app has writeBack: git, which commits
+the new digest to Git when it can edit where Git pins it.`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if all == (len(args) == 1) {

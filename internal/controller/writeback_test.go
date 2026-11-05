@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,6 +10,7 @@ import (
 	"github.com/trevorswanson/composetpl/pkg/chart"
 
 	"github.com/trevorswanson/composecd/internal/config"
+	"github.com/trevorswanson/composecd/internal/images"
 	"github.com/trevorswanson/composecd/internal/source"
 	"github.com/trevorswanson/composecd/internal/store"
 )
@@ -456,5 +458,115 @@ func TestWriteBackRefusesWhatItCantEdit(t *testing.T) {
 				t.Errorf("held = %q, want %q", j.held, c.want)
 			}
 		})
+	}
+}
+
+func TestWriteBackGitPinnedDigest(t *testing.T) {
+	// setup commits files, with web on the digest strategy written back to
+	// Git, and has the registry serve digestB for nginx:1, which Git pins to
+	// digestA.
+	setup := func(t *testing.T, files map[string]string) (*env, *fakeRegistry) {
+		t.Helper()
+		files["composecd/apps.yaml"] = strategyApp("web", "writeBack: git")
+		e, reg := newWriteBackEnv(t, files)
+		reg.set(nginx1, digestB)
+		return e, reg
+	}
+	deployedFromGit := func(t *testing.T, e *env) {
+		t.Helper()
+		head := e.git("rev-parse", "HEAD")
+		web := e.app("web")
+		im := imageOf(web, "web")
+		if !strings.Contains(e.fake().Running["web"], "image: nginx:1@"+digestB+"\n") || web.Sync.Status != Synced || web.Sync.Revision != head ||
+			web.Diverged || im == nil || im.Pin != PinGit || im.Digest != digestB || im.UpdateAvailable || im.Diverged {
+			t.Fatalf("web %+v, image %+v\n%s", web.Sync, im, e.fake().Running["web"])
+		}
+		if !e.c.ImageUpdateCommit(head) {
+			t.Error("the commit isn't known as composecd's own")
+		}
+	}
+
+	t.Run("a pin in the values is committed and deploys from Git", func(t *testing.T) {
+		values := "# web\ntag: '1@" + digestA + "'   # pinned\n"
+		e, _ := setup(t, map[string]string{"charts/web/values.yaml": values})
+		e.refresh()
+		if got, want := e.show("charts/web/values.yaml"), strings.Replace(values, digestA, digestB, 1); got != want {
+			t.Errorf("values.yaml:\n%s\nwant:\n%s", got, want)
+		}
+		if msg := e.git("log", "-1", "--format=%B"); !strings.Contains(msg, "web/web: nginx 1@sha256:aaaaaaaaaaaa → 1@sha256:bbbbbbbbbbbb (charts/web/values.yaml tag)") {
+			t.Errorf("commit message:\n%s", msg)
+		}
+		deployedFromGit(t, e)
+	})
+
+	t.Run("a digest in a key of its own is edited alone", func(t *testing.T) {
+		e, _ := setup(t, map[string]string{
+			"charts/web/templates/a.yaml": "services:\n  web:\n    image: nginx:{{ .Values.tag }}@{{ .Values.digest }}\n",
+			"charts/web/values.yaml":      "tag: '1'\ndigest: " + digestA + "\n",
+		})
+		e.refresh()
+		if got, want := e.show("charts/web/values.yaml"), "tag: '1'\ndigest: "+digestB+"\n"; got != want {
+			t.Errorf("values.yaml = %q, want %q", got, want)
+		}
+		deployedFromGit(t, e)
+	})
+
+	t.Run("a pin committed to a branch for review deploys once merged", func(t *testing.T) {
+		e, _ := setup(t, map[string]string{"charts/web/values.yaml": "tag: '1@" + digestA + "'\n"})
+		e.c.Boot.ImageUpdates.WriteBack.Branch = "image-updates"
+		e.refresh()
+		commit := e.git("rev-parse", "image-updates")
+		web := e.app("web")
+		im := imageOf(web, "web")
+		if im == nil || im.Commit != commit || !strings.HasPrefix(im.Note, "committed to Git as ") || im.Applicable || web.Sync.Status != Synced ||
+			!strings.Contains(e.fake().Running["web"], "image: nginx:1@"+digestA+"\n") {
+			t.Fatalf("image = %+v, sync %+v\n%s", im, web.Sync, e.fake().Running["web"])
+		}
+		e.checkImages("web")
+		if e.git("rev-parse", "image-updates") != commit {
+			t.Error("committed again")
+		}
+		e.git("merge", "--quiet", "--ff-only", "image-updates")
+		e.refresh()
+		deployedFromGit(t, e)
+	})
+
+	t.Run("a pin write-back can't edit is refused, not held", func(t *testing.T) {
+		e, _ := setup(t, map[string]string{"charts/web/templates/a.yaml": "services:\n  web:\n    image: nginx:1@" + digestA + "\n"})
+		e.refresh()
+		head := e.git("rev-parse", "HEAD")
+		e.refresh()
+		web := e.app("web")
+		im := imageOf(web, "web")
+		if im == nil || im.Pin != PinGit || !im.UpdateAvailable || im.Applicable || im.Held != "" || im.Commit != "" ||
+			!strings.HasPrefix(im.Note, gitPinHeldNote) || !strings.Contains(im.Note, "no values key sets the tag and digest of web") {
+			t.Fatalf("image = %+v", im)
+		}
+		if web.Sync.Status != Synced || !strings.Contains(e.fake().Running["web"], "image: nginx:1@"+digestA+"\n") || e.git("rev-parse", "HEAD") != head {
+			t.Fatalf("a refused update deployed or was committed: %+v\n%s", web.Sync, e.fake().Running["web"])
+		}
+		if _, err := e.c.DecideImage("web", "web", store.DecisionMemory, "trevor"); !errors.Is(err, ErrNotHeld) {
+			t.Errorf("applying a Git pin in memory: %v", err)
+		}
+	})
+}
+
+func TestPinnedCandidate(t *testing.T) {
+	for _, c := range []struct {
+		image, latest, want string
+	}{
+		{"nginx:1@" + digestA, digestB, "1@" + digestB},
+		{"nginx:1@" + digestA, digestA, ""},
+		{"nginx:1@" + digestA, "", ""},
+		{"nginx@" + digestA, digestB, ""},
+		{"nginx:1", digestB, ""},
+	} {
+		svcs, err := images.Services("services:\n  web:\n    image: "+c.image+"\n", true, images.Policy{}, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := pinnedCandidate(svcs[0], c.latest); got != c.want {
+			t.Errorf("pinnedCandidate(%s, %s) = %q, want %q", c.image, c.latest, got, c.want)
+		}
 	}
 }
