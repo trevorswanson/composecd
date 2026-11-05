@@ -66,6 +66,7 @@ type Controller interface {
 	Logs(context.Context, string, string, int, bool, io.Writer) error
 	Mask(string, string) string
 	LiveObject(ctx context.Context, app, id string, all, redact bool) (*controller.Live, error)
+	HostObject(ctx context.Context, host, kind, name string, redact bool) (*controller.HostObject, error)
 	DecideImage(app, service, choice, user string) (*store.ImageDecision, error)
 	EditSource(ctx context.Context, kind, name string) (file, document string, err error)
 	PlanEdit(context.Context, controller.EditRequest) (*controller.EditPlan, error)
@@ -248,6 +249,9 @@ type Data struct {
 	// includes live keys Git doesn't set (or, on the diff tab, synced objects).
 	Live *controller.Live
 	All  bool
+	// HostObject is the engine object a host graph's dialog shows, for objects
+	// no Application owns.
+	HostObject *controller.HostObject
 	// Mode is the diff tab's: "" compares the compose file, "objects" each
 	// object's live state.
 	Mode    string
@@ -535,6 +539,7 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /ui/apps/{name}/details", s.Dialog)
 	mux.HandleFunc("GET /ui/apps/{name}/operations/{id}", s.Dialog)
 	mux.HandleFunc("GET /ui/apps/{name}/objects/{section}/{object}", s.Dialog)
+	mux.HandleFunc("GET /ui/hosts/{name}/objects/{kind}/{object...}", s.HostDialog)
 }
 
 func (s *Server) identify(w http.ResponseWriter, r *http.Request, need auth.Role) *auth.Principal {
@@ -821,7 +826,7 @@ func (s *Server) Page(w http.ResponseWriter, r *http.Request) {
 func pageError(w http.ResponseWriter, err error) {
 	code := http.StatusInternalServerError
 	switch {
-	case errors.As(err, new(*auth.InvalidError)), errors.As(err, new(invalidRequest)):
+	case errors.As(err, new(*auth.InvalidError)), errors.As(err, new(invalidRequest)), errors.Is(err, controller.ErrInvalidObject):
 		code = http.StatusBadRequest
 	case errors.Is(err, controller.ErrNotFound), errors.Is(err, store.ErrNotFound):
 		code = 404
@@ -1177,6 +1182,22 @@ func (s *Server) Dialog(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	render(w, 200, name, d)
+}
+
+// HostDialog shows an engine object on a host, managed or not, as docker
+// inspect sees it.
+func (s *Server) HostDialog(w http.ResponseWriter, r *http.Request) {
+	p := s.identify(w, r, auth.RoleReadonly)
+	if p == nil {
+		return
+	}
+	d := &Data{User: p, Admin: p.Role == auth.RoleAdmin, Name: r.PathValue("name"), Page: "dialog"}
+	var err error
+	if d.HostObject, err = s.C.HostObject(r.Context(), d.Name, r.PathValue("kind"), r.PathValue("object"), !d.Admin); err != nil {
+		pageError(w, err)
+		return
+	}
+	render(w, 200, "host-object", d)
 }
 
 // objectViews are the views an object's dialog offers.

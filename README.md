@@ -380,6 +380,7 @@ Every `/api/v1` endpoint needs `Authorization: Bearer <token>`, or a browser ses
 | `GET /api/v1/hosts/{name}/adopt/{release}` | Application YAML and warnings as JSON (admin; contains plaintext user values) |
 | `POST /api/v1/hosts/{name}/prune` (`{"kind": "image-prune" or "builder-prune", "all": false}`) | Prune unused images or build cache (admin; 202, returns the operation) |
 | `GET /api/v1/hosts/{name}/operations` | The host's prunes (readonly) |
+| `GET /api/v1/hosts/{name}/objects/{kind}/{object}` | `docker inspect` of a container, network, volume or image on the host, whether or not an Application deployed it, folded like an app object's live state; environment values are hidden for readonly users and for objects no Application deployed (readonly) |
 | `GET /api/v1/edits/{kind}/{name}` | An object's file and YAML document at the tip of the root's branch (admin) |
 | `POST /api/v1/edits/plan` (`{"kind": "Host", "name": "nas", "set": {"spec.storage": "local"}, "unset": [...]}`, or `"document"`, `"create"` with `"file"`, `"delete"`) | The commit an edit would make: file before and after, message and `token` (admin) |
 | `POST /api/v1/edits` (`{"request": {...}, "token": "..."}`) | Commit a planned edit (admin; 201; 409 when Git moved on: plan it again) |
@@ -499,10 +500,16 @@ binary; there is no CDN or Node build step.
   rolling sync's progress, step by step. Each set's page (`/applicationsets/NAME`) lists the Applications it
   generated with their sync and health, and the set's and its template's configuration.
 - **Hosts** (`/hosts`): connectivity, Docker/Compose versions, orphaned releases and admin maintenance toggles.
-  Each host's page draws every container, network and named volume on it. **Stacks** (the default with more
-  than six stacks) lists each stack (Application or Compose project) under the networks and volumes they share;
-  point at one to see its links. **Everything** draws every object boxed by its stack. Click a stack or a shared
-  object, or pick one under **Focus**, to see just it and what it is connected to.
+  Each host's page draws every container, network and named volume on it, boxed by the stack (Application or
+  Compose project) that created it. Stacks sharing a network or volume are clustered around it, and the
+  clusters are packed to the shape of the box; a network nearly every stack joins (a reverse proxy's) sits
+  in a band above, its links drawn only for what you point at. Pointing at an object dims what it isn't
+  connected to. **Stacks** (the default with more than six) collapses every stack to a card and
+  **Everything** expands them; click a card, or a box's arrow, to expand or collapse one. Drag to pan,
+  ctrl+scroll or the buttons to zoom, and **Fit** to see it all; **Find** marks matching objects and Enter
+  moves to the next. Click any object, managed or not, for its `docker inspect` state, with environment
+  values hidden for anything no Application deployed. The focus button on a box, or **Focus**, shows just
+  that stack and what it is connected to.
   Lists unmanaged composetpl releases and plain Compose projects with config paths. Admins can use **Adopt** to preview Application YAML, or **Delete** an orphaned release.
   **Housekeeping** shows disk usage, a warning past `diskWarning`, the next scheduled prunes and past ones;
   admins can prune images or build cache now. **Configuration** shows the host's settings.

@@ -114,6 +114,10 @@ func New(c Controller, o Options) http.Handler {
 		err := c.SetMaintenance(r.PathValue("name"), body.Enabled, by(body.Reason, "maintenance", p))
 		return http.StatusOK, map[string]bool{"maintenance": body.Enabled}, err
 	})
+	read("GET /api/v1/hosts/{name}/objects/{kind}/{object...}", func(r *http.Request, p *auth.Principal) (int, interface{}, error) {
+		obj, err := c.HostObject(r.Context(), r.PathValue("name"), r.PathValue("kind"), r.PathValue("object"), p.Role != auth.RoleAdmin)
+		return http.StatusOK, obj, err
+	})
 	read("GET /api/v1/hosts/{name}/operations", func(r *http.Request, _ *auth.Principal) (int, interface{}, error) {
 		limit, err := intParam(r, "limit")
 		if err != nil {
@@ -314,7 +318,7 @@ func (s *server) json(need auth.Role, h handler) http.HandlerFunc {
 			switch {
 			case errors.As(err, &ae):
 				status = ae.status
-			case errors.As(err, new(*auth.InvalidError)), controller.InvalidEdit(err):
+			case errors.As(err, new(*auth.InvalidError)), controller.InvalidEdit(err), errors.Is(err, controller.ErrInvalidObject):
 				status = http.StatusBadRequest
 			case errors.Is(err, controller.ErrNotFound), errors.Is(err, store.ErrNotFound):
 				status = http.StatusNotFound

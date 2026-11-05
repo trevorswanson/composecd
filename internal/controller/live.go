@@ -272,6 +272,8 @@ var noisy = map[string][]string{
 		"NetworkSettings.LinkLocalIPv6PrefixLen", "NetworkSettings.SecondaryIPAddresses", "NetworkSettings.SecondaryIPv6Addresses"},
 	KindNetwork: {"Id", "Created", "Scope", "ConfigFrom", "ConfigOnly", "Containers", "Options", "Peers", "Services"},
 	KindVolume:  {"CreatedAt", "Mountpoint", "Scope", "Status", "UsageData"},
+	"image": {"Id", "Parent", "Comment", "Created", "DockerVersion", "Author", "Architecture", "Variant", "Os", "Size",
+		"VirtualSize", "GraphDriver", "RootFS", "Metadata", "Descriptor", "ContainerConfig"},
 }
 
 // foldInspect renders inspect output as YAML with the noisy parts, compose's

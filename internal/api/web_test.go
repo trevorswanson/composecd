@@ -78,8 +78,9 @@ func TestWebPagesAndActions(t *testing.T) {
 		"/ui/apps/media/objects/services/web?view=live": "GraphDriver", "/ui/apps/media/objects/services/web?view=diff": `<span class="removed">-image: nginx:0</span>`,
 		"/apps/media?tab=diff&mode=objects": "services/web", "/apps/media?tab=diff&mode=objects&synced=1": "networks/default",
 		"/apps/media?tab=diff": "services/web", "/apps/media?tab=diff&existing": "<strong>cache</strong>: not in Git, would be removed", "/apps/media?tab=history": "Roll back",
-		"/apps/media?tab=operations": "Output",
-		"/apps/media?tab=images":     `disabled title="the digest is pinned in Git; change it there to update">Can't apply</button>`,
+		"/apps/media?tab=operations":            "Output",
+		"/ui/hosts/nas/objects/container/loose": "TOKEN=&lt;redacted 0123abcd&gt;", "/ui/hosts/nas/objects/image/docker.io%2Flibrary%2Fnginx:1": "unmanaged",
+		"/apps/media?tab=images": `disabled title="the digest is pinned in Git; change it there to update">Can't apply</button>`,
 	}
 	for path, want := range cases {
 		t.Run(path, func(t *testing.T) {

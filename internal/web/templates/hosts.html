@@ -52,10 +52,11 @@
 
 {{define "host-graph"}}{{$d := index . 0}}{{$inv := index . 1}}{{with $inv.GraphError}}<div class="callout bad" role="alert"><div><strong>Couldn't list what runs here</strong><code>{{.}}</code></div></div>{{end}}{{with $inv.Graph}}<section class="graph-wrap card" aria-label="Everything on {{$d.Name}}">
 <div class="graph-tools"><div class="graph-actions"><div class="seg" role="group" aria-label="Show"><button type="button" data-mode="stacks" aria-pressed="false">Stacks</button><button type="button" data-mode="all" aria-pressed="false">Everything</button></div>
-<label class="stack-pick">Focus <select data-stack><option value="">All stacks</option>{{range .Stacks}}<option value="{{.ID}}">{{.Name}}</option>{{end}}</select></label><button type="button" class="btn btn-sm" data-clear hidden>Show all</button></div>
+<label class="stack-pick">Focus <select data-stack><option value="">All stacks</option>{{range .Stacks}}<option value="{{.ID}}">{{.Name}}</option>{{end}}</select></label><button type="button" class="btn btn-sm" data-clear hidden>Show all</button>
+<label class="graph-search"><span class="sr-only">Find</span><input type="search" id="graph-search" data-search placeholder="Find a container, network, volume…" autocomplete="off" spellcheck="false"><span class="muted" data-matches aria-live="polite"></span></label></div>
 {{$s := "s"}}{{if eq (len .Stacks) 1}}{{$s = ""}}{{end}}{{$summary := printf "%d objects in %d stack%s" (len .Nodes) (len .Stacks) $s}}<span class="muted" data-summary="{{$summary}}">{{$summary}}</span>{{template "zoom"}}</div>
-<div class="graph" tabindex="0" aria-label="Containers, networks and volumes on {{$d.Name}}"><ul class="graph-list">{{range .Nodes}}<li><span class="kind">{{.Kind}}</span> <strong>{{.Name}}</strong>{{with .Stack}} <span class="muted">{{.}}</span>{{end}}</li>{{end}}</ul></div>
-<div class="legend" aria-hidden="true">{{range $k := lines "network\nvolume\ncontainer"}}<span class="k-{{$k}}">{{$k}}</span>{{end}}<span class="k-stack">stack</span></div>
+<div class="graph host-graph" tabindex="0" aria-label="Containers, networks and volumes on {{$d.Name}}: drag to pan, ctrl and scroll to zoom"><ul class="graph-list">{{range .Nodes}}<li><span class="kind">{{.Kind}}</span> <strong>{{.Name}}</strong>{{with .Stack}} <span class="muted">{{.}}</span>{{end}}</li>{{end}}</ul></div>
+<div class="legend" aria-hidden="true">{{range $k := lines "network\nvolume\ncontainer"}}<span class="k-{{$k}}">{{$k}}</span>{{end}}<span class="k-stack">stack</span><span class="hint">click an object for its details</span></div>
 <script type="application/json" class="graph-data">{{.}}</script>
 </section>{{end}}{{end}}
 

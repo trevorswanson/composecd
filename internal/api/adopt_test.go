@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -25,6 +26,20 @@ func (s *stub) HostResources(_ context.Context, host string) (*hosts.Resources, 
 		Containers: []hosts.ResourceContainer{{Name: "traefik-proxy-1", Image: "traefik:3", State: "running", Project: "traefik", Networks: []string{"proxy"}}},
 		Networks:   []hosts.ResourceNetwork{{Name: "proxy", Driver: "bridge", Project: "traefik"}},
 	}, nil
+}
+
+func (s *stub) HostObject(_ context.Context, host, kind, name string, redact bool) (*controller.HostObject, error) {
+	s.mu.Lock()
+	s.calls = append(s.calls, fmt.Sprintf("host-object %s %s %s %v", host, kind, name, redact))
+	s.mu.Unlock()
+	switch {
+	case kind != "container" && kind != "image" && kind != "network" && kind != "volume":
+		return nil, fmt.Errorf("kind %q: %w", kind, controller.ErrInvalidObject)
+	case host != "nas" || (name != "loose" && name != "docker.io/library/nginx:1"):
+		return nil, fmt.Errorf("%s %q: %w", kind, name, controller.ErrNotFound)
+	}
+	return &controller.HostObject{Host: host, Kind: kind, Name: name, Inspect: controller.Inspected{Name: name,
+		YAML: "Config:\n  Env:\n    - TOKEN=<redacted 0123abcd>\n", Folded: []controller.Fold{{Path: "Engine metadata", Fields: 1, YAML: "Id: abc\n"}}}}, nil
 }
 
 func (s *stub) Adopt(_ context.Context, host, name string) (*controller.Adoption, error) {
