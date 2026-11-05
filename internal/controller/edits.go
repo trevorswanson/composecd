@@ -228,13 +228,13 @@ func (c *Controller) planEdit(tip *editTip, req EditRequest) (*EditPlan, error) 
 			after = yamledit.RemoveDocument(data, doc)
 			plan.Removed = after == nil
 			what = fmt.Sprintf("remove %s %s", req.Kind, req.Name)
-			plan.Warnings = append(plan.Warnings, deleteWarning(req.Kind))
+			plan.Warnings = append(plan.Warnings, deleteWarning(req.Kind, req.Name))
 		case req.Document != "":
 			if err := checkDocument(req.Document, req.Kind, req.Name); err != nil {
 				return nil, err
 			}
 			if name, _ := documentName(req.Document); name != req.Name {
-				plan.Warnings = append(plan.Warnings, fmt.Sprintf("This renames %s to %s: composecd treats it as a new object, and the old one as removed. %s", req.Name, name, deleteWarning(req.Kind)))
+				plan.Warnings = append(plan.Warnings, fmt.Sprintf("This renames %s to %s: composecd treats it as a new object, and the old one as removed. %s", req.Name, name, deleteWarning(req.Kind, req.Name)))
 			}
 			after = yamledit.ReplaceDocument(data, doc, req.Document)
 			what = fmt.Sprintf("edit %s %s", req.Kind, req.Name)
@@ -462,7 +462,7 @@ func settingList(req EditRequest) string {
 	return strings.Join(paths, ", ")
 }
 
-func deleteWarning(kind string) string {
+func deleteWarning(kind, name string) string {
 	switch kind {
 	case config.KindApplication:
 		return "With automated prune, composecd uninstalls the release (named volumes are kept); without it, the release stays, shown as orphaned on its host."
@@ -470,6 +470,9 @@ func deleteWarning(kind string) string {
 		return "Applications that still target the host stop reconciling."
 	case "ApplicationSet":
 		return "Its Applications go with it: with automated prune, their releases are uninstalled."
+	}
+	if name == config.DefaultWindow {
+		return "The built-in default window, which is always open, applies to its apps instead."
 	}
 	return "The window stops applying."
 }

@@ -757,8 +757,10 @@ func (c *Controller) Apps() []AppStatus {
 		}
 	}
 	c.mu.RUnlock()
+	now := time.Now()
 	for i := range out {
 		out[i] = c.maskStatus(c.withRunning(out[i]))
+		out[i].SyncWindows = c.syncWindows(out[i], now)
 		out[i].Self = c.isSelf(out[i].Host, out[i].Name)
 		out[i].SelfUpdatable = out[i].Self && c.canUpdateSelf()
 	}
@@ -779,9 +781,18 @@ func (c *Controller) App(name string) (AppStatus, error) {
 	}
 	c.mu.RUnlock()
 	st = c.maskStatus(c.withRunning(st))
+	st.SyncWindows = c.syncWindows(st, time.Now())
 	st.Self = c.isSelfApp(a)
 	st.SelfUpdatable = st.Self && c.canUpdateSelf()
 	return st, nil
+}
+
+// syncWindows are the sync windows that apply to st's app at now.
+func (c *Controller) syncWindows(st AppStatus, now time.Time) []windows.Ref {
+	c.mu.RLock()
+	ws := c.windows
+	c.mu.RUnlock()
+	return windows.Refs(ws, st.Name, st.Host, st.Labels, now)
 }
 
 // withRunning shows st's running operation, if any, as its last one: status

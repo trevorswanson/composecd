@@ -10,6 +10,7 @@
 {{with .App.Sync.ValuesRevision}}<dt>Values revision</dt><dd><code>{{.}}</code></dd><dt>Deployed values</dt><dd>{{with $.App.Sync.DeployedValuesRevision}}<code>{{.}}</code>{{else}}<span class="none">Not deployed</span>{{end}}</dd>{{end}}
 {{with .App.Sync.Reasons}}<dt>Out of sync because</dt><dd>{{range .}}<span>{{.}}</span>{{end}}</dd>{{end}}
 <dt>Policy</dt><dd>{{if .App.Automated}}Automated{{else}}Manual{{end}}{{if .App.Paused}}<span class="pill plain paused">Paused: {{.App.PausedReason}}</span>{{end}}{{with .App.Blocked}}<span class="pill plain held">{{.}}</span>{{end}}</dd>
+{{with .App.SyncWindows}}<dt>Sync windows</dt><dd>{{range .}}<span><a href="/windows">{{.Name}}</a> ({{.Kind}}, {{if .Builtin}}built-in, always open{{else if .Open}}in effect{{else}}not in effect{{end}})</span>{{end}}</dd>{{end}}
 <dt>Depends on</dt><dd>{{with .App.DependsOn}}<span class="links">{{range .}}<a href="/apps/{{path .}}">{{.}}</a>{{end}}</span>{{else}}<span class="none">Nothing</span>{{end}}</dd>
 <dt>Retry</dt><dd>{{with .App.Retry}}{{.Failures}} failed of {{.Limit}} retries<span class="reason">{{if .NextAt.IsZero}}No retry scheduled{{else}}Next <time datetime="{{iso .NextAt}}" title="{{iso .NextAt}}">{{ago .NextAt}}</time>{{end}}</span>{{else}}<span class="none">No retry policy</span>{{end}}</dd>
 <dt>Reconciled</dt><dd>{{if .App.ReconciledAt.IsZero}}<span class="none">Not yet</span>{{else}}<time datetime="{{iso .App.ReconciledAt}}" title="{{iso .App.ReconciledAt}}">{{ago .App.ReconciledAt}}</time>{{end}}</dd>

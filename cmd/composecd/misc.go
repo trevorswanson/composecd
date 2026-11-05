@@ -164,7 +164,7 @@ func newWindowCmd(cf *clientFlags) *cobra.Command {
 	list := &cobra.Command{
 		Use:     "list",
 		Aliases: []string{"ls"},
-		Short:   "List sync windows, whether they're open, and the apps they match",
+		Short:   "List sync windows, whether they're open, and the apps they apply to",
 		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ws, err := cf.client().Windows(ctx(cmd))
@@ -173,7 +173,7 @@ func newWindowCmd(cf *clientFlags) *cobra.Command {
 			}
 			return format.write(cmd.OutOrStdout(), ws, func(w io.Writer) {
 				tw := tabwriter.NewWriter(w, 0, 8, 2, ' ', 0)
-				fmt.Fprintln(tw, "NAME\tKIND\tSCHEDULE\tDURATION\tMANUAL\tOPEN\tAPPLICATIONS")
+				fmt.Fprintln(tw, "NAME\tKIND\tSCHEDULE\tDURATION\tMANUAL\tOPEN\tSOURCE\tAPPLICATIONS")
 				for _, win := range ws {
 					open := "no, opens " + win.NextOpen.Local().Format("Mon 15:04")
 					if win.Open {
@@ -183,11 +183,15 @@ func newWindowCmd(cf *clientFlags) *cobra.Command {
 					if win.ManualSync {
 						manual = "allowed"
 					}
-					sched := win.Schedule
+					sched, duration, source := win.Schedule, win.Duration, "git"
 					if win.TimeZone != "" {
 						sched += " " + win.TimeZone
 					}
-					fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", win.Name, win.Kind, sched, win.Duration, manual, open,
+					if win.Builtin {
+						// Always open: syncs are allowed at any time.
+						sched, duration, open, source = "always", "-", "always", "built-in"
+					}
+					fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", win.Name, win.Kind, sched, duration, manual, open, source,
 						orDash(strings.Join(win.Applications, ",")))
 				}
 				_ = tw.Flush()

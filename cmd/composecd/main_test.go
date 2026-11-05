@@ -172,7 +172,11 @@ func TestCLIAgainstServer(t *testing.T) {
 	expect(t, mustCLI(t, srv, "app", "list"), "paused")
 	expect(t, mustCLI(t, srv, "app", "resume", "whoami"), "resumed")
 	expect(t, mustCLI(t, srv, "app", "list", "-o", "yaml"), "name: whoami", "status: Synced")
-	expect(t, mustCLI(t, srv, "window", "list"), "movie-night", "deny", "0 19 * * 5,6 America/Chicago", "allowed")
+	expect(t, mustCLI(t, srv, "window", "list"), "movie-night", "deny", "0 19 * * 5,6 America/Chicago", "allowed", "SOURCE", "git")
+	// No window matches the example's apps, so they belong to the built-in default.
+	expect(t, mustCLI(t, srv, "window", "list"), "default", "allow", "always", "built-in", "dashboard,", "whoami")
+	expect(t, mustCLI(t, srv, "window", "list", "-o", "json"), `"builtin": true`, `"default": true`)
+	expect(t, mustCLI(t, srv, "app", "get", "whoami"), "Windows:    default (allow, built-in, always open)")
 	expect(t, mustCLI(t, srv, "host", "maintenance", "nas", "on", "--reason", "disks"), "Maintenance mode of nas is on")
 	expect(t, mustCLI(t, srv, "host", "list"), "maintenance: disks")
 	expect(t, mustCLI(t, srv, "host", "maintenance", "nas", "off"), "is off")

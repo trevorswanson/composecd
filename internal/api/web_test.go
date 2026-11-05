@@ -70,8 +70,9 @@ func TestWebPagesAndActions(t *testing.T) {
 	b.login("", "secret")
 	cases := map[string]string{
 		"/": "Applications", "/apps?host=nas&sync=Synced&health=Healthy": "<strong>media</strong>",
-		"/apps?label=missing": "No applications match", "/hosts": "Start maintenance", "/hosts/nas": "traefik-proxy-1", "/windows": "nightly",
-		"/operations": "operator", "/settings": "Create token",
+		"/apps?label=missing": "No applications match", "/hosts": "Start maintenance", "/hosts/nas": "traefik-proxy-1", "/windows": "nightly", "/windows?builtin": `<span class="tag" title="composecd's default window`, "/windows?always": "Always open",
+		"/ui/apps/media/details?windows": `<a href="/windows">nightly</a> (allow, in effect)`,
+		"/operations":                    "operator", "/settings": "Create token",
 		"/apps/media": "Sync status", "/ui/apps/media/details": "Desired revision", "/apps/media?tab=containers": "media-web-1",
 		"/apps/media?tab=graph": `class="graph-data"`, "/ui/apps/media/objects/services/web": "nginx:1", "/ui/apps/media/objects/services/web?view=desired": "image: nginx:1",
 		"/ui/apps/media/operations/7":                   `sse-connect="/api/v1/apps/media/operations/7/log"`,

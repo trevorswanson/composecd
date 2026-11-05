@@ -374,7 +374,8 @@ type SyncWindow struct {
 }
 
 // SyncWindowSpec is a schedule and what it applies to. An Application matches
-// when it matches every selector that is set.
+// when it matches every selector that is set. The window named DefaultWindow
+// has no selectors: it applies to the Applications no other window matches.
 type SyncWindowSpec struct {
 	// Kind is "allow" or "deny".
 	Kind string `yaml:"kind" json:"kind"`
@@ -400,6 +401,11 @@ const (
 	WindowAllow = "allow"
 	WindowDeny  = "deny"
 )
+
+// DefaultWindow is the name of the SyncWindow that applies to every
+// Application no other window matches. Without one in Git, a built-in
+// default that is always open applies.
+const DefaultWindow = "default"
 
 // SyncOptions map to composetpl upgrade flags.
 type SyncOptions struct {

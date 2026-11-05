@@ -10,6 +10,7 @@ import (
 	"github.com/trevorswanson/composecd/internal/health"
 	"github.com/trevorswanson/composecd/internal/hosts"
 	"github.com/trevorswanson/composecd/internal/store"
+	"github.com/trevorswanson/composecd/internal/windows"
 )
 
 // SyncState says whether the live state matches Git.
@@ -57,6 +58,9 @@ type AppStatus struct {
 	Release  *Release `json:"release,omitempty"`
 	// DependsOn are the apps that must be Synced and Healthy first.
 	DependsOn []string `json:"dependsOn,omitempty"`
+	// SyncWindows are the sync windows that apply to the app: the ones that
+	// match it, or the default window.
+	SyncWindows []windows.Ref `json:"syncWindows,omitempty"`
 	// Blocked says why automation is holding off: a sync window, a dependency,
 	// host maintenance, or a retry or self-heal backoff.
 	Blocked string `json:"blocked,omitempty"`
