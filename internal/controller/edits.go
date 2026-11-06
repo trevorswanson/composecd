@@ -361,6 +361,9 @@ func findObject(tip *editTip, kind, name string) (string, []byte, yamledit.Docum
 	if err != nil {
 		return "", nil, yamledit.Document{}, fmt.Errorf("%s: %w", origin, err)
 	}
+	if !filepath.IsLocal(filepath.FromSlash(rel)) {
+		return "", nil, yamledit.Document{}, fmt.Errorf("%s: not a path under the root", origin)
+	}
 	data, err := os.ReadFile(filepath.Join(tip.root, filepath.FromSlash(rel)))
 	if err != nil {
 		return "", nil, yamledit.Document{}, err
@@ -440,6 +443,9 @@ func newObjectFile(file string) (string, error) {
 		return "", invalid("the file must be a path under the root, without ..")
 	}
 	rel := path.Clean(file)
+	if !filepath.IsLocal(filepath.FromSlash(rel)) {
+		return "", invalid("the file must be a path under the root, without ..")
+	}
 	if strings.Contains("/"+rel, "/.") {
 		return "", invalid("the file can't be hidden or in a hidden directory")
 	}
