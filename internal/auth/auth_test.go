@@ -169,7 +169,7 @@ func TestSessions(t *testing.T) {
 	p, _ = a.Login(context.Background(), "trevor", "correct horse battery", "10.0.0.1")
 	cookie, _ = a.StartSession(p, false)
 	got, _ = a.Identify(withCookie("GET", cookie))
-	if clear := a.Logout(got); clear.MaxAge >= 0 {
+	if clear := a.Logout(got, false); clear.MaxAge >= 0 {
 		t.Errorf("logout cookie = %+v", clear)
 	}
 	if _, err := a.Identify(withCookie("GET", cookie)); !errors.Is(err, ErrUnauthenticated) {

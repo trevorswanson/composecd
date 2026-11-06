@@ -82,7 +82,10 @@ func TestAdoptionRoutesAndRoles(t *testing.T) {
 	}
 	b := newBrowser(t, srv)
 	b.login("", "secret")
-	code, _, body := b.do("GET", "/hosts/nas", "", nil)
+	code, body := eventually(t, `href="/hosts/nas/adopt/external"`, func() (int, string) {
+		code, _, body := b.do("GET", "/hosts/nas", "", nil)
+		return code, body
+	})
 	if code != 200 || !strings.Contains(body, `href="/hosts/nas/adopt/external"`) || !strings.Contains(body, "composetpl create") || strings.Contains(body, "<script>") || strings.Contains(body, "plaintext-secret") {
 		t.Fatal(code, body)
 	}
@@ -110,7 +113,8 @@ func TestAdoptionRoutesAndRoles(t *testing.T) {
 	fs := httptest.NewServer(New(failure, Options{Auth: a}))
 	defer fs.Close()
 	for _, path := range []string{"/hosts", "/hosts/nas"} {
-		if code, body := do(t, fs, "GET", path, "secret", ""); code != 200 || !strings.Contains(body, "Discovery failed") {
+		code, body := eventually(t, "Discovery failed", func() (int, string) { return do(t, fs, "GET", path, "secret", "") })
+		if code != 200 || !strings.Contains(body, "Discovery failed") {
 			t.Fatal(path, code, body)
 		}
 	}

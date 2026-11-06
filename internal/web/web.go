@@ -113,23 +113,19 @@ type Inventory struct {
 // slow over SSH and too much to repeat for each render of each open tab.
 const inventoryTTL = time.Minute
 
-// inventoryWait is how long a page load waits on a host with nothing cached
-// before rendering it as scanning; the scan's result arrives over SSE.
-var inventoryWait = 2 * time.Second
-
-// liveKey marks a render for an SSE update rather than a page load.
-type liveKey struct{}
-
 // cached returns each host's cached result in cache, starting a background run
-// for any that is missing or stale (or every one, with force). With wait, it
-// waits briefly on hosts with nothing cached so quick hosts render complete.
-// Live views wake when a run ends and, with announce, when one starts.
-func cached[T any](s *Server, cache *map[string]*scan[T], hostNames []string, force, wait, announce bool, run func(string) (*T, error)) map[string]scan[T] {
+// for any that is missing or stale (or every one, with force). It never waits
+// on a host: deciding to scan is a look at when the last run ended, and the
+// lock is only held for that and to record a result, never across a run. A
+// host with nothing cached renders as scanning, and live views wake when a
+// run ends and, with announce, when one starts, so its result arrives over SSE.
+func cached[T any](s *Server, cache *map[string]*scan[T], hostNames []string, force, announce bool, run func(string) (*T, error)) map[string]scan[T] {
 	s.inventoryMu.Lock()
+	defer s.inventoryMu.Unlock()
 	if *cache == nil {
 		*cache = map[string]*scan[T]{}
 	}
-	var pending []chan struct{}
+	out := make(map[string]scan[T], len(hostNames))
 	for _, host := range hostNames {
 		sc := (*cache)[host]
 		if sc == nil {
@@ -152,33 +148,14 @@ func cached[T any](s *Server, cache *map[string]*scan[T], hostNames []string, fo
 				s.wakeLocked()
 			}
 		}
-		if wait && sc.at.IsZero() && sc.running != nil {
-			pending = append(pending, sc.running)
-		}
-	}
-	s.inventoryMu.Unlock()
-	deadline := time.NewTimer(inventoryWait)
-	defer deadline.Stop()
-wait:
-	for _, done := range pending {
-		select {
-		case <-done:
-		case <-deadline.C:
-			break wait
-		}
-	}
-	out := map[string]scan[T]{}
-	s.inventoryMu.Lock()
-	defer s.inventoryMu.Unlock()
-	for _, host := range hostNames {
-		out[host] = *(*cache)[host]
+		out[host] = *sc
 	}
 	return out
 }
 
 // inventories returns each host's cached discovery; see cached.
-func (s *Server) inventories(hostNames []string, force, wait bool) map[string]Inventory {
-	got := cached(s, &s.inventory, hostNames, force, wait, true, func(host string) (*controller.Unmanaged, error) {
+func (s *Server) inventories(hostNames []string, force bool) map[string]Inventory {
+	got := cached(s, &s.inventory, hostNames, force, true, func(host string) (*controller.Unmanaged, error) {
 		return s.C.Unmanaged(context.Background(), host)
 	})
 	out := map[string]Inventory{}
@@ -193,9 +170,9 @@ func (s *Server) inventories(hostNames []string, force, wait bool) map[string]In
 }
 
 // hostResources returns each host's cached resource listing; see cached.
-func (s *Server) hostResources(hostNames []string, force, wait bool) map[string]scan[hosts.Resources] {
+func (s *Server) hostResources(hostNames []string, force bool) map[string]scan[hosts.Resources] {
 	// Nothing shows a resource scan running, so only its end wakes views.
-	return cached(s, &s.resources, hostNames, force, wait, false, func(host string) (*hosts.Resources, error) {
+	return cached(s, &s.resources, hostNames, force, false, func(host string) (*hosts.Resources, error) {
 		return s.C.HostResources(context.Background(), host)
 	})
 }
@@ -608,7 +585,7 @@ func (s *Server) data(r *http.Request, p *auth.Principal) (*Data, error) {
 		case "graph":
 			// Neighbors come from the host's cached resources; a scan's
 			// result arrives over SSE.
-			res := s.hostResources([]string{a.Host}, false, false)[a.Host]
+			res := s.hostResources([]string{a.Host}, false)[a.Host]
 			d.Graph = appGraph(a, res.out, s.C.Apps())
 		case "containers", "images":
 		case "configuration":
@@ -665,7 +642,8 @@ func (s *Server) data(r *http.Request, p *auth.Principal) (*Data, error) {
 		d.Settings, d.Template = show(set, d.Show, err), show(template, d.Show, err)
 		d.Template.Prefix = templatePrefix
 	case "hosts", "host":
-		live := r.Context().Value(liveKey{}) != nil
+		// Everything here renders from what is cached; scans of hosts whose
+		// discovery is missing or stale start in the background.
 		var scan []string
 		for _, h := range s.C.HostStatuses() {
 			if d.Page == "host" && h.Name != d.Name {
@@ -686,18 +664,14 @@ func (s *Server) data(r *http.Request, p *auth.Principal) (*Data, error) {
 				return nil, err
 			}
 		}
-		if d.Page == "host" {
-			// Start listing resources first, so both scans wait together.
-			s.hostResources(scan, false, false)
-			if !d.Host.Retired {
-				groups, origin, err := s.hostSettings(d.Name, d.Admin)
-				d.Settings = show(groups, d.Show, err)
-				d.Settings.Origin = origin
-			}
+		if d.Page == "host" && !d.Host.Retired {
+			groups, origin, err := s.hostSettings(d.Name, d.Admin)
+			d.Settings = show(groups, d.Show, err)
+			d.Settings.Origin = origin
 		}
-		d.Inventory = s.inventories(scan, false, !live)
+		d.Inventory = s.inventories(scan, false)
 		if d.Page == "host" && len(scan) == 1 {
-			res := s.hostResources(scan, false, !live)[d.Name]
+			res := s.hostResources(scan, false)[d.Name]
 			inv := d.Inventory[d.Name]
 			if res.out != nil {
 				g := hostGraph(d.Name, res.out, s.C.Apps())
@@ -936,7 +910,7 @@ func (s *Server) Action(w http.ResponseWriter, r *http.Request) {
 				// after this request has ended.
 				go func(ctx context.Context, host string, id int64) {
 					_ = s.C.FollowOperation(ctx, id, io.Discard)
-					s.inventories([]string{host}, true, false)
+					s.inventories([]string{host}, true)
 				}(context.WithoutCancel(r.Context()), name, op.ID)
 			}
 		default:
@@ -1053,9 +1027,9 @@ func (s *Server) rescan(ctx context.Context, host string) error {
 	if h, ok := s.hostStatus(host); !ok || h.Retired {
 		return fmt.Errorf("host %q: %w", host, controller.ErrNotFound)
 	}
-	s.inventories([]string{host}, true, false)
+	s.inventories([]string{host}, true)
 	// The host graph's resources refresh alongside; they report over SSE.
-	s.hostResources([]string{host}, true, false)
+	s.hostResources([]string{host}, true)
 	s.inventoryMu.Lock()
 	running := s.inventory[host].running
 	s.inventoryMu.Unlock()
