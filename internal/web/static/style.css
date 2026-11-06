@@ -322,6 +322,17 @@ td.act { text-align: right; padding-top: 4px; }
 table.forms td, table.forms td.act { vertical-align: middle; padding-top: 6px; padding-bottom: 6px; }
 table.compact td { padding-top: 6px; padding-bottom: 6px; }
 td.act form + form { margin-left: 4px; }
+/* The images tab's Update column: a status, then any upgrade offered, all left-aligned. */
+table.images td.update { min-width: 220px; }
+table.images td.update .cell { gap: 8px; }
+.btn-row { display: flex; flex-wrap: wrap; gap: 6px; }
+.offer { display: flex; flex-direction: column; gap: 6px; align-self: stretch; padding: 8px 10px;
+  border: 1px solid var(--mf-line-strong); border-left: 3px solid var(--mf-prog); border-radius: var(--mf-radius);
+  background: var(--mf-surface-2); }
+.offer-head { font-size: 11px; line-height: 16px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--mf-prog); }
+.offer-tags { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 13px; color: var(--mf-text-3); }
+.offer-tags code { white-space: nowrap; }
+.offer-to { font-weight: 600; color: var(--mf-text); }
 td.empty-row { padding: 32px 16px; text-align: center; color: var(--mf-text-2); }
 tbody tr:hover td.empty-row { background: none; }
 .cell { display: flex; flex-direction: column; gap: 4px; align-items: flex-start; min-width: 0; }

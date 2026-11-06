@@ -47,7 +47,7 @@ func TestPolicyValidate(t *testing.T) {
 }
 
 func TestPickSemver(t *testing.T) {
-	tags := []string{"latest", "1.26.9", "1.27", "1.27.1", "1.27.3", "1.27.4-rc1", "1.27.3-alpine", "1.28.0", "1.28.1-rc.2", "2.0.0", "v1.29.0", "mainline"}
+	tags := []string{"latest", "1.26.9", "1.27", "1.27.1", "1.27.3", "1.27.4-rc1", "1.27.3-alpine", "1.28.0", "1.28.1-rc.2", "2.0.0", "v1.29.0", "mainline", "20230811", "3"}
 	for _, c := range []struct {
 		name    string
 		p       Policy
@@ -62,6 +62,9 @@ func TestPickSemver(t *testing.T) {
 		{"prerelease named", Policy{Strategy: StrategySemver, Constraint: ">=1.28.0-0 <1.29.0"}, "1.27.1", "1.28.1-rc.2"},
 		{"never older than current", Policy{Strategy: StrategySemver, Constraint: "~1.26"}, "1.27.1", "1.27.1"},
 		{"nothing newer", Policy{Strategy: StrategySemver, Constraint: "~1.27"}, "1.27.3", "1.27.3"},
+		{"fewer parts: a date isn't a version", *NewOffer("", "", nil), "1.27.1", "2.0.0"},
+		{"more parts are fine", Policy{Strategy: StrategySemver}, "1.27", "v1.29.0"},
+		{"allowTags overrides the parts check", Policy{Strategy: StrategySemver, Constraint: "*", AllowTags: `^\d+$`}, "1.27.1", "20230811"},
 	} {
 		got, err := c.p.PickSemver(c.current, tags)
 		if err != nil || got != c.want {

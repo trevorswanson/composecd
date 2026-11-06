@@ -141,6 +141,10 @@ func TestWebPagesAndActions(t *testing.T) {
 		!strings.Contains(body, "semver <code>~1.27</code>") || !strings.Contains(body, "1.27.1 → <strong>1.27.3</strong>") {
 		t.Errorf("images tab: %s", body)
 	}
+	// An image pinned in Git shows its tag, with the digest abbreviated.
+	if !strings.Contains(body, `<code title="postgres:16@sha256:cccccccccccccccc">postgres:16</code>`) || strings.Contains(body, "imageUpdates.schedule") {
+		t.Errorf("image references on the images tab: %s", body)
+	}
 	// A held update names the file to fix and offers an admin the decision;
 	// one applied in memory says it diverges.
 	if !strings.Contains(body, "the tag is set in an encrypted file") || !strings.Contains(body, "set <code>worker.tag</code> in <code>apps/media/values.yaml</code>") ||
@@ -152,7 +156,7 @@ func TestWebPagesAndActions(t *testing.T) {
 		t.Errorf("bad decision: %d %s", code, body)
 	}
 	// An offered upgrade waits for an admin, who confirms it.
-	if !strings.Contains(body, "Available: 3.1.0") || !strings.Contains(body, `name="choice" value="upgrade"`) || !strings.Contains(body, `name="choice" value="skip"`) ||
+	if !strings.Contains(body, `<code class="offer-to">3.1.0</code>`) || !strings.Contains(body, `name="choice" value="upgrade"`) || !strings.Contains(body, `name="choice" value="skip"`) ||
 		!strings.Contains(body, "composecd commits 3.1.0 to Git, and it deploys from there") {
 		t.Errorf("offer on the images tab: %s", body)
 	}
@@ -193,7 +197,7 @@ func TestWebPagesAndActions(t *testing.T) {
 	}
 	// A readonly user sees a held update but can't decide it.
 	if _, _, body = g.do("GET", "/apps/media?tab=images", "", nil); !strings.Contains(body, "the tag is set in an encrypted file") || strings.Contains(body, "Apply in memory") ||
-		!strings.Contains(body, "Available: 3.1.0") || strings.Contains(body, `value="upgrade"`) {
+		!strings.Contains(body, `<code class="offer-to">3.1.0</code>`) || strings.Contains(body, `value="upgrade"`) {
 		t.Errorf("readonly images tab: %s", body)
 	}
 	if code, _, _ := g.do("POST", "/ui/apps/media/image-decision", "csrf="+g.csrf+"&service=web&choice=memory", map[string]string{"Content-Type": "application/x-www-form-urlencoded"}); code != 403 {
