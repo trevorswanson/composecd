@@ -111,10 +111,19 @@ func (s Service) MovesTags() bool {
 	return s.Eligible() && s.Policy.MovesTags() && (s.Policy.Strategy != StrategySemver || IsSemver(s.Ref.Tag))
 }
 
+// Offers is true when newer tags beyond the strategy's are looked for and
+// reported (Policy.Offer), for a service whose tag is a semantic version. An
+// image pinned in Git takes part: write-back can commit an approved upgrade.
+func (s Service) Offers() bool {
+	return s.Checked() && s.Policy.Offer != nil && IsSemver(s.Ref.Tag)
+}
+
 // Services lists the images of manifest's services, sorted by service. enabled
 // and policy are the Application's settings, which a service's label
 // overrides: label ("true" or "false"), and label.strategy, label.constraint
-// and label.allow-tags. label.tag-key is read into TagKey.
+// and label.allow-tags. label.offer ("true" or "false"), label.offer.constraint
+// and label.offer.allow-tags override the offer. label.tag-key is read into
+// TagKey.
 func Services(manifest string, enabled bool, policy Policy, label string) ([]Service, error) {
 	doc, err := parse(manifest)
 	if err != nil {
@@ -135,13 +144,39 @@ func Services(manifest string, enabled bool, policy Policy, label string) ([]Ser
 			if v, ok := labelValue(labels, label+".strategy"); ok && strings.ToLower(v) != s.Policy.Name() {
 				// Another strategy starts afresh: the Application's constraint
 				// and tag filters were written for its own.
-				s.Policy = Policy{Strategy: strings.ToLower(v)}
+				s.Policy = Policy{Strategy: strings.ToLower(v), Offer: s.Policy.Offer}
 			}
 			if v, ok := labelValue(labels, label+".constraint"); ok {
 				s.Policy.Constraint = v
 			}
 			if v, ok := labelValue(labels, label+".allow-tags"); ok {
 				s.Policy.AllowTags = v
+			}
+			if v, ok := labelValue(labels, label+".offer"); ok {
+				s.Policy.Offer = nil
+				if strings.EqualFold(v, "true") {
+					s.Policy.Offer = NewOffer("", "", nil)
+				}
+			}
+			for _, k := range []string{".offer.constraint", ".offer.allow-tags"} {
+				v, ok := labelValue(labels, label+k)
+				if !ok {
+					continue
+				}
+				o := NewOffer("", "", nil)
+				if s.Policy.Offer != nil {
+					cp := *s.Policy.Offer
+					o = &cp
+				}
+				if k == ".offer.constraint" {
+					o.Constraint = v
+					if strings.TrimSpace(v) == "" {
+						o.Constraint = DefaultOfferConstraint
+					}
+				} else {
+					o.AllowTags = v
+				}
+				s.Policy.Offer = o
 			}
 			if v, ok := labelValue(labels, label+".tag-key"); ok {
 				s.TagKey = strings.TrimSpace(v)

@@ -278,6 +278,22 @@ type AppImageUpdates struct {
 	// WriteBack is where a picked tag is recorded: memory (default: applied
 	// at deploy time only) or git (committed to the values that set it).
 	WriteBack string `yaml:"writeBack,omitempty" json:"writeBack,omitempty"`
+	// Offer looks for newer tags than the strategy moves to, and reports them
+	// as upgrades an admin may approve. Nothing is applied until one is.
+	Offer *ImageOffer `yaml:"offer,omitempty" json:"offer,omitempty"`
+}
+
+// ImageOffer is a semver policy whose newer tags are only offered.
+type ImageOffer struct {
+	// Strategy is semver, the only one (default semver).
+	Strategy string `yaml:"strategy,omitempty" json:"strategy,omitempty"`
+	// Constraint is a semver constraint (default: any newer release, majors
+	// included).
+	Constraint string `yaml:"constraint,omitempty" json:"constraint,omitempty"`
+	// AllowTags is a regexp tags must match.
+	AllowTags string `yaml:"allowTags,omitempty" json:"allowTags,omitempty"`
+	// IgnoreTags are globs of tags never offered.
+	IgnoreTags []string `yaml:"ignoreTags,omitempty" json:"ignoreTags,omitempty"`
 }
 
 // Image update write-back modes.
@@ -294,13 +310,21 @@ func (u *AppImageUpdates) Policy() images.Policy {
 	if u == nil {
 		return images.Policy{}
 	}
-	return images.Policy{Strategy: u.Strategy, Constraint: u.Constraint, AllowTags: u.AllowTags, IgnoreTags: u.IgnoreTags}
+	p := images.Policy{Strategy: u.Strategy, Constraint: u.Constraint, AllowTags: u.AllowTags, IgnoreTags: u.IgnoreTags}
+	if o := u.Offer; o != nil {
+		p.Offer = images.NewOffer(o.Constraint, o.AllowTags, o.IgnoreTags)
+		if o.Strategy != "" {
+			p.Offer.Strategy = o.Strategy
+		}
+	}
+	return p
 }
 
 // LabelImageUpdates is the compose service label ("true" or "false") that
 // overrides the Application's image update setting for one service. With the
 // suffixes .strategy, .constraint and .allow-tags it overrides the
-// Application's policy; .tag-key names the values key (or Chart.appVersion)
+// Application's policy, and with .offer ("true" or "false"),
+// .offer.constraint and .offer.allow-tags its offer; .tag-key names the values key (or Chart.appVersion)
 // write-back edits, when tracing can't find it.
 const LabelImageUpdates = "composecd.image-updates"
 

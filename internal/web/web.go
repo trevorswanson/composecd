@@ -68,6 +68,7 @@ type Controller interface {
 	LiveObject(ctx context.Context, app, id string, all, redact bool) (*controller.Live, error)
 	HostObject(ctx context.Context, host, kind, name string, redact bool) (*controller.HostObject, error)
 	DecideImage(app, service, choice, user string) (*store.ImageDecision, error)
+	DecideUpgrade(app, service, choice, tag, user string) (*store.ImageUpgrade, error)
 	EditSource(ctx context.Context, kind, name string) (file, document string, err error)
 	PlanEdit(context.Context, controller.EditRequest) (*controller.EditPlan, error)
 	ApplyEdit(ctx context.Context, req controller.EditRequest, token, user string) (*controller.EditResult, error)
@@ -805,7 +806,8 @@ func pageError(w http.ResponseWriter, err error) {
 	case errors.Is(err, controller.ErrNotFound), errors.Is(err, store.ErrNotFound):
 		code = 404
 	case errors.Is(err, controller.ErrBusy), errors.Is(err, controller.ErrBlocked), errors.Is(err, controller.ErrAdoptionBlocked), errors.Is(err, store.ErrExists),
-		errors.Is(err, controller.ErrHostBusy), errors.Is(err, controller.ErrNotHeld):
+		errors.Is(err, controller.ErrHostBusy), errors.Is(err, controller.ErrNotHeld), errors.Is(err, controller.ErrNoOffer),
+		errors.Is(err, controller.ErrOfferChanged), errors.Is(err, controller.ErrNotUpgradable):
 		code = 409
 	}
 	http.Error(w, err.Error(), code)
@@ -865,6 +867,19 @@ func (s *Server) Action(w http.ResponseWriter, r *http.Request) {
 			toast, late = imageToast(check), "Still waiting on image registries; this page updates when they answer"
 			if err == nil {
 				err = imageErr(check)
+			}
+		case "image-upgrade":
+			svc, choice, tag := r.FormValue("service"), r.FormValue("choice"), r.FormValue("tag")
+			if choice != store.UpgradeApprove && choice != store.UpgradeSkip {
+				err = invalidRequest("invalid choice")
+				break
+			}
+			var u *store.ImageUpgrade
+			if u, err = s.C.DecideUpgrade(name, svc, choice, tag, p.Name); err == nil {
+				toast = fmt.Sprintf("Skipped %s for %s until a newer tag", u.Tag, svc)
+				if choice == store.UpgradeApprove {
+					toast = fmt.Sprintf("Approved the upgrade of %s to %s", svc, u.Tag)
+				}
 			}
 		case "image-decision":
 			svc, choice := r.FormValue("service"), r.FormValue("choice")

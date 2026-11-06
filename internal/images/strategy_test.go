@@ -21,6 +21,8 @@ func TestPolicyValidate(t *testing.T) {
 		{Strategy: StrategySemver},
 		{Strategy: StrategySemver, Constraint: "~1.27", AllowTags: `^\d+\.\d+\.\d+$`, IgnoreTags: []string{"*-rc*"}},
 		{Strategy: StrategyNewestBuild, AllowTags: "^main-"},
+		{Offer: NewOffer("", "", nil)},
+		{Strategy: StrategySemver, Offer: NewOffer(">=2", `^\d`, []string{"*-rc*"})},
 	} {
 		if err := p.Validate(); err != nil {
 			t.Errorf("%+v: %v", p, err)
@@ -34,6 +36,9 @@ func TestPolicyValidate(t *testing.T) {
 		"requires allowTags":       {Strategy: StrategyNewestBuild},
 		"ignoreTags \"[\"":         {Strategy: StrategySemver, IgnoreTags: []string{"["}},
 		"only apply to the semver": {AllowTags: "."},
+		"offer: strategy":          {Offer: &Policy{Strategy: StrategyNewestBuild, AllowTags: "."}},
+		"offer: constraint":        {Offer: &Policy{Strategy: StrategySemver, Constraint: "~>1 ||| x"}},
+		"offer: an offer":          {Offer: &Policy{Strategy: StrategySemver, Offer: NewOffer("", "", nil)}},
 	} {
 		if err := p.Validate(); err == nil || !strings.Contains(err.Error(), strings.Split(want, " \"")[0]) {
 			t.Errorf("%+v: %v, want %q", p, err, want)
@@ -151,6 +156,76 @@ func TestServicesPolicyLabels(t *testing.T) {
 	}
 	if s := got["git"]; s.MovesTags() || !s.Pinned {
 		t.Errorf("git = %+v", s)
+	}
+}
+
+func TestServicesOfferLabels(t *testing.T) {
+	const m = `services:
+  app:
+    image: nginx:1.27.1
+  off:
+    image: nginx:1.27.1
+    labels: {composecd.image-updates.offer: "false"}
+  narrow:
+    image: nginx:1.27.1
+    labels: {composecd.image-updates.offer.constraint: "<2", composecd.image-updates.strategy: semver}
+  latest:
+    image: nginx
+  git:
+    image: nginx:1.27.1@` + dig + `
+`
+	svcs, err := Services(m, true, Policy{Offer: NewOffer("", "", nil)}, "composecd.image-updates")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]Service{}
+	for _, s := range svcs {
+		got[s.Name] = s
+	}
+	if s := got["app"]; !s.Offers() || s.Policy.Offer.Constraint != DefaultOfferConstraint {
+		t.Errorf("app = %+v", s)
+	}
+	if s := got["off"]; s.Offers() {
+		t.Errorf("off = %+v", s)
+	}
+	if s := got["narrow"]; !s.Offers() || s.Policy.Offer.Constraint != "<2" || s.Policy.Strategy != StrategySemver {
+		t.Errorf("narrow = %+v", s)
+	}
+	if s := got["latest"]; s.Offers() {
+		t.Errorf("latest offers, but its tag isn't a semantic version")
+	}
+	if s := got["git"]; !s.Offers() {
+		t.Errorf("git = %+v", s)
+	}
+	none, _ := Services(m, true, Policy{}, "composecd.image-updates")
+	for _, s := range none {
+		// An offer label turns the offer on for its service.
+		if s.Offers() != (s.Name == "narrow") {
+			t.Errorf("%s: Offers() = %v without the Application's offer", s.Name, s.Offers())
+		}
+	}
+	on, _ := Services("services:\n  a:\n    image: nginx:1.27.1\n    labels: {composecd.image-updates.offer: \"true\"}\n", true, Policy{}, "composecd.image-updates")
+	if len(on) != 1 || !on[0].Offers() {
+		t.Errorf("offer label = %+v", on)
+	}
+}
+
+func TestApprovedAndNewer(t *testing.T) {
+	p := Policy{Offer: NewOffer("", "", nil)}.Approved("v3.1.0")
+	if err := p.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	got, err := p.PickSemver("3.0.1", []string{"3.0.1", "3.1.0", "v3.1.0", "3.2.0"})
+	if err != nil || got != "v3.1.0" || p.Offer == nil {
+		t.Errorf("approved picks %q, %v (offer %v)", got, err, p.Offer)
+	}
+	for _, c := range []struct {
+		tag, current string
+		want         bool
+	}{{"3.1.0", "3.0.1", true}, {"3.0.1", "3.0.1", false}, {"3.0.0", "3.0.1", false}, {"latest", "3.0.1", false}, {"1.0", "latest", true}} {
+		if got := Newer(c.tag, c.current); got != c.want {
+			t.Errorf("Newer(%q, %q) = %v", c.tag, c.current, got)
+		}
 	}
 }
 

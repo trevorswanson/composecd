@@ -173,6 +173,14 @@ func (c *Client) DecideImage(ctx context.Context, app, service, choice string) (
 	return out, c.do(ctx, "POST", appPath(app, "/images/"+url.PathEscape(service)+"/decision"), map[string]string{"choice": choice}, out)
 }
 
+// DecideUpgrade records an admin's decision about the tag app's service's
+// offer found: store.UpgradeApprove upgrades to it, store.UpgradeSkip ignores
+// it until a newer tag. tag, when set, must be the tag offered.
+func (c *Client) DecideUpgrade(ctx context.Context, app, service, choice, tag string) (*store.ImageUpgrade, error) {
+	out := &store.ImageUpgrade{}
+	return out, c.do(ctx, "POST", appPath(app, "/images/"+url.PathEscape(service)+"/decision"), map[string]string{"choice": choice, "tag": tag}, out)
+}
+
 func (c *Client) Refresh(ctx context.Context) error {
 	return c.do(ctx, "POST", "/api/v1/refresh", nil, nil)
 }

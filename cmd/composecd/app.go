@@ -503,11 +503,22 @@ the new digest to Git when it can edit where Git pins it.`,
 }
 
 func newAppImageDecisionCmd(cf *clientFlags) *cobra.Command {
-	var inMemory, dismiss bool
+	var inMemory, dismiss, upgrade, skip bool
+	var tag string
 	cmd := &cobra.Command{
-		Use:   "image-decision NAME SERVICE (--in-memory | --dismiss)",
-		Short: "Decide an image update that couldn't be written back to Git (admin)",
-		Long: `An Application with imageUpdates.writeBack: git deploys a new tag only once
+		Use:   "image-decision NAME SERVICE (--in-memory | --dismiss | --upgrade | --skip)",
+		Short: "Decide an offered upgrade, or an image update that couldn't be written back to Git (admin)",
+		Long: `An Application with imageUpdates.offer reports newer tags than its strategy
+moves to, and deploys none until an admin decides:
+
+  --upgrade    upgrade the service to the offered tag. It deploys as a
+               strategy's pick would: with writeBack: git it is committed to
+               Git first, otherwise it deploys on the next sync.
+  --skip       ignore the offered tag until a newer one appears.
+
+Give --tag with the tag you expect, so a newer offer isn't decided unseen.
+
+An Application with imageUpdates.writeBack: git deploys a new tag only once
 composecd has committed it to Git. When it can't (the tag comes from an
 encrypted file, a packaged chart, a key it can't trace, a rejected push), the
 update is held and nothing deploys for the service until an admin decides:
@@ -518,11 +529,37 @@ update is held and nothing deploys for the service until an admin decides:
   --dismiss    ignore this tag until a newer one appears; change it in Git to
                update.
 
-A decision lasts until the service's source in Git changes.`,
+A decision lasts until the service's image (or its source) in Git changes.`,
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if inMemory == dismiss {
-				return errors.New("give --in-memory or --dismiss")
+			n := 0
+			for _, b := range []bool{inMemory, dismiss, upgrade, skip} {
+				if b {
+					n++
+				}
+			}
+			if n != 1 {
+				return errors.New("give one of --in-memory, --dismiss, --upgrade or --skip")
+			}
+			if tag != "" && !upgrade && !skip {
+				return errors.New("--tag goes with --upgrade or --skip")
+			}
+			out := cmd.OutOrStdout()
+			if upgrade || skip {
+				choice := store.UpgradeSkip
+				if upgrade {
+					choice = store.UpgradeApprove
+				}
+				u, err := cf.client().DecideUpgrade(ctx(cmd), args[0], args[1], choice, tag)
+				if err != nil {
+					return err
+				}
+				if upgrade {
+					fmt.Fprintf(out, "Approved the upgrade of %s/%s to %s (%s).\n", args[0], args[1], u.Tag, images.Short(u.Digest))
+				} else {
+					fmt.Fprintf(out, "Skipped %s for %s/%s until a newer tag.\n", u.Tag, args[0], args[1])
+				}
+				return nil
 			}
 			choice := store.DecisionDismiss
 			if inMemory {
@@ -533,19 +570,22 @@ A decision lasts until the service's source in Git changes.`,
 				return err
 			}
 			if inMemory {
-				fmt.Fprintf(cmd.OutOrStdout(), "Applying %s to %s/%s in memory; the deployment diverges from Git.\n", d.Candidate, args[0], args[1])
+				fmt.Fprintf(out, "Applying %s to %s/%s in memory; the deployment diverges from Git.\n", d.Candidate, args[0], args[1])
 				return nil
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Dismissed %s for %s/%s until a newer tag.", d.Candidate, args[0], args[1])
+			fmt.Fprintf(out, "Dismissed %s for %s/%s until a newer tag.", d.Candidate, args[0], args[1])
 			if d.File != "" {
-				fmt.Fprintf(cmd.OutOrStdout(), " To update from Git, set %s in %s.", d.Key, d.File)
+				fmt.Fprintf(out, " To update from Git, set %s in %s.", d.Key, d.File)
 			}
-			fmt.Fprintln(cmd.OutOrStdout())
+			fmt.Fprintln(out)
 			return nil
 		},
 	}
-	cmd.Flags().BoolVar(&inMemory, "in-memory", false, "deploy the update without Git, diverging from it")
-	cmd.Flags().BoolVar(&dismiss, "dismiss", false, "ignore the update until a newer tag")
+	cmd.Flags().BoolVar(&inMemory, "in-memory", false, "deploy the held update without Git, diverging from it")
+	cmd.Flags().BoolVar(&dismiss, "dismiss", false, "ignore the held update until a newer tag")
+	cmd.Flags().BoolVar(&upgrade, "upgrade", false, "upgrade to the offered tag")
+	cmd.Flags().BoolVar(&skip, "skip", false, "ignore the offered tag until a newer one")
+	cmd.Flags().StringVar(&tag, "tag", "", "the offered tag you expect (with --upgrade or --skip)")
 	return cmd
 }
 
@@ -574,6 +614,11 @@ func printImages(w io.Writer, a *controller.AppStatus) {
 			update = "available: sync to apply"
 		case im.UpdateAvailable:
 			update = "available, not applied: " + im.Note
+		case im.Approved != "" && im.UpdateAvailable:
+			update = fmt.Sprintf("upgrade to %s approved by %s", im.Approved, orDash(im.ApprovedBy))
+			if im.Note != "" {
+				update += ": " + im.Note
+			}
 		case im.Error != "":
 			update = "check failed: " + im.Error
 		case im.Note != "":
@@ -586,6 +631,22 @@ func printImages(w io.Writer, a *controller.AppStatus) {
 		tag := orDash(im.Tag)
 		if im.Candidate != "" && im.Candidate != im.Tag {
 			tag += " → " + im.Candidate
+		}
+		if o := im.Offer; o != nil {
+			offer := fmt.Sprintf("%s offered", o.Tag)
+			switch {
+			case o.Skipped:
+				offer = fmt.Sprintf("%s skipped by %s", o.Tag, orDash(o.SkippedBy))
+			case !o.Upgradable:
+				offer += " (" + o.Note + ")"
+			default:
+				offer += " (image-decision --upgrade --tag " + o.Tag + ")"
+			}
+			if update == "-" {
+				update = offer
+			} else {
+				update += "; " + offer
+			}
 		}
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", im.Service, im.Image, strategy, tag, orDash(im.Pin),
 			orDash(images.Short(im.Deployed)), orDash(images.Short(im.Latest)), update)
