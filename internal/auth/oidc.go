@@ -132,7 +132,8 @@ func (o *OIDC) Begin(w http.ResponseWriter, r *http.Request) error {
 
 // Finish handles the provider's redirect back and returns who signed in.
 func (o *OIDC) Finish(w http.ResponseWriter, r *http.Request) (*Principal, error) {
-	http.SetCookie(w, &http.Cookie{Name: stateCookie, Value: "", Path: o.CallbackPath(), MaxAge: -1, HttpOnly: true}) //nolint:gosec // clears the cookie
+	http.SetCookie(w, &http.Cookie{Name: stateCookie, Value: "", Path: o.CallbackPath(), MaxAge: -1, HttpOnly: true, //nolint:gosec // Secure only over HTTPS
+		Secure: SecureRequest(r), SameSite: http.SameSiteLaxMode})
 	q := r.URL.Query()
 	if e := q.Get("error"); e != "" {
 		return nil, fmt.Errorf("the provider refused the sign-in: %s %s", e, q.Get("error_description"))

@@ -166,3 +166,20 @@ func contains(list []string, s string) bool {
 	}
 	return false
 }
+
+func TestFetchRefusesUnsafeURLs(t *testing.T) {
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "ran")
+	c := New(t.TempDir(), nil)
+	for _, url := range []string{
+		"ext::sh -c touch% " + marker,
+		"--upload-pack=touch " + marker,
+	} {
+		if err := c.Fetch(context.Background(), url); err == nil {
+			t.Errorf("Fetch(%q) succeeded", url)
+		}
+	}
+	if _, err := os.Stat(marker); err == nil {
+		t.Fatal("a repository URL ran a command")
+	}
+}

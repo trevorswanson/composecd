@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -366,8 +367,7 @@ func mustOffset(data []byte, line, col int) int {
 }
 
 func splice(data []byte, start, end int, text string) []byte {
-	out := make([]byte, 0, len(data)-(end-start)+len(text))
-	return append(append(append(out, data[:start]...), text...), data[end:]...)
+	return slices.Concat(data[:start], []byte(text), data[end:])
 }
 
 func indentStep(m *yaml.Node) int {
