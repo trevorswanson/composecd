@@ -71,7 +71,7 @@ func (s *server) logout(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	http.SetCookie(w, s.Auth.Logout(p))
+	http.SetCookie(w, s.Auth.Logout(p, auth.SecureRequest(r)))
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
