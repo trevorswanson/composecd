@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/trevorswanson/composecd/internal/images"
 )
 
 // Bootstrap is the server's own configuration file (composecd.yaml). It says
@@ -60,6 +62,10 @@ type ImageUpdates struct {
 	// WriteBack is how composecd commits the tags it picks for Applications
 	// with syncPolicy.imageUpdates.writeBack: git.
 	WriteBack WriteBack `yaml:"writeBack,omitempty"`
+	// Offer is every Application's upgrade offer unless it sets its own:
+	// fields an Application's offer sets replace these, and its
+	// enabled: false turns the offer off.
+	Offer *ImageOffer `yaml:"offer,omitempty"`
 }
 
 // WriteBack configures the commits image updates write to Git.
@@ -289,6 +295,11 @@ func ParseBootstrap(data []byte) (*Bootstrap, error) {
 	}
 	if _, err := ParseSchedule(b.ImageUpdates.Schedule); err != nil {
 		errs = append(errs, fmt.Errorf("imageUpdates.schedule: %w", err))
+	}
+	if p := b.ImageUpdates.Offer.Policy(); p != nil {
+		if err := (images.Policy{Offer: p}).Validate(); err != nil {
+			errs = append(errs, fmt.Errorf("imageUpdates.%s", strings.ReplaceAll(err.Error(), "\n", "; ")))
+		}
 	}
 	if _, err := time.LoadLocation(b.ImageUpdates.TimeZone); err != nil {
 		errs = append(errs, fmt.Errorf("imageUpdates.timeZone %q: %w", b.ImageUpdates.TimeZone, err))

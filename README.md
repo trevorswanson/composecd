@@ -1203,9 +1203,19 @@ syncPolicy:
 - **Skip** (`--skip`, `{"choice": "skip"}`) ignores the offered tag until a newer one appears.
 - **Not upgradable from composecd:** a digest pinned in Git without `writeBack: git` (change the tag in Git),
   and a service whose update is held (decide that first). Its offer is still reported.
+- **For every Application.** `imageUpdates.offer` in `composecd.yaml` is the offer of every Application that
+  takes part in image updates. Fields an Application's own `offer` sets replace the default's, one by one, and
+  its `offer: {enabled: false}` turns the offer off:
+
+  ```yaml
+  # composecd.yaml
+  imageUpdates:
+    enabled: true
+    offer: {}                     # any newer release, majors included; or set constraint, allowTags, ignoreTags
+  ```
 - **Per service.** The labels `composecd.image-updates.offer` (`"true"` or `"false"`),
   `composecd.image-updates.offer.constraint` and `composecd.image-updates.offer.allow-tags` beat the
-  Application.
+  Application and the default.
 
 ## Webhooks, notifications and metrics
 
