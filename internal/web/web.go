@@ -879,6 +879,9 @@ func (s *Server) Action(w http.ResponseWriter, r *http.Request) {
 				toast = fmt.Sprintf("Skipped %s for %s until a newer tag", u.Tag, svc)
 				if choice == store.UpgradeApprove {
 					toast = fmt.Sprintf("Approved the upgrade of %s to %s", svc, u.Tag)
+					if len(u.Also) > 0 {
+						toast += fmt.Sprintf(", also for %s, which share its values", strings.Join(u.Also, ", "))
+					}
 				}
 			}
 		case "image-decision":

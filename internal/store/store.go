@@ -692,6 +692,9 @@ type ImageUpgrade struct {
 	Choice    string    `json:"choice"`
 	User      string    `json:"user,omitempty"`
 	DecidedAt time.Time `json:"decidedAt"`
+	// Also are the other Applications an approval was recorded for, which
+	// share the values file setting the image; it isn't stored.
+	Also []string `json:"also,omitempty"`
 }
 
 // ImageUpgrades returns app's upgrade decisions, by service.

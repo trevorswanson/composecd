@@ -232,3 +232,85 @@ func TestImageOfferServerDefault(t *testing.T) {
 		})
 	}
 }
+
+func TestImageOfferSharedValues(t *testing.T) {
+	// As an ApplicationSet makes them: one app per host, sharing the values
+	// that pin the image, each with an overlay of its own.
+	pinned := func(name string) string {
+		return "apiVersion: composecd/v1alpha1\nkind: Application\nmetadata: {name: " + name + "}\nspec:\n" +
+			"  source: {path: charts/web, valueFiles: [" + name + ".yaml]}\n  destination: {host: nas}\n" +
+			"  syncPolicy: {automated: {}, options: {wait: false}, imageUpdates: {enabled: true, writeBack: git, offer: {}}}\n---\n"
+	}
+	e, reg := newWriteBackEnv(t, map[string]string{"charts/web/values.yaml": "tag: '3.0.1@" + digestA + "'\n",
+		"charts/web/web.yaml": "replicas: 2\n", "charts/web/web2.yaml": "replicas: 3\n",
+		"composecd/apps.yaml": pinned("web") + pinned("web2")}, "3.0.1", "3.1.0")
+	reg.set(nginxRepo+":3.1.0", digestB)
+	e.refresh()
+	e.checkImages("")
+	e.refresh()
+
+	// Approving one approves the other, and the shared file is edited.
+	u, err := e.c.DecideUpgrade("web", "web", store.UpgradeApprove, "3.1.0", "trevor")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(u.Also) != 1 || u.Also[0] != "web2" {
+		t.Errorf("also = %v", u.Also)
+	}
+	e.c.ops.Wait()
+	e.refresh()
+	if got, want := e.show("charts/web/values.yaml"), "tag: '3.1.0@"+digestB+"'\n"; got != want {
+		t.Errorf("values.yaml = %q, want %q", got, want)
+	}
+	for f, want := range map[string]string{"web.yaml": "replicas: 2\n", "web2.yaml": "replicas: 3\n"} {
+		if got := e.show("charts/web/" + f); got != want {
+			t.Errorf("%s = %q, want it untouched", f, got)
+		}
+	}
+	for _, a := range []string{"web", "web2"} {
+		if !strings.Contains(e.fake().Running[a], "image: nginx:3.1.0@"+digestB+"\n") {
+			t.Errorf("%s not deployed:\n%s", a, e.fake().Running[a])
+		}
+	}
+	ops, err := e.c.Operations("web2", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slicesContain(ops, func(op *store.Operation) bool {
+		return op.Kind == store.KindImageDecision && op.User == "trevor" && strings.Contains(op.Message, "with web's, which shares its values")
+	}) {
+		t.Errorf("web2 has no image-decision operation: %+v", ops)
+	}
+}
+
+func TestImageOfferSharedValuesOtherImage(t *testing.T) {
+	// web2 sets an image of its own, so approving web's upgrade leaves it be.
+	pinned := func(name string) string {
+		return "apiVersion: composecd/v1alpha1\nkind: Application\nmetadata: {name: " + name + "}\nspec:\n" +
+			"  source: {path: charts/web, valueFiles: [" + name + ".yaml]}\n  destination: {host: nas}\n" +
+			"  syncPolicy: {automated: {}, options: {wait: false}, imageUpdates: {enabled: true, writeBack: git, offer: {}}}\n---\n"
+	}
+	own := "tag: '3.0.0@" + digestA + "'\n"
+	e, reg := newWriteBackEnv(t, map[string]string{"charts/web/values.yaml": "tag: '3.0.1@" + digestA + "'\n",
+		"charts/web/web.yaml": "replicas: 2\n", "charts/web/web2.yaml": own,
+		"composecd/apps.yaml": pinned("web") + pinned("web2")}, "3.0.0", "3.0.1", "3.1.0")
+	reg.set(nginxRepo+":3.1.0", digestB)
+	e.refresh()
+	e.checkImages("")
+	e.refresh()
+	u, err := e.c.DecideUpgrade("web", "web", store.UpgradeApprove, "3.1.0", "trevor")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(u.Also) != 0 {
+		t.Errorf("also = %v", u.Also)
+	}
+	e.c.ops.Wait()
+	e.refresh()
+	if got := e.show("charts/web/web2.yaml"); got != own {
+		t.Errorf("web2.yaml = %q", got)
+	}
+	if !strings.Contains(e.fake().Running["web"], "image: nginx:3.1.0@"+digestB+"\n") || !strings.Contains(e.fake().Running["web2"], "image: nginx:3.0.0@"+digestA+"\n") {
+		t.Errorf("web:\n%s\nweb2:\n%s", e.fake().Running["web"], e.fake().Running["web2"])
+	}
+}

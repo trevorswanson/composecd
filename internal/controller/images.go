@@ -1174,6 +1174,20 @@ func (c *Controller) DecideUpgrade(app, service, choice, tag, user string) (*sto
 	if err := c.Store.SetImageUpgrade(u); err != nil {
 		return nil, err
 	}
+	if choice == store.UpgradeApprove && a.Spec.SyncPolicy.ImageUpdates.WritesBack() {
+		// Apps sharing a values file with app, running the same image and
+		// offered the same tag, are approved with it: write-back edits a
+		// shared file only when they all move together, and would otherwise
+		// set the tag in app's own file, beside the shared one.
+		for _, other := range c.sameOffer(a, service, im.Image, o.Tag) {
+			ou := u
+			ou.App = other
+			if err := c.Store.SetImageUpgrade(ou); err != nil {
+				return nil, err
+			}
+			u.Also = append(u.Also, other)
+		}
+	}
 	from := im.Candidate
 	if from == "" {
 		from = im.Tag
@@ -1186,16 +1200,48 @@ func (c *Controller) DecideUpgrade(app, service, choice, tag, user string) (*sto
 			how = "it is written to Git, and deploys from there"
 		}
 		msg = fmt.Sprintf("%s (%s): approved the upgrade from %s to %s (%s); %s", repo, service, from, o.Tag, images.Short(o.Digest), how)
-	}
-	op := &store.Operation{App: app, Kind: store.KindImageDecision, Trigger: store.TriggerManual, User: user, StartedAt: u.DecidedAt}
-	if err := c.Store.StartOperation(op); err == nil {
-		op.Phase, op.Message, op.Log = store.PhaseSucceeded, msg, msg+"\n"
-		if err := c.Store.FinishOperation(op); err != nil {
-			c.Log.Error("recording an image upgrade", "app", app, "error", err)
+		if len(u.Also) > 0 {
+			msg += fmt.Sprintf("; also approved for %s, which share its values", strings.Join(u.Also, ", "))
 		}
 	}
-	c.Log.Info("image upgrade decision", "app", app, "service", service, "choice", choice, "tag", o.Tag, "user", user)
+	record := func(name, msg string) {
+		op := &store.Operation{App: name, Kind: store.KindImageDecision, Trigger: store.TriggerManual, User: user, StartedAt: u.DecidedAt}
+		if err := c.Store.StartOperation(op); err == nil {
+			op.Phase, op.Message, op.Log = store.PhaseSucceeded, msg, msg+"\n"
+			if err := c.Store.FinishOperation(op); err != nil {
+				c.Log.Error("recording an image upgrade", "app", name, "error", err)
+			}
+		}
+	}
+	record(app, msg)
+	for _, other := range u.Also {
+		record(other, fmt.Sprintf("%s (%s): approved the upgrade to %s (%s) with %s's, which shares its values; it is written to Git, and deploys from there",
+			repo, service, o.Tag, images.Short(o.Digest), app))
+	}
+	c.Log.Info("image upgrade decision", "app", app, "service", service, "choice", choice, "tag", o.Tag, "user", user, "also", u.Also)
 	c.bumpGeneration()
 	c.reconcileAsync(a, false)
 	return &u, nil
+}
+
+// sameOffer are the Applications sharing a values file with a, writing back
+// to Git, whose service runs image and is offered tag, upgradable and not yet
+// approved.
+func (c *Controller) sameOffer(a *config.Application, service, image, tag string) []string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	var out []string
+	for _, name := range coReaders(c.objects, a) {
+		r := c.objects.Application(name)
+		s, ok := c.apps[name]
+		if r == nil || !ok || !r.Spec.SyncPolicy.ImageUpdates.WritesBack() {
+			continue
+		}
+		for _, im := range s.status.Images {
+			if im.Service == service && im.Image == image && im.Offer != nil && im.Offer.Tag == tag && im.Offer.Upgradable && im.Approved == "" {
+				out = append(out, name)
+			}
+		}
+	}
+	return out
 }
