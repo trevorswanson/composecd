@@ -1067,8 +1067,9 @@ syncPolicy:
 
 - **semver** picks the highest tag that parses as a semantic version, matches the constraint, `allowTags` and
   no `ignoreTags`, and is newer than Git's tag. Prereleases (`1.28.0-rc.1`) are picked only when the constraint
-  names one (`>=1.28.0-0`). A tag that isn't a semantic version (`latest`) is only pinned to its digest, with a
-  note on the image.
+  names one (`>=1.28.0-0`). Unless `allowTags` is set, a tag written with fewer numbers than Git's is skipped, so
+  `3.0.1` never moves to a date or build tag like `20230811`; `1.27` may still move to `1.27.3`. A tag that isn't a
+  semantic version (`latest`) is only pinned to its digest, with a note on the image.
 - **newest-build** picks, among the tags matching `allowTags` (required) and Git's own, the one whose image
   config says it was built last. It reads one config per tag, so it looks at the 50 newest tags by name
   (`main-1042` before `main-998`), and caches build times by digest.
@@ -1190,7 +1191,7 @@ syncPolicy:
 - **What is offered.** On the schedule and on **Check images** (never on a refresh), composecd lists the tags of
   each service whose tag is a semantic version, and picks the highest the offer allows, as `semver` does. When
   that is newer than what the service deploys (Git's tag, or the strategy's pick), the image shows
-  **Available: 1.28.0** in the **images** tab, `app get` and the API (`offer`), and an `image-available`
+  **Upgrade offered** (1.27.3 → 1.28.0) in the **images** tab, `app get` and the API (`offer`), and an `image-available`
   notification is sent once per tag. The app stays Synced: an offer is never a reason to sync.
 - **Upgrade.** An admin presses **Upgrade** and confirms (or runs
   `composecd app image-decision NAME SERVICE --upgrade --tag 1.28.0`, or

@@ -263,6 +263,10 @@ var templates = template.Must(template.New("web").Funcs(template.FuncMap{
 	},
 	// digest abbreviates an image digest: sha256:0123456789ab.
 	"digest": images.Short,
+	// imageName and imageDigest split an image reference at its digest:
+	// nginx:1.27 and sha256:... for nginx:1.27@sha256:...
+	"imageName":   func(s string) string { name, _, _ := strings.Cut(s, "@"); return name },
+	"imageDigest": func(s string) string { _, d, _ := strings.Cut(s, "@"); return d },
 	// imageUpdates counts the images with an update available.
 	"imageUpdates": func(ims []controller.ImageStatus) int {
 		n := 0

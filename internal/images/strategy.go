@@ -199,7 +199,9 @@ func (p Policy) Accepts(current, tag string) bool {
 // PickSemver returns the highest of tags that the policy allows and that is
 // newer than current, or current when none is. Tags that aren't semantic
 // versions are ignored, and prereleases are picked only when the constraint
-// names one.
+// names one. Unless allowTags says which tags count, a tag with fewer version
+// parts than current is ignored too: a date or build number (20230811) parses
+// as a huge major version, so 3.0.1 would otherwise move to it.
 func (p Policy) PickSemver(current string, tags []string) (string, error) {
 	cur, err := semver.NewVersion(current)
 	if err != nil {
@@ -214,10 +216,14 @@ func (p Policy) PickSemver(current string, tags []string) (string, error) {
 		return "", fmt.Errorf("constraint %q: %v", expr, err)
 	}
 	prereleases, allowed := strings.Contains(expr, "-"), p.allowed()
+	minParts := 0
+	if p.AllowTags == "" {
+		minParts = versionParts(current)
+	}
 	best, bestTag := cur, current
 	for _, t := range tags {
 		v, err := semver.NewVersion(t)
-		if err != nil || !allowed(t) || (v.Prerelease() != "" && !prereleases) || !c.Check(v) {
+		if err != nil || !allowed(t) || (v.Prerelease() != "" && !prereleases) || !c.Check(v) || versionParts(t) < minParts {
 			continue
 		}
 		// Equal versions written differently (1.2 and 1.2.0) keep the first
@@ -227,6 +233,16 @@ func (p Policy) PickSemver(current string, tags []string) (string, error) {
 		}
 	}
 	return bestTag, nil
+}
+
+// versionParts counts the dotted numbers a version tag is written with,
+// ignoring a v prefix, prerelease and build metadata: 3 for v1.27.3-alpine.
+func versionParts(tag string) int {
+	tag = strings.TrimPrefix(strings.TrimPrefix(tag, "v"), "V")
+	if i := strings.IndexAny(tag, "-+"); i >= 0 {
+		tag = tag[:i]
+	}
+	return strings.Count(tag, ".") + 1
 }
 
 // NewestCandidates returns the tags newest-build reads image configs for: those
