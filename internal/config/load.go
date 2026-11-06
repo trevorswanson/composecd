@@ -76,6 +76,9 @@ func LoadDirWith(dir string, changed map[string][]byte) (*Objects, error) {
 		return nil, err
 	}
 	for rel, data := range changed {
+		if !filepath.IsLocal(filepath.FromSlash(rel)) {
+			return nil, fmt.Errorf("%s: not a path under the root", rel)
+		}
 		if f := filepath.Join(dir, filepath.FromSlash(rel)); data != nil && !slices.Contains(files, f) {
 			files = append(files, f)
 		}

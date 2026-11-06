@@ -243,12 +243,14 @@ func (a *Authenticator) StartSession(p *Principal, secure bool) (*http.Cookie, e
 		SameSite: http.SameSiteLaxMode, MaxAge: int(sessionMax.Seconds())}, nil
 }
 
-// Logout ends p's session and returns a cookie that clears it.
-func (a *Authenticator) Logout(p *Principal) *http.Cookie {
+// Logout ends p's session and returns a cookie that clears it. secure is as
+// for StartSession.
+func (a *Authenticator) Logout(p *Principal, secure bool) *http.Cookie {
 	if p != nil && p.sessionHash != "" {
 		_ = a.Store.DeleteSession(p.sessionHash)
 	}
-	return &http.Cookie{Name: CookieName, Value: "", Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteLaxMode} //nolint:gosec // clears the cookie
+	return &http.Cookie{Name: CookieName, Value: "", Path: "/", MaxAge: -1, HttpOnly: true, Secure: secure, //nolint:gosec // Secure only over HTTPS, see SecureRequest
+		SameSite: http.SameSiteLaxMode}
 }
 
 // Login checks a local user's password, or, with an empty name, an API token
