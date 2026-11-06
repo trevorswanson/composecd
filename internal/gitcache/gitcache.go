@@ -200,6 +200,9 @@ func (c *Cache) gitIn(ctx context.Context, url, gitDir string, extra []string, s
 	if timeout <= 0 {
 		timeout = 2 * time.Minute
 	}
+	if strings.HasPrefix(url, "-") {
+		return "", fmt.Errorf("invalid repository URL %q", redact(url))
+	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	if gitDir != "" {
@@ -226,7 +229,9 @@ func (c *Cache) gitIn(ctx context.Context, url, gitDir string, extra []string, s
 // env returns the environment that authenticates git to url. Secrets travel in
 // the environment, not on the command line, so they don't show up in ps.
 func (c *Cache) env(url string) ([]string, error) {
-	env := []string{"GIT_TERMINAL_PROMPT=0", "GIT_CONFIG_NOSYSTEM=1", "LC_ALL=C"}
+	// GIT_ALLOW_PROTOCOL keeps a repository URL from naming a transport
+	// that runs commands, such as ext::.
+	env := []string{"GIT_TERMINAL_PROMPT=0", "GIT_CONFIG_NOSYSTEM=1", "LC_ALL=C", "GIT_ALLOW_PROTOCOL=" + allowedProtocols}
 	var r *config.Repository
 	if c.Credentials != nil {
 		r = c.Credentials(url)
@@ -258,6 +263,9 @@ func (c *Cache) env(url string) ([]string, error) {
 	}
 	return env, nil
 }
+
+// allowedProtocols are the git transports a repository URL may use.
+const allowedProtocols = "https:http:ssh:git:file"
 
 func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
 
