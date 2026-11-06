@@ -297,6 +297,12 @@ func TestAPI(t *testing.T) {
 		{"GET", "/api/v1/operations/x", "", 400, `invalid operation id`},
 		{"GET", "/api/v1/operations", "", 200, `[]`},
 		{"GET", "/api/v1/hosts", "", 200, `"state": "Up"`},
+		{"GET", "/api/v1/hosts/nas/objects/container/loose", "", 200, `"yaml": "Config:\n  Env:\n    - TOKEN=\u003credacted 0123abcd\u003e\n"`},
+		{"GET", "/api/v1/hosts/nas/objects/image/docker.io/library/nginx:1", "", 200, `"name": "docker.io/library/nginx:1"`},
+		{"GET", "/api/v1/hosts/nas/objects/image/docker.io%2Flibrary%2Fnginx:1", "", 200, `"kind": "image"`},
+		{"GET", "/api/v1/hosts/nas/objects/service/web", "", 400, `invalid object`},
+		{"GET", "/api/v1/hosts/nas/objects/container/gone", "", 404, `not found`},
+		{"GET", "/api/v1/hosts/nope/objects/container/loose", "", 404, `not found`},
 		{"GET", "/api/v1/root", "", 200, `"repoURL": "https://git.lan/x.git"`},
 		{"GET", "/api/v1/version", "", 200, `v1.2.3`},
 		{"DELETE", "/api/v1/apps/media", "", 405, ``},
@@ -307,7 +313,9 @@ func TestAPI(t *testing.T) {
 			t.Errorf("%s %s: %d %s, want %d containing %q", tc.method, tc.path, status, body, tc.status, tc.contains)
 		}
 	}
-	want := "operations media 5;sync media;sync busy;rollback media 2;pause media maintenance (by admin);resume media;refresh media;refresh all;check-images media;check-images ;decide media/web memory by admin;decide media/web dismiss by admin;operations  0"
+	want := "operations media 5;sync media;sync busy;rollback media 2;pause media maintenance (by admin);resume media;refresh media;refresh all;check-images media;check-images ;decide media/web memory by admin;decide media/web dismiss by admin;operations  0;" +
+		"host-object nas container loose false;host-object nas image docker.io/library/nginx:1 false;host-object nas image docker.io/library/nginx:1 false;" +
+		"host-object nas service web false;host-object nas container gone false;host-object nope container loose false"
 	if got := strings.Join(st.calls, ";"); got != want {
 		t.Errorf("calls:\n got %s\nwant %s", got, want)
 	}
@@ -470,7 +478,7 @@ func TestSessions(t *testing.T) {
 }
 
 func TestAccounts(t *testing.T) {
-	srv, _ := newServer(t, Options{})
+	srv, st := newServer(t, Options{})
 	status, body := do(t, srv, "POST", "/api/v1/tokens", "secret", `{"name": "grafana", "role": "readonly"}`)
 	var created struct{ Token string }
 	_ = json.Unmarshal([]byte(body), &created)
@@ -492,6 +500,11 @@ func TestAccounts(t *testing.T) {
 	}
 	if status, _ := do(t, srv, "GET", "/api/v1/hosts/nas/operations", created.Token, ""); status != 200 {
 		t.Errorf("readonly host operations: %d", status)
+	}
+	// It reads a host's objects with their environment values hidden.
+	if status, _ := do(t, srv, "GET", "/api/v1/hosts/nas/objects/container/loose", created.Token, ""); status != 200 ||
+		!strings.Contains(strings.Join(st.calls, ";"), "host-object nas container loose true") {
+		t.Errorf("readonly host object: %d %v", status, st.calls)
 	}
 	for _, c := range [][2]string{{"POST", "/api/v1/apps/media/sync"}, {"GET", "/api/v1/tokens"}, {"POST", "/api/v1/hosts/nas/maintenance"},
 		{"POST", "/api/v1/hosts/nas/prune"}, {"POST", "/api/v1/apps/media/images/web/decision"}} {

@@ -38,5 +38,13 @@
 {{if eq $.View "deployed"}}{{with .Deployed}}<pre class="output yaml">{{.}}</pre>{{else}}<div class="empty"><strong>Not in the deployed release</strong><span>A sync creates it.</span></div>{{end}}{{end}}
 {{end}}{{end}}
 
+{{/* host-object is an engine object on a host as docker inspect sees it, for the host graph's objects no Application owns. */}}
+{{define "host-object"}}{{with .HostObject}}<div class="dialog-title"><span class="gicon k-{{.Kind}}" aria-hidden="true"></span><h2>{{.Name}}</h2><span class="tag">{{.Kind}}</span>{{if not .App}}<span class="tag">unmanaged</span>{{end}}</div>
+<dl class="props"><dt>Host</dt><dd><a href="/hosts/{{path .Host}}">{{.Host}}</a></dd>
+<dt>Created by</dt><dd>{{if .App}}Application <a href="/apps/{{path .App}}">{{.App}}</a>{{else if .Project}}Compose project <code>{{.Project}}</code>{{else}}<span class="muted">No Compose project</span>{{end}}</dd>
+{{with .Image}}<dt>Image</dt><dd><a href="/ui/hosts/{{path $.HostObject.Host}}/objects/image/{{path .}}" data-dialog="/ui/hosts/{{path $.HostObject.Host}}/objects/image/{{path .}}"><code>{{.}}</code></a></dd>{{end}}
+</dl>{{if .Redacted}}<p class="dialog-text reason">Environment values are hidden{{if not .App}}: composecd didn't deploy this, so it can't tell which are secret{{end}}.</p>{{end}}
+{{with .Inspect}}<section class="live-object"><pre class="output yaml">{{.YAML}}</pre>{{range .Folded}}<details class="fold"><summary>{{.Path}} <span class="muted">{{.Fields}} field{{if ne .Fields 1}}s{{end}}</span></summary><pre class="output yaml">{{.YAML}}</pre></details>{{end}}</section>{{end}}{{end}}{{end}}
+
 {{/* livediff is an object's live state diffed against Git. */}}
 {{define "livediff"}}{{if .Diff}}<pre class="diff">{{range lines .Diff}}<span class="{{lineClass .}}">{{.}}</span>{{end}}</pre>{{else if .Note}}<p class="dialog-text">{{.Note}}</p>{{else}}<div class="empty"><strong>Live matches Git</strong><span>Every key Git sets has the same value on the host.</span></div>{{end}}{{end}}

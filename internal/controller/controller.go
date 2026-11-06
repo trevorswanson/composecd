@@ -35,6 +35,8 @@ var (
 	ErrBusy     = errors.New("an operation is already running for this application")
 	// ErrBlocked wraps a sync window's refusal of a manual operation.
 	ErrBlocked = errors.New("blocked by a sync window")
+	// ErrInvalidObject is a request for an engine object composecd can't inspect.
+	ErrInvalidObject = errors.New("invalid object")
 )
 
 // Options are a Controller's collaborators.
