@@ -62,7 +62,9 @@ func eventually(t *testing.T, what string, cond func() bool) {
 
 func TestSelfHeal(t *testing.T) {
 	base := healBackoffBase
-	healBackoffBase = 200 * time.Millisecond
+	// Long enough that a slow runner still re-drifts inside the backoff, short
+	// enough for the scheduled retry to land well within eventually's 10s.
+	healBackoffBase = 2 * time.Second
 	t.Cleanup(func() { healBackoffBase = base })
 	e := newEnv(t)
 	rec := &recorder{}
