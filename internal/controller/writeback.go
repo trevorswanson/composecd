@@ -58,6 +58,8 @@ type wbState struct {
 type wbJob struct {
 	app *config.Application
 	svc images.Service
+	// tag is the tag to write, or tag@digest for an image pinned in Git: the
+	// image becomes images.WithTag(svc.Image, tag) either way.
 	tag string
 
 	held            string
@@ -210,7 +212,18 @@ func (c *Controller) writeBackJobs(names []string) []*wbJob {
 			c.Log.Error("reading image decisions", "app", name, "error", err)
 			continue
 		}
+		digests, err := c.Store.ImageDigests()
+		if err != nil {
+			c.Log.Error("reading image digests", "error", err)
+			continue
+		}
 		for _, s := range svcs[name] {
+			if s.Pinned {
+				if cand := pinnedCandidate(s, digests[s.Ref.Name()].Digest); cand != "" {
+					jobs = append(jobs, &wbJob{app: app, svc: s, tag: cand})
+				}
+				continue
+			}
 			p, ok := picks[s.Name]
 			if !s.MovesTags() || !ok || !pickedFor(p, s) || p.Tag == "" || p.Tag == s.Ref.Tag {
 				continue
@@ -222,6 +235,16 @@ func (c *Controller) writeBackJobs(names []string) []*wbJob {
 		}
 	}
 	return jobs
+}
+
+// pinnedCandidate is what write-back writes for s, an image pinned in Git, when
+// its tag now resolves to latest: tag@latest, or "" when there is nothing to
+// write. A digest without a tag (redis@sha256:…) is never checked.
+func pinnedCandidate(s images.Service, latest string) string {
+	if !s.Pinned || !s.Checked() || latest == "" || latest == s.Ref.Digest {
+		return ""
+	}
+	return s.Ref.Tag + "@" + latest
 }
 
 // planWriteBack traces each job's tag to the file and key that set it, and
@@ -388,13 +411,17 @@ func (c *Controller) planApp(ctx context.Context, objs *config.Objects, jobs []*
 	}
 	for _, j := range jobs {
 		svc := j.svc.Name
+		what := "tag"
+		if j.svc.Pinned {
+			what = "tag and digest"
+		}
 		if src != nil && base[svc] == images.WithTag(j.svc.Image, j.tag) {
 			// The branch says so already (one other than the deployed one).
 			j.commit = src.sha
 			continue
 		}
 		if base[svc] != j.svc.Image {
-			j.held = fmt.Sprintf("rendered offline, %s's image is %s, not %s, so composecd can't trace its tag", svc, orNothing(base[svc]), j.svc.Image)
+			j.held = fmt.Sprintf("rendered offline, %s's image is %s, not %s, so composecd can't trace its %s", svc, orNothing(base[svc]), j.svc.Image, what)
 			continue
 		}
 		srcs, err := tr.trace(svc, base, j.svc.TagKey)
@@ -410,17 +437,17 @@ func (c *Controller) planApp(ctx context.Context, objs *config.Objects, jobs []*
 		}
 		switch {
 		case len(found) == 0 && j.svc.TagKey != "":
-			j.held = fmt.Sprintf("the %s label names %s, which doesn't set the tag of %s", tagKeyLabel, j.svc.TagKey, svc)
+			j.held = fmt.Sprintf("the %s label names %s, which doesn't set the %s of %s", tagKeyLabel, j.svc.TagKey, what, svc)
 			continue
 		case len(found) == 0 && strings.Contains(j.svc.Image, tr.chart.Metadata.AppVersion) && tr.dir == "" && tr.chart.Metadata.AppVersion != "":
 			j.held = "the tag looks like the OCI chart's appVersion, which only a new chart version changes"
 			continue
 		case len(found) == 0:
-			j.held = fmt.Sprintf("no values key sets the tag of %s (it may be written in a template); move it into the values, or set the %s label",
-				svc, tagKeyLabel)
+			j.held = fmt.Sprintf("no values key sets the %s of %s (it may be written in a template); move it into the values, or set the %s label",
+				what, svc, tagKeyLabel)
 			continue
 		case len(found) > 1:
-			j.held = fmt.Sprintf("more than one key sets the tag of %s (%s); set the %s label to the one to edit", svc, strings.Join(keys, ", "), tagKeyLabel)
+			j.held = fmt.Sprintf("more than one key sets the %s of %s (%s); set the %s label to the one to edit", what, svc, strings.Join(keys, ", "), tagKeyLabel)
 			continue
 		}
 		t := found[0]
@@ -710,8 +737,14 @@ func (c *Controller) commitWriteBack(ctx context.Context, jobs []*wbJob, retry b
 		}
 		var lines []string
 		for _, j := range live {
-			from := j.svc.Ref.Tag
-			lines = append(lines, fmt.Sprintf("%s/%s: %s %s → %s (%s %s)", j.app.Metadata.Name, j.svc.Name, images.Repo(j.svc.Image), from, j.tag, j.file, j.key))
+			from, to := j.svc.Ref.Tag, j.tag
+			if j.svc.Pinned {
+				from = j.svc.Ref.Tag + "@" + images.Short(j.svc.Ref.Digest)
+				if t, d, ok := strings.Cut(j.tag, "@"); ok {
+					to = t + "@" + images.Short(d)
+				}
+			}
+			lines = append(lines, fmt.Sprintf("%s/%s: %s %s → %s (%s %s)", j.app.Metadata.Name, j.svc.Name, images.Repo(j.svc.Image), from, to, j.file, j.key))
 		}
 		msg := "composecd: update images\n\n" + strings.Join(lines, "\n") + "\n\n" + TrailerImageUpdate + "\n"
 		wb := c.Boot.ImageUpdates.WriteBack
@@ -958,24 +991,47 @@ func (c *Controller) writeBackViews(ctx context.Context, app *config.Application
 			drop(s.Name, "a newer tag "+p.Tag+" replaces "+d.Candidate)
 			decided = false
 		}
-		switch {
-		case decided:
+		if decided {
 			v.decision, v.inMemory = &d, d.Choice == store.DecisionMemory
-		case st != nil && st.candidate == p.Tag && st.image == s.Image && (st.fingerprint == "" || st.fingerprint == v.fingerprint):
-			if st.fingerprint == "" {
-				c.wbMu.Lock()
-				if cur := c.wbStates[name][s.Name]; cur != nil {
-					cur.fingerprint = v.fingerprint
-				}
-				c.wbMu.Unlock()
-			}
-			v.state = st
-		default:
-			c.queueWriteBack(name, strings.Join([]string{name, s.Name, p.Tag, s.Image, v.fingerprint}, "\x00"))
+		} else {
+			c.adoptWriteBack(name, s, v, st)
 		}
 		views[s.Name] = v
 	}
 	return views, warnings
+}
+
+// adoptWriteBack sets v.state to st, the last write-back of app name's s, when
+// it wrote v's candidate for s's image and source as they are now, and queues
+// the write otherwise.
+func (c *Controller) adoptWriteBack(name string, s images.Service, v *wbView, st *wbState) {
+	if st == nil || st.candidate != v.tag || st.image != s.Image || st.fingerprint != "" && st.fingerprint != v.fingerprint {
+		c.queueWriteBack(name, strings.Join([]string{name, s.Name, v.tag, s.Image, v.fingerprint}, "\x00"))
+		return
+	}
+	if st.fingerprint == "" {
+		c.wbMu.Lock()
+		if cur := c.wbStates[name][s.Name]; cur != nil {
+			cur.fingerprint = v.fingerprint
+		}
+		c.wbMu.Unlock()
+	}
+	v.state = st
+}
+
+// pinnedWriteBackView is how writing cand, the new tag@digest of s, an image
+// pinned in Git, stands. Admins can't apply it in memory or dismiss it: an
+// update write-back can't write is refused, as without write-back.
+func (c *Controller) pinnedWriteBackView(ctx context.Context, app *config.Application, prep *source.Prepared, s images.Service, cand string) *wbView {
+	name := app.Metadata.Name
+	st := c.wbStateOf(name, s.Name)
+	repo, file, key := "", "", ""
+	if st != nil {
+		repo, file, key = st.repo, st.file, st.key
+	}
+	v := &wbView{tag: cand, fingerprint: c.imageFingerprint(ctx, app, prep, s, repo, file, key)}
+	c.adoptWriteBack(name, s, v, st)
+	return v
 }
 
 // imageFingerprint identifies what s's tag comes from in Git, so a decision

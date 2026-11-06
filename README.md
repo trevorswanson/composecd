@@ -521,7 +521,7 @@ binary; there is no CDN or Node build step.
   faint until pointed at (a `traefik_proxy` network shows what else joins it; many are listed in a grid); containers and live log tails; diffs, either of the compose file against the deployed
   release (side by side, compact or every resource in full) or of each object's live state against Git; release history with rollback; operations with
   their output; and, with image updates on, the services' **images**: who pins each digest, the deployed and
-  latest digests, and whether an update can be synced or is pinned in Git; and its **configuration**
+  latest digests, and whether an update can be synced, is written back to Git or is pinned in Git; and its **configuration**
   ([below](#settings-in-the-ui)). **Details** shows the source, automation policy and retries.
   Admins can sync, pause, resume, refresh and check images; a running sync disables the button and streams its output.
 - **ApplicationSets** (`/applicationsets`): generated apps, counts, expansion/validation errors and each
@@ -1038,10 +1038,12 @@ imageUpdates:
   app is pinned before its first sync. A refresh never asks a registry otherwise. Checks are `HEAD` requests for
   the manifest, which Docker Hub doesn't count against pull limits. For a multi-arch image composecd pins the
   index digest, as docker does. Credentials come from composecd's Docker config, as for pulls and OCI charts.
-- **Digests pinned in Git are never changed.** An image Git already pins (`redis:7@sha256:…` or
+- **Digests pinned in Git are never changed in memory.** An image Git already pins (`redis:7@sha256:…` or
   `redis@sha256:…`) is deployed exactly as written. If its tag now resolves to a different digest, composecd
   reports an update, in the app's **images** tab, `app get` and notifications, but the app stays Synced. The
-  update can't be applied from composecd (the UI shows a disabled control): change the digest in Git.
+  update can't be applied from composecd (the UI shows a disabled control): change the digest in Git, or turn
+  on [write-back to Git](#write-back-to-git), which commits the new digest where Git pins it, so the app
+  deploys it from Git. A digest pinned without a tag (`redis@sha256:…`) has nothing to check.
 - **When a registry can't be reached**, the last digest it served is kept, and failing that the digest the
   deployed release pins. A pin is never dropped, so an outage never shows as a change. The error shows on the
   image until a check succeeds.
@@ -1084,7 +1086,8 @@ syncPolicy:
   Rolling back restores the old tag and pauses auto-sync, so the pick isn't deployed again until you resume.
 - **An outage never downgrades.** When Git's tag or the policy changes while the registry can't be reached, a
   deployed tag the policy still accepts, and that is newer than Git's, is kept until a check succeeds.
-- **Never moved:** digests pinned in Git (still reported), `${VAR}` images, `build:` services and hooks.
+- **Never moved:** digests pinned in Git (still reported, and with `writeBack: git` updated in Git to the new
+  digest of the same tag), `${VAR}` images, `build:` services and hooks.
 
 [The example](examples/image-updates/README.md) follows patch releases of whoami.
 
@@ -1096,7 +1099,9 @@ its digest changes.
 ### Write-back to Git
 
 With `writeBack: git`, a tag a strategy picks is committed to Git rather than applied in memory, so Git stays
-the record of what runs. The default, `writeBack: memory`, behaves as above.
+the record of what runs. So is the new digest of an image Git pins (`nginx:1.27@sha256:…`), whatever the
+strategy: write-back replaces the digest (or `tag@digest`) in the values that set it, and the app deploys it
+from that commit. The default, `writeBack: memory`, behaves as above.
 
 ```yaml
 syncPolicy:
@@ -1119,7 +1124,8 @@ imageUpdates:
   image, with that value replaced by a placeholder, and keeps the key that becomes the image's tag. It follows
   `printf`, `include` and `default` in templates, and the chart's `appVersion` (`.Chart.AppVersion`) in a Git
   chart. When more than one key could be it, or the tag is written in a template, name the key with the
-  service label `composecd.image-updates.tag-key: image.tag` (or `Chart.appVersion`). Before committing,
+  service label `composecd.image-updates.tag-key: image.tag` (or `Chart.appVersion`). For an image Git pins,
+  the key is the one that holds the digest: `image.digest`, or a `tag` holding `1.27@sha256:…`. Before committing,
   composecd renders the edit and checks that every service gets the image it should.
 - **Which file.** The last file that sets the key wins, as in a render: an inline `values` key is edited in the
   Application's own YAML, a `valueFiles` key in that file, and otherwise the chart's `values.yaml` (or
@@ -1155,6 +1161,12 @@ with `composecd app image-decision NAME SERVICE --in-memory|--dismiss`
 
 A decision lasts until the service's source changes in Git (its file, key, values, chart or label), and a
 hold clears once Git renders the new image. Readonly users see holds but can't decide them.
+
+**A digest pinned in Git that can't be written is refused, not held.** composecd never overrides a pin Git
+makes, so there is nothing to apply in memory or dismiss: the image shows the update with a disabled control
+and why write-back can't make it, for the same reasons as above (most often, the image is written in a
+template, `image: redis:7@sha256:…`, rather than in the values). Change the digest in Git, or move it into the
+values so write-back can.
 
 ## Webhooks, notifications and metrics
 
@@ -1242,7 +1254,7 @@ picked tag that can't be written to Git and waits for an admin's decision).
 | OCI chart with Git values | `valuesFrom` repository, independent chart/values revisions, SOPS and automatic sync |
 | ApplicationSets | Git-directory and Host-label generators, safe templates and zero-result protection |
 | Adoption | Unmanaged discovery and admin Application YAML export; commit and sync to upgrade in place |
-| Image updater | `imageUpdates`: moving tags pinned to registry digests on a schedule, and `semver` or `newest-build` strategies that move to newer tags in memory; digests pinned in Git are only reported. Writing back to Git is planned; see [docs/PLAN.md](docs/PLAN.md) |
+| Image updater | `imageUpdates`: moving tags pinned to registry digests on a schedule, and `semver` or `newest-build` strategies that move to newer tags, in memory or written back to Git (`writeBack: git`); digests pinned in Git are only reported, or with write-back committed to Git. See [docs/PLAN.md](docs/PLAN.md) |
 
 ## Development
 

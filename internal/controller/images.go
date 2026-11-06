@@ -24,12 +24,17 @@ const (
 	// PinComposecd is a moving tag composecd pinned to the digest its registry
 	// last served.
 	PinComposecd = "composecd"
-	// PinGit is a digest written in Git, which composecd never changes.
+	// PinGit is a digest written in Git, which composecd only changes by
+	// committing to Git (writeBack: git).
 	PinGit = "git"
 )
 
 // gitPinNote explains why an update to a digest pinned in Git can't be applied.
-const gitPinNote = "the digest is pinned in Git; change it there to update"
+const gitPinNote = "the digest is pinned in Git; change it there to update, or set writeBack: git"
+
+// gitPinHeldNote starts the note of an update to a digest pinned in Git that
+// write-back can't write.
+const gitPinHeldNote = "the digest is pinned in Git, and write-back can't change it: "
 
 var (
 	// imageTimeout bounds one registry check.
@@ -73,7 +78,8 @@ type ImageStatus struct {
 	// the strategy picked a tag other than the deployed one.
 	UpdateAvailable bool `json:"updateAvailable,omitempty"`
 	// Applicable is true when a sync deploys the update; it is false for a
-	// digest pinned in Git, which only Git can change.
+	// digest pinned in Git, which only a change in Git (by hand, or by
+	// write-back) updates.
 	Applicable bool   `json:"applicable,omitempty"`
 	Note       string `json:"note,omitempty"`
 	// Error is the last failed registry check.
@@ -289,6 +295,11 @@ func (c *Controller) pinImages(ctx context.Context, app *config.Application, ren
 			st.Pin, st.Digest = PinGit, s.Ref.Digest
 			if st.Latest != "" && st.Latest != st.Digest {
 				st.UpdateAvailable, st.Note = true, gitPinNote
+				// With write-back, the new digest is committed where Git pins
+				// it, and deploys from there.
+				if app.Spec.SyncPolicy.ImageUpdates.WritesBack() {
+					showPinnedWriteBack(&st, c.pinnedWriteBackView(ctx, app, prep, s, pinnedCandidate(s, st.Latest)))
+				}
 			}
 			res.statuses = append(res.statuses, st)
 			continue
@@ -373,6 +384,23 @@ func showWriteBack(st *ImageStatus, v *wbView) {
 	case w.held != "":
 		st.Held, st.repo, st.File, st.Key = w.held, w.repo, w.file, w.key
 		st.Note = heldNote + w.held
+	default:
+		st.Commit, st.repo, st.File, st.Key = w.commit, w.repo, w.file, w.key
+		st.Note = fmt.Sprintf("committed to Git as %s (%s in %s); it deploys once Git renders it", short(w.commit), w.key, w.file)
+	}
+}
+
+// showPinnedWriteBack shows on st, an update to a digest pinned in Git, how
+// writing it to Git stands. One that can't be written is refused, never held:
+// composecd doesn't override a pin in memory.
+func showPinnedWriteBack(st *ImageStatus, v *wbView) {
+	st.WriteBack, st.fingerprint = config.WriteBackGit, v.fingerprint
+	switch w := v.state; {
+	case w == nil:
+		st.Note = "writing the digest " + images.Short(st.Latest) + " to Git"
+	case w.held != "":
+		st.repo, st.File, st.Key = w.repo, w.file, w.key
+		st.Note = gitPinHeldNote + w.held + "; change it there to update"
 	default:
 		st.Commit, st.repo, st.File, st.Key = w.commit, w.repo, w.file, w.key
 		st.Note = fmt.Sprintf("committed to Git as %s (%s in %s); it deploys once Git renders it", short(w.commit), w.key, w.file)
