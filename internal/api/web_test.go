@@ -83,7 +83,11 @@ func TestWebPagesAndActions(t *testing.T) {
 	}
 	for path, want := range cases {
 		t.Run(path, func(t *testing.T) {
-			code, _, body := b.do("GET", path, "", nil)
+			// Host pages fill in once the scan their first load started ends.
+			code, body := eventually(t, want, func() (int, string) {
+				code, _, body := b.do("GET", path, "", nil)
+				return code, body
+			})
 			if code != 200 || !strings.Contains(body, want) {
 				t.Fatalf("%d: %s", code, body)
 			}
@@ -476,8 +480,9 @@ func TestHostsEventsReuseDiscovery(t *testing.T) {
 	st := &countingDiscovery{webStub: webStub{updates: make(chan controller.Update, 1)}}
 	srv := httptest.NewServer(New(st, Options{Auth: a}))
 	defer srv.Close()
-	// The first load waits briefly for a quick host's first scan.
-	if code, body := do(t, srv, "GET", "/hosts/nas", "secret", ""); code != 200 || !strings.Contains(body, "external") {
+	// The first load starts a scan without waiting on it; later loads show
+	// its result.
+	if code, body := eventually(t, "external", func() (int, string) { return do(t, srv, "GET", "/hosts/nas", "secret", "") }); code != 200 || !strings.Contains(body, "external") {
 		t.Fatal(code, body)
 	}
 	if code, body := do(t, srv, "GET", "/hosts", "secret", ""); code != 200 || !strings.Contains(body, "1 release · 1 Compose project") {
@@ -554,7 +559,7 @@ func TestWebDisablesActionsOnSelf(t *testing.T) {
 		"/apps/media?tab=history": "composecd can't roll itself back here",
 		"/hosts/nas":              "composecd itself",
 	} {
-		status, body := do(t, srv, "GET", path, "secret", "")
+		status, body := eventually(t, want, func() (int, string) { return do(t, srv, "GET", path, "secret", "") })
 		if status != 200 || !strings.Contains(body, want) {
 			t.Errorf("%s: %d, missing %s", path, status, want)
 		}
