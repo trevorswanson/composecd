@@ -285,6 +285,9 @@ type AppImageUpdates struct {
 
 // ImageOffer is a semver policy whose newer tags are only offered.
 type ImageOffer struct {
+	// Enabled, when false, turns the offer off: an Application's turns off
+	// composecd.yaml's default. An offer that is set is on otherwise.
+	Enabled *bool `yaml:"enabled,omitempty" json:"enabled,omitempty"`
 	// Strategy is semver, the only one (default semver).
 	Strategy string `yaml:"strategy,omitempty" json:"strategy,omitempty"`
 	// Constraint is a semver constraint (default: any newer release, majors
@@ -311,12 +314,64 @@ func (u *AppImageUpdates) Policy() images.Policy {
 		return images.Policy{}
 	}
 	p := images.Policy{Strategy: u.Strategy, Constraint: u.Constraint, AllowTags: u.AllowTags, IgnoreTags: u.IgnoreTags}
-	if o := u.Offer; o != nil {
-		p.Offer = images.NewOffer(o.Constraint, o.AllowTags, o.IgnoreTags)
-		if o.Strategy != "" {
-			p.Offer.Strategy = o.Strategy
-		}
+	p.Offer = u.Offer.Merge(nil).Policy()
+	return p
+}
+
+// Merge is o over base, composecd.yaml's default offer: each field o sets
+// replaces base's. Either may be nil.
+func (o *ImageOffer) Merge(base *ImageOffer) *ImageOffer {
+	switch {
+	case o == nil && base == nil:
+		return nil
+	case o == nil:
+		cp := *base
+		return &cp
 	}
+	out := *o
+	if base == nil {
+		return &out
+	}
+	if out.Enabled == nil {
+		out.Enabled = base.Enabled
+	}
+	if out.Strategy == "" {
+		out.Strategy = base.Strategy
+	}
+	if out.Constraint == "" {
+		out.Constraint = base.Constraint
+	}
+	if out.AllowTags == "" {
+		out.AllowTags = base.AllowTags
+	}
+	if out.IgnoreTags == nil {
+		out.IgnoreTags = base.IgnoreTags
+	}
+	return &out
+}
+
+// Policy is the offer's policy, or nil when o is nil or turned off.
+func (o *ImageOffer) Policy() *images.Policy {
+	if o == nil || o.Enabled != nil && !*o.Enabled {
+		return nil
+	}
+	p := images.NewOffer(o.Constraint, o.AllowTags, o.IgnoreTags)
+	if o.Strategy != "" {
+		p.Strategy = o.Strategy
+	}
+	return p
+}
+
+// ImagePolicy is the tag policy app's services start from: its own, with its
+// offer over def, composecd.yaml's default offer.
+func ImagePolicy(def *ImageOffer, app *Application) images.Policy {
+	u := app.Spec.SyncPolicy.ImageUpdates
+	p := u.Policy()
+	var own *ImageOffer
+	if u != nil {
+		own = u.Offer
+	}
+	p.Offer = own.Merge(def).Policy()
 	return p
 }
 

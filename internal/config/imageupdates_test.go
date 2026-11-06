@@ -30,3 +30,50 @@ func TestImageUpdatesPolicyValidation(t *testing.T) {
 		}
 	}
 }
+
+func TestImagePolicyOffer(t *testing.T) {
+	no := false
+	def := &ImageOffer{Constraint: ">=1", IgnoreTags: []string{"*-rc*"}}
+	app := func(u *AppImageUpdates) *Application {
+		a := &Application{}
+		a.Spec.SyncPolicy.ImageUpdates = u
+		return a
+	}
+	if p := ImagePolicy(nil, app(nil)); p.Offer != nil {
+		t.Errorf("no offer anywhere: %+v", p.Offer)
+	}
+	// The default applies to an app that sets nothing.
+	if p := ImagePolicy(def, app(nil)); p.Offer == nil || p.Offer.Constraint != ">=1" || len(p.Offer.IgnoreTags) != 1 {
+		t.Errorf("default: %+v", p.Offer)
+	}
+	// An app's fields replace the default's, one by one.
+	p := ImagePolicy(def, app(&AppImageUpdates{Strategy: "semver", Offer: &ImageOffer{Constraint: ">=2"}}))
+	if p.Strategy != "semver" || p.Offer == nil || p.Offer.Constraint != ">=2" || len(p.Offer.IgnoreTags) != 1 {
+		t.Errorf("merged: %+v %+v", p, p.Offer)
+	}
+	// enabled: false turns the default off for one app, or the default itself.
+	if p := ImagePolicy(def, app(&AppImageUpdates{Offer: &ImageOffer{Enabled: &no}})); p.Offer != nil {
+		t.Errorf("turned off: %+v", p.Offer)
+	}
+	if p := ImagePolicy(&ImageOffer{Enabled: &no}, app(nil)); p.Offer != nil {
+		t.Errorf("default off: %+v", p.Offer)
+	}
+	if p := ImagePolicy(nil, app(&AppImageUpdates{Offer: &ImageOffer{}})); p.Offer == nil || p.Offer.Constraint != "*" {
+		t.Errorf("app only: %+v", p.Offer)
+	}
+}
+
+func TestBootstrapOffer(t *testing.T) {
+	b, err := ParseBootstrap([]byte("root: {repoURL: x}\nimageUpdates: {offer: {constraint: \">=1\"}}\n"))
+	if err != nil || b.ImageUpdates.Offer.Policy() == nil || b.ImageUpdates.Offer.Policy().Constraint != ">=1" {
+		t.Fatalf("offer: %+v, %v", b, err)
+	}
+	for doc, want := range map[string]string{
+		"imageUpdates: {offer: {strategy: newest-build}}": `imageUpdates.offer: strategy "newest-build" must be semver`,
+		"imageUpdates: {offer: {constraint: \"~>>1\"}}":   `imageUpdates.offer: constraint "~>>1"`,
+	} {
+		if _, err := ParseBootstrap([]byte("root: {repoURL: x}\n" + doc + "\n")); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: %v, want %q", doc, err, want)
+		}
+	}
+}

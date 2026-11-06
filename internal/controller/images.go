@@ -162,7 +162,7 @@ func (c *Controller) pinImages(ctx context.Context, app *config.Application, ren
 	res := pinResult{manifest: rendered}
 	name := app.Metadata.Name
 	svcs, err := images.Services(rendered, config.ImageUpdatesFor(c.Boot.ImageUpdates.Enabled, app),
-		app.Spec.SyncPolicy.ImageUpdates.Policy(), config.LabelImageUpdates)
+		config.ImagePolicy(c.Boot.ImageUpdates.Offer, app), config.LabelImageUpdates)
 	if err != nil {
 		res.warnings = append(res.warnings, "reading images: "+err.Error())
 		return res

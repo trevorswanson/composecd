@@ -73,6 +73,12 @@ var registry = []Feature{
 	{Scope: Server, Group: "Image updates", Doc: "write-back-to-git", Path: "imageUpdates.writeBack.author.name", Title: "Write-back author name", Default: config.DefaultWriteBackName, Example: "composecd"},
 	{Scope: Server, Group: "Image updates", Doc: "write-back-to-git", Path: "imageUpdates.writeBack.author.email", Title: "Write-back author email", Default: config.DefaultWriteBackEmail, Example: "composecd@example.lan"},
 	{Scope: Server, Group: "Image updates", Doc: "write-back-to-git", Path: "imageUpdates.writeBack.signingKeyFile", Title: "Write-back signing key", Help: "An SSH private key the commits are signed with.", Default: "unsigned", Example: "/run/secrets/composecd-signing-key"},
+	{Scope: Server, Group: "Image updates", Doc: "upgrade-offers", Path: "imageUpdates.offer", Title: "Default upgrade offer", Help: "Every Application's upgrade offer unless it sets its own: newer semver tags are reported, and deploy only once an admin approves them.", Default: "off", Example: "constraint: \"*\"\nignoreTags: [\"*-rc*\"]"},
+	{Scope: Server, Group: "Image updates", Doc: "upgrade-offers", Path: "imageUpdates.offer.enabled", Title: "Default offer on", Default: "true when offer is set", Example: "false"},
+	{Scope: Server, Group: "Image updates", Doc: "upgrade-offers", Path: "imageUpdates.offer.strategy", Options: []string{"semver"}, Title: "Default offer strategy", Default: "semver"},
+	{Scope: Server, Group: "Image updates", Doc: "upgrade-offers", Path: "imageUpdates.offer.constraint", Title: "Default offer constraint", Default: "any newer release, majors included", Example: `">=1"`},
+	{Scope: Server, Group: "Image updates", Doc: "upgrade-offers", Path: "imageUpdates.offer.allowTags", Title: "Default offer allowed tags", Default: "any", Example: `'^\d+\.\d+\.\d+$'`},
+	{Scope: Server, Group: "Image updates", Doc: "upgrade-offers", Path: "imageUpdates.offer.ignoreTags", Title: "Default offer ignored tags", Default: "none", Example: `["*-rc*"]`},
 
 	// Host
 	{Scope: Host, Group: "Engine", Doc: "host", Path: "metadata.labels", Title: "Labels", Help: "Select the host in ApplicationSet hosts generators and sync windows.", Example: "{role: dns}"},
@@ -146,7 +152,13 @@ var registry = []Feature{
 	{Scope: Application, Group: "Image updates", Doc: "strategies", Path: "spec.syncPolicy.imageUpdates.allowTags", Title: "Allowed tags", Help: "A regular expression tags must match (required for newest-build).", Default: "any", Example: `'^\d+\.\d+\.\d+$'`},
 	{Scope: Application, Group: "Image updates", Doc: "strategies", Path: "spec.syncPolicy.imageUpdates.ignoreTags", Title: "Ignored tags", Help: "Globs of tags never picked.", Default: "none", Example: `["*-rc*"]`},
 	{Scope: Application, Group: "Image updates", Doc: "write-back-to-git", Path: "spec.syncPolicy.imageUpdates.writeBack", Options: []string{config.WriteBackMemory, config.WriteBackGit}, Title: "Write-back", Help: "memory applies a picked tag in memory; git commits it, so Git stays the record of what runs. git also commits new digests for images Git pins (nginx:1.27@sha256:…), which are otherwise only reported.", Default: config.WriteBackMemory, Example: config.WriteBackGit},
-	{Scope: Application, Group: "Image updates", Doc: "upgrade-offers", Path: "spec.syncPolicy.imageUpdates.offer", Title: "Upgrade offers", Help: "Looks for newer semver tags than the strategy moves to, and reports them as upgrades an admin approves. Nothing is applied until one is.", Default: "off", Example: "constraint: \">=3\""},
+	{Scope: Application, Group: "Image updates", Doc: "upgrade-offers", Path: "spec.syncPolicy.imageUpdates.offer", Title: "Upgrade offers", Help: "Looks for newer semver tags than the strategy moves to, and reports them as upgrades an admin approves. Nothing is applied until one is. Fields set here replace composecd.yaml's imageUpdates.offer.", Default: "off", Example: "constraint: \">=3\"", inherit: func(ctx Context) (string, string, bool) {
+		if ctx.Boot == nil || ctx.Boot.ImageUpdates.Offer.Policy() == nil {
+			return "", "", false
+		}
+		return "on", "imageUpdates.offer in composecd.yaml", true
+	}},
+	{Scope: Application, Group: "Image updates", Doc: "upgrade-offers", Path: "spec.syncPolicy.imageUpdates.offer.enabled", Title: "Offer on", Help: "false turns off composecd.yaml's default offer for this Application.", Default: "true when an offer is set", Example: "false"},
 	{Scope: Application, Group: "Image updates", Doc: "upgrade-offers", Path: "spec.syncPolicy.imageUpdates.offer.strategy", Options: []string{"semver"}, Title: "Offer strategy", Default: "semver"},
 	{Scope: Application, Group: "Image updates", Doc: "upgrade-offers", Path: "spec.syncPolicy.imageUpdates.offer.constraint", Title: "Offer constraint", Help: "A semver constraint the offered tags match.", Default: "any newer release, majors included", Example: `">=3"`},
 	{Scope: Application, Group: "Image updates", Doc: "upgrade-offers", Path: "spec.syncPolicy.imageUpdates.offer.allowTags", Title: "Offer allowed tags", Help: "A regular expression offered tags must match.", Default: "any", Example: `'^\d+\.\d+\.\d+$'`},
