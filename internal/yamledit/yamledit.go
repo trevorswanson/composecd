@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"unicode/utf8"
 
@@ -158,9 +159,7 @@ func Replace(data []byte, n *yaml.Node, value string) ([]byte, error) {
 			text = quoteDouble(value)
 		}
 	}
-	out := make([]byte, 0, len(data)+len(text))
-	out = append(append(append(out, data[:start]...), text...), data[end:]...)
-	return out, nil
+	return slices.Concat(data[:start], []byte(text), data[end:]), nil
 }
 
 // add appends path's missing keys to the deepest block mapping on it.
