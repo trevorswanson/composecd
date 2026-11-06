@@ -89,6 +89,42 @@ func TestPhase2ValidationErrors(t *testing.T) {
 	}
 }
 
+func TestDefaultWindowValidation(t *testing.T) {
+	win := func(name, spec string) string {
+		return "apiVersion: composecd/v1alpha1\nkind: SyncWindow\nmetadata: {name: " + name + "}\nspec: " + spec + "\n"
+	}
+	objs, err := Parse("t.yaml", []byte(win(DefaultWindow, `{kind: deny, schedule: "0 22 * * *", duration: 8h, manualSync: true}`)))
+	if err != nil {
+		t.Fatalf("default window without selectors: %v", err)
+	}
+	if w := objs.SyncWindows[0]; w.Metadata.Name != DefaultWindow || w.Spec.Kind != WindowDeny || !w.Spec.ManualSync {
+		t.Errorf("default window = %+v", w)
+	}
+	for name, doc := range map[string]string{
+		"applications": win(DefaultWindow, `{kind: deny, schedule: "@daily", duration: 1h, applications: ["*"]}`),
+		"hosts":        win(DefaultWindow, `{kind: deny, schedule: "@daily", duration: 1h, hosts: [nas]}`),
+		"labels":       win(DefaultWindow, `{kind: deny, schedule: "@daily", duration: 1h, labels: {tier: media}}`),
+	} {
+		if _, err := Parse("t.yaml", []byte(doc)); err == nil || !strings.Contains(err.Error(), "can't set applications, hosts or labels") {
+			t.Errorf("default window with %s: %v", name, err)
+		}
+	}
+	// The default still needs a valid kind, schedule and duration.
+	for name, doc := range map[string]string{
+		"kind":     win(DefaultWindow, `{kind: maybe, schedule: "@daily", duration: 1h}`),
+		"schedule": win(DefaultWindow, `{kind: deny, schedule: "every night", duration: 1h}`),
+		"duration": win(DefaultWindow, `{kind: deny, schedule: "@daily"}`),
+	} {
+		if _, err := Parse("t.yaml", []byte(doc)); err == nil {
+			t.Errorf("default window with a bad %s: expected an error", name)
+		}
+	}
+	if _, err := Parse("t.yaml", []byte(win("w", `{kind: deny, schedule: "@daily", duration: 1h}`))); err == nil ||
+		!strings.Contains(err.Error(), `name it "default"`) {
+		t.Errorf("window without selectors: %v", err)
+	}
+}
+
 func TestBootstrapNotifications(t *testing.T) {
 	b, err := ParseBootstrap([]byte(`
 root: {repoURL: x}

@@ -154,6 +154,20 @@ func printApp(w io.Writer, a *controller.AppStatus) {
 	if len(a.DependsOn) > 0 {
 		fmt.Fprintf(w, "Depends on: %s\n", strings.Join(a.DependsOn, ", "))
 	}
+	if len(a.SyncWindows) > 0 {
+		var ws []string
+		for _, sw := range a.SyncWindows {
+			state := "closed"
+			if sw.Open {
+				state = "open"
+			}
+			if sw.Builtin {
+				state = "built-in, always open"
+			}
+			ws = append(ws, fmt.Sprintf("%s (%s, %s)", sw.Name, sw.Kind, state))
+		}
+		fmt.Fprintf(w, "Windows:    %s\n", strings.Join(ws, ", "))
+	}
 	if a.Blocked != "" {
 		fmt.Fprintf(w, "Waiting:    %s\n", a.Blocked)
 	}

@@ -230,8 +230,11 @@ func (o *Objects) validate(allowGenerated bool) error {
 		if _, err := time.LoadLocation(s.TimeZone); err != nil {
 			fail(w.Origin, "sync window %q: timeZone %q: %v", name, s.TimeZone, err)
 		}
-		if len(s.Applications) == 0 && len(s.Hosts) == 0 && len(s.Labels) == 0 {
-			fail(w.Origin, "sync window %q: set at least one of applications, hosts or labels (use applications: [\"*\"] for every app)", name)
+		switch selectors := len(s.Applications) > 0 || len(s.Hosts) > 0 || len(s.Labels) > 0; {
+		case name == DefaultWindow && selectors:
+			fail(w.Origin, "sync window %q applies to every app no other window matches, so it can't set applications, hosts or labels", name)
+		case name != DefaultWindow && !selectors:
+			fail(w.Origin, "sync window %q: set at least one of applications, hosts or labels (use applications: [\"*\"] for every app, or name it %q for the apps no other window matches)", name, DefaultWindow)
 		}
 		for _, g := range append(append([]string{}, s.Applications...), s.Hosts...) {
 			if _, err := path.Match(g, ""); err != nil {

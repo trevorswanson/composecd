@@ -312,6 +312,34 @@ Windows work as in Argo CD:
 
 Windows apply to automatic syncs, self-heal and prune.
 
+#### The default window
+
+Every app that no other window matches belongs to the window named `default`. Without a SyncWindow named
+`default` in Git, a built-in one applies: an `allow` window that is always open (it opens every minute for a
+minute, in UTC), so those apps may sync at any time, as they would with no windows at all. To give them a
+schedule, define `default` yourself:
+
+```yaml
+kind: SyncWindow
+metadata: {name: default}
+spec:
+  kind: deny                      # no automatic changes overnight...
+  schedule: "0 23 * * *"
+  duration: 7h
+  timeZone: America/Chicago
+  manualSync: true                # ...but manual syncs still go through
+```
+
+Its kind, schedule, duration, timeZone and manualSync work as in any window, but it can't set `applications`,
+`hosts` or `labels`: its apps are the ones no other window matches, and validation rejects selectors on it.
+An app that another window matches never belongs to `default`, even while that window is closed.
+
+`window list`, `GET /api/v1/windows` and the UI show the built-in default as `default` with `builtin: true`
+(**built-in** in the UI, source `built-in` in the CLI), with the apps it applies to. When every app is matched
+by another window, it has no apps and isn't shown. A `default` defined in Git is always shown. `app get`,
+the app's details in the UI and the `syncWindows` of `GET /api/v1/apps/{name}` list the windows that apply to
+the app.
+
 ## Status
 
 | Sync | Meaning |
@@ -349,7 +377,7 @@ host maintenance, a retry or self-heal backoff, or a failed sync waiting for a c
 | `adopt HOST RELEASE` | Export Application YAML with saved user values (admin); warnings go to stderr. |
 | `host maintenance NAME on\|off` | While on, nothing on the host is synced, healed or pruned automatically. Manual operations still work. |
 | `host prune NAME [--all] [--build-cache]`, `host operations NAME` | Prune a host's unused images (or build cache) now (admin), and list its prunes. See [Housekeeping](#housekeeping). |
-| `window list` | Sync windows, whether they're open, and the apps they match. |
+| `window list` | Sync windows, whether they're open, where they're defined, and the apps they apply to, including the [default window](#the-default-window). |
 | `validate DIR` | Check objects offline; `--render` also expands ApplicationSets and renders every chart. See [Validate in CI](#validate-in-ci). |
 | `login`, `logout`, `whoami` | Save, forget or check the server and token the CLI uses. |
 | `token create NAME --role R`, `token list`, `token revoke NAME` | API tokens (admin). |
@@ -506,7 +534,8 @@ binary; there is no CDN or Node build step.
   Lists unmanaged composetpl releases and plain Compose projects with config paths. Admins can use **Adopt** to preview Application YAML, or **Delete** an orphaned release.
   **Housekeeping** shows disk usage, a warning past `diskWarning`, the next scheduled prunes and past ones;
   admins can prune images or build cache now. **Configuration** shows the host's settings.
-- **Sync windows** (`/windows`): open/closed state, next change, and matching applications.
+- **Sync windows** (`/windows`): open/closed state, next change, and the applications each one applies to,
+  with the [default window](#the-default-window) marked built-in or default.
 - **Operations** (`/operations`): the latest 50 operations across applications, including who acted and output.
 - **Settings** (`/settings`): your identity; admins can create/revoke tokens and add/delete users or change
   passwords. A newly created token is shown once. **Server** shows `composecd.yaml`'s settings.
@@ -1195,7 +1224,7 @@ picked tag that can't be written to Git and waits for an admin's decision).
 | PreSync / PostSync / SyncFail hooks | composetpl `x-composetpl` hooks (`sync-fail` for SyncFail) |
 | Declarative setup (app of apps) | Everything is read from the root directory in Git |
 | Self-heal, prune | Same; prune keeps named volumes and release history |
-| Sync windows | `SyncWindow`, with the same allow/deny/manualSync rules, matched by app, host or labels |
+| Sync windows | `SyncWindow`, with the same allow/deny/manualSync rules, matched by app, host or labels, plus a [`default` window](#the-default-window) for the apps no other window matches |
 | Sync waves across apps | `dependsOn` |
 | ApplicationSet progressive syncs (`RollingSync`) | Same `strategy.rollingSync.steps` with `matchExpressions` and `maxUpdate`, plus `minHealthyTime`; a failed or unhealthy app halts the rollout |
 | Retry with backoff | `syncPolicy.retry` |

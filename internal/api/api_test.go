@@ -37,7 +37,7 @@ type stub struct {
 
 func (s *stub) Apps() []controller.AppStatus {
 	return []controller.AppStatus{{Name: "media", Host: "nas", Sync: controller.SyncStatus{Status: controller.Synced},
-		Health: controller.HealthStatus{Status: health.Healthy}}}
+		Health: controller.HealthStatus{Status: health.Healthy}, SyncWindows: []windows.Ref{{Name: "nightly", Kind: "allow", Open: true}}}}
 }
 
 func (s *stub) App(name string) (controller.AppStatus, error) {
@@ -201,7 +201,8 @@ func (s *stub) RefreshRepos(urls []string) bool {
 }
 
 func (s *stub) Windows() []windows.Status {
-	return []windows.Status{{Name: "nightly", Kind: "allow", Open: true, Applications: []string{"media"}}}
+	return []windows.Status{{Name: "nightly", Kind: "allow", Open: true, Applications: []string{"media"}},
+		{Name: "default", Kind: "allow", Schedule: "* * * * *", Duration: "1m0s", Default: true, Builtin: true, Open: true, Applications: []string{"traefik"}}}
 }
 
 func (s *stub) SetMaintenance(host string, on bool, reason string) error {

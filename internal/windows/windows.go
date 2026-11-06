@@ -4,6 +4,11 @@
 //   - if any allow windows match an app, it may only sync while one is open;
 //   - a blocking window with manualSync lets manual syncs through.
 //
+// An app that no other window matches belongs to the window named default
+// (config.DefaultWindow). A SyncWindow named default in Git sets its schedule;
+// without one, a built-in default that is always open applies, so such apps
+// may sync at any time.
+//
 // Automatic syncs, self-heal and prune are all subject to windows.
 package windows
 
@@ -24,33 +29,75 @@ type Window struct {
 	Spec  *config.SyncWindow
 	sched cron.Schedule
 	loc   *time.Location
+	// builtin is the default window composecd adds when Git defines none.
+	builtin bool
+}
+
+// Builtin is the default window when Git doesn't define one: an allow window
+// that opens every minute for a minute, so it is always open.
+func Builtin() *config.SyncWindow {
+	return &config.SyncWindow{Metadata: config.Metadata{Name: config.DefaultWindow}, Spec: config.SyncWindowSpec{
+		Kind: config.WindowAllow, Schedule: "* * * * *", Duration: config.Duration(time.Minute), TimeZone: "UTC",
+	}}
 }
 
 // Compile prepares validated windows; invalid ones (which validation rejects)
-// are skipped.
+// are skipped. The default window comes last: the one in ws, or Builtin.
 func Compile(ws []*config.SyncWindow) []*Window {
 	var out []*Window
+	var def *Window
 	for _, w := range ws {
-		sched, err := config.ParseSchedule(w.Spec.Schedule)
-		if err != nil {
-			continue
+		c := compile(w)
+		switch {
+		case c == nil:
+		case c.Default():
+			def = c
+		default:
+			out = append(out, c)
 		}
-		loc, err := time.LoadLocation(w.Spec.TimeZone)
-		if err != nil {
-			continue
-		}
-		out = append(out, &Window{Spec: w, sched: sched, loc: loc})
 	}
-	return out
+	if def == nil {
+		def = builtin
+	}
+	return append(out, def)
+}
+
+// builtin is the compiled Builtin window.
+var builtin = func() *Window {
+	w := compile(Builtin())
+	w.builtin = true
+	return w
+}()
+
+func compile(w *config.SyncWindow) *Window {
+	sched, err := config.ParseSchedule(w.Spec.Schedule)
+	if err != nil {
+		return nil
+	}
+	loc, err := time.LoadLocation(w.Spec.TimeZone)
+	if err != nil {
+		return nil
+	}
+	return &Window{Spec: w, sched: sched, loc: loc}
 }
 
 // Name is the window's name.
 func (w *Window) Name() string { return w.Spec.Metadata.Name }
 
+// Default reports whether w is the default window, from Git or built in.
+func (w *Window) Default() bool { return w.Name() == config.DefaultWindow }
+
+// Builtin reports whether w is the built-in default window.
+func (w *Window) Builtin() bool { return w.builtin }
+
 func (w *Window) duration() time.Duration { return time.Duration(w.Spec.Spec.Duration) }
 
 // Open reports whether the window is open at now and, if so, when it closes.
+// The built-in default is always open, and never closes (zero time).
 func (w *Window) Open(now time.Time) (bool, time.Time) {
+	if w.builtin {
+		return true, time.Time{}
+	}
 	// The newest opening at or before now that is still within Duration.
 	start := w.sched.Next(now.Add(-w.duration()).In(w.loc))
 	if start.After(now) {
@@ -65,11 +112,22 @@ func (w *Window) Open(now time.Time) (bool, time.Time) {
 	return true, end
 }
 
-// NextOpen is when the window next opens after now.
-func (w *Window) NextOpen(now time.Time) time.Time { return w.sched.Next(now.In(w.loc)) }
+// NextOpen is when the window next opens after now (zero for the built-in
+// default, which never closes).
+func (w *Window) NextOpen(now time.Time) time.Time {
+	if w.builtin {
+		return time.Time{}
+	}
+	return w.sched.Next(now.In(w.loc))
+}
 
-// Matches reports whether the window applies to an app on host with labels.
+// Matches reports whether the window's selectors match an app on host with
+// labels. The default window has none and matches nothing by itself: see
+// Applying for the apps it applies to.
 func (w *Window) Matches(app, host string, labels map[string]string) bool {
+	if w.Default() {
+		return false
+	}
 	s := w.Spec.Spec
 	if len(s.Applications) > 0 && !anyMatch(s.Applications, app) {
 		return false
@@ -103,15 +161,53 @@ type Decision struct {
 	Windows []string `json:"windows,omitempty"`
 }
 
+// Applying is the windows that apply to app (on host, with labels): those
+// whose selectors match it or, when none do, the default window. ws normally
+// comes from Compile; without a default in it, the built-in one applies.
+func Applying(ws []*Window, app, host string, labels map[string]string) []*Window {
+	var out []*Window
+	var def *Window
+	for _, w := range ws {
+		if w.Default() {
+			def = w
+		} else if w.Matches(app, host, labels) {
+			out = append(out, w)
+		}
+	}
+	if len(out) > 0 {
+		return out
+	}
+	if def == nil {
+		def = builtin
+	}
+	return []*Window{def}
+}
+
+// Ref is a window that applies to an app, as the app's status shows it.
+type Ref struct {
+	Name string `json:"name"`
+	Kind string `json:"kind"`
+	Open bool   `json:"open"`
+	// Builtin is true for the built-in default window.
+	Builtin bool `json:"builtin,omitempty"`
+}
+
+// Refs describes the windows that apply to app (on host, with labels) at now.
+func Refs(ws []*Window, app, host string, labels map[string]string, now time.Time) []Ref {
+	var out []Ref
+	for _, w := range Applying(ws, app, host, labels) {
+		open, _ := w.Open(now)
+		out = append(out, Ref{Name: w.Name(), Kind: w.Spec.Spec.Kind, Open: open, Builtin: w.builtin})
+	}
+	return out
+}
+
 // Evaluate decides whether app (on host, with labels) may sync at now.
 func Evaluate(ws []*Window, app, host string, labels map[string]string, now time.Time, manual bool) Decision {
 	var matching []string
 	var openDeny, allows, openAllow []*Window
 	ends := map[*Window]time.Time{}
-	for _, w := range ws {
-		if !w.Matches(app, host, labels) {
-			continue
-		}
+	for _, w := range Applying(ws, app, host, labels) {
 		matching = append(matching, w.Name())
 		open, end := w.Open(now)
 		ends[w] = end
@@ -171,35 +267,50 @@ func clock(t time.Time, loc *time.Location) string {
 
 // Status is a window as the API shows it.
 type Status struct {
-	Name       string    `json:"name"`
-	Kind       string    `json:"kind"`
-	Schedule   string    `json:"schedule"`
-	Duration   string    `json:"duration"`
-	TimeZone   string    `json:"timeZone,omitempty"`
-	ManualSync bool      `json:"manualSync,omitempty"`
-	Open       bool      `json:"open"`
-	ClosesAt   time.Time `json:"closesAt,omitempty"`
-	NextOpen   time.Time `json:"nextOpen"`
-	// Applications are the apps the window matches now.
+	Name       string `json:"name"`
+	Kind       string `json:"kind"`
+	Schedule   string `json:"schedule"`
+	Duration   string `json:"duration"`
+	TimeZone   string `json:"timeZone,omitempty"`
+	ManualSync bool   `json:"manualSync,omitempty"`
+	// Default is true for the window of the apps no other window matches.
+	Default bool `json:"default,omitempty"`
+	// Builtin is true for the default window composecd adds when Git doesn't
+	// define one. It is always open, so its apps may sync at any time.
+	Builtin bool `json:"builtin,omitempty"`
+	// Origin is where Git defines the window (file:line).
+	Origin string `json:"origin,omitempty"`
+	Open   bool   `json:"open"`
+	// ClosesAt is when an open window closes; NextOpen is when it next opens.
+	// Both are unset for the built-in default, which never closes.
+	ClosesAt time.Time `json:"closesAt,omitzero"`
+	NextOpen time.Time `json:"nextOpen,omitzero"`
+	// Applications are the apps the window applies to now.
 	Applications []string `json:"applications"`
 }
 
 // Statuses describes every window at now, with the apps (name, host, labels)
-// each one matches.
+// each one applies to. The built-in default is left out when it applies to
+// no app; a default defined in Git is always shown.
 func Statuses(ws []*Window, apps []*config.Application, now time.Time) []Status {
 	out := []Status{}
+	members := map[*Window][]string{}
+	for _, a := range apps {
+		for _, w := range Applying(ws, a.Metadata.Name, a.Spec.Destination.Host, a.Metadata.Labels) {
+			members[w] = append(members[w], a.Metadata.Name)
+		}
+	}
 	for _, w := range ws {
+		if w.builtin && len(members[w]) == 0 {
+			continue
+		}
 		open, end := w.Open(now)
 		s := Status{
 			Name: w.Name(), Kind: w.Spec.Spec.Kind, Schedule: w.Spec.Spec.Schedule, Duration: w.Spec.Spec.Duration.String(),
-			TimeZone: w.Spec.Spec.TimeZone, ManualSync: w.Spec.Spec.ManualSync, Open: open, ClosesAt: end,
-			NextOpen: w.NextOpen(now), Applications: []string{},
+			TimeZone: w.Spec.Spec.TimeZone, ManualSync: w.Spec.Spec.ManualSync, Default: w.Default(), Builtin: w.builtin,
+			Origin: w.Spec.Origin, Open: open, ClosesAt: end, NextOpen: w.NextOpen(now), Applications: []string{},
 		}
-		for _, a := range apps {
-			if w.Matches(a.Metadata.Name, a.Spec.Destination.Host, a.Metadata.Labels) {
-				s.Applications = append(s.Applications, a.Metadata.Name)
-			}
-		}
+		s.Applications = append(s.Applications, members[w]...)
 		sort.Strings(s.Applications)
 		out = append(out, s)
 	}

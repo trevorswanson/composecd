@@ -338,6 +338,46 @@ func TestSyncWindows(t *testing.T) {
 	}
 }
 
+func TestDefaultSyncWindow(t *testing.T) {
+	e := newEnv(t)
+	policy := "  syncPolicy: {automated: {}, options: {wait: false}}\n"
+	// quiet matches api and is closed now; the default denies everything else.
+	quiet := "apiVersion: composecd/v1alpha1\nkind: SyncWindow\nmetadata: {name: quiet}\nspec: {kind: deny, schedule: '0 3 1 1 *', duration: 1m, applications: [api]}\n---\n"
+	def := "apiVersion: composecd/v1alpha1\nkind: SyncWindow\nmetadata: {name: default}\nspec: {kind: deny, schedule: '* * * * *', duration: 2h}\n---\n"
+	e.apps(quiet, def, app("web", "nas", policy), app("api", "nas", policy))
+	e.refresh()
+	if web := e.app("web"); e.ups("web") != 0 || !strings.Contains(web.Blocked, "deny window default") {
+		t.Errorf("web under a deny default: %d ups, blocked %q", e.ups("web"), web.Blocked)
+	}
+	if api := e.app("api"); e.ups("api") != 1 || api.Blocked != "" {
+		t.Errorf("api, matched by quiet: %d ups, blocked %q", e.ups("api"), api.Blocked)
+	}
+	if sw := e.app("web").SyncWindows; len(sw) != 1 || sw[0].Name != "default" || sw[0].Builtin || !sw[0].Open {
+		t.Errorf("web's windows = %+v", sw)
+	}
+	if sw := e.app("api").SyncWindows; len(sw) != 1 || sw[0].Name != "quiet" || sw[0].Open {
+		t.Errorf("api's windows = %+v", sw)
+	}
+	ws := e.c.Windows()
+	if len(ws) != 2 || ws[1].Name != "default" || ws[1].Builtin || !ws[1].Default || strings.Join(ws[1].Applications, ",") != "web" ||
+		ws[1].Origin == "" || strings.Join(ws[0].Applications, ",") != "api" {
+		t.Errorf("windows = %+v", ws)
+	}
+
+	// Without the default in Git, the built-in one lets web sync again.
+	e.apps(quiet, app("web", "nas", policy), app("api", "nas", policy))
+	e.refresh()
+	if web := e.app("web"); e.ups("web") != 1 || web.Blocked != "" {
+		t.Errorf("web under the built-in default: %d ups, blocked %q", e.ups("web"), web.Blocked)
+	}
+	if sw := e.app("web").SyncWindows; len(sw) != 1 || sw[0].Name != "default" || !sw[0].Builtin || !sw[0].Open {
+		t.Errorf("web's windows = %+v", sw)
+	}
+	if ws := e.c.Windows(); len(ws) != 2 || !ws[1].Builtin || strings.Join(ws[1].Applications, ",") != "web" {
+		t.Errorf("windows = %+v", ws)
+	}
+}
+
 func TestDependsOn(t *testing.T) {
 	e := newEnv(t)
 	e.apps(

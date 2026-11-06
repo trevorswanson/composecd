@@ -26,3 +26,18 @@ spec:
 #   schedule: "0 3 * * *"
 #   duration: 2h
 #   hosts: [nas]
+
+# Apps that no other window matches belong to the window named default.
+# Without one here, a built-in default that is always open applies, so they
+# may sync at any time. To hold them back overnight instead:
+#
+# ---
+# apiVersion: composecd/v1alpha1
+# kind: SyncWindow
+# metadata: {name: default}     # no applications, hosts or labels
+# spec:
+#   kind: deny
+#   schedule: "0 23 * * *"
+#   duration: 7h
+#   timeZone: America/Chicago
+#   manualSync: true
