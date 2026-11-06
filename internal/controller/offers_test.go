@@ -210,3 +210,25 @@ func TestImageNoOffer(t *testing.T) {
 		t.Errorf("approving: %v", err)
 	}
 }
+
+func TestImageOfferServerDefault(t *testing.T) {
+	for policy, want := range map[string]bool{
+		"strategy: digest":                 true,
+		"offer: {constraint: \"<3.1\"}":    false,
+		"offer: {enabled: false}":          false,
+		"offer: {ignoreTags: [\"3.1.*\"]}": false,
+		"offer: {constraint: \">=3\"}":     true,
+	} {
+		t.Run(policy, func(t *testing.T) {
+			e, reg := newStrategyEnv(t, "3.0.1", policy, "3.0.1", "3.1.0")
+			reg.set(nginxRepo+":3.1.0", digestB)
+			e.c.Boot.ImageUpdates.Offer = &config.ImageOffer{Constraint: ">=3"}
+			e.refresh()
+			e.checkImages("web")
+			im := imageOf(e.app("web"), "web")
+			if got := im != nil && im.Offer != nil && im.Offer.Tag == "3.1.0"; got != want {
+				t.Errorf("offered = %v, want %v (image %+v)", got, want, im)
+			}
+		})
+	}
+}
