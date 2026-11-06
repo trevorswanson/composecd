@@ -32,6 +32,9 @@ COPY third_party/sops/LICENSE /usr/share/licenses/sops/LICENSE
 COPY NOTICE /usr/share/doc/composecd/NOTICE
 VOLUME /var/lib/composecd
 EXPOSE 8080
-HEALTHCHECK --interval=30s --timeout=5s CMD wget -qO- http://127.0.0.1:8080/healthz || exit 1
+# Probe every 2s while starting (Docker Engine 25+; older engines ignore it), so
+# the container turns healthy, and Traefik routes to it, within seconds; then
+# every 30s once healthy.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --start-interval=2s CMD wget -qO- http://127.0.0.1:8080/healthz || exit 1
 ENTRYPOINT ["/sbin/tini", "--", "composecd"]
 CMD ["server", "--config", "/etc/composecd/composecd.yaml"]
