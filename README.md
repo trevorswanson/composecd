@@ -1132,8 +1132,9 @@ imageUpdates:
   composecd renders the edit and checks that every service gets the image it should.
 - **Which file.** The last file that sets the key wins, as in a render: an inline `values` key is edited in the
   Application's own YAML, a `valueFiles` key in that file, and otherwise the chart's `values.yaml` (or
-  `Chart.yaml`). When that file is also read by another Application, such as a shared chart's `values.yaml`,
-  composecd edits the app's own last values file instead, adding the key there. A key that sets the image of
+  `Chart.yaml`). When that file is also read by other Applications, such as a shared chart's `values.yaml`
+  behind an ApplicationSet, composecd edits it in place when every one of them moves to the same image in the
+  same write-back; otherwise it edits the app's own last values file instead, adding the key there. A key that sets the image of
   more than one service is only changed when every one of them picks the same tag.
 - **The edit.** Only the value's bytes change: comments, quoting, key order and the rest of the file are kept.
   A key the file doesn't have yet is appended to its mapping. All of a check's changes to one repository go in
@@ -1201,6 +1202,10 @@ syncPolicy:
   Git pins, as `tag@digest` where Git pins it) and deploys from there; otherwise the app goes OutOfSync and
   deploys it on the next sync, automatic or not, while Git keeps its tag. The approval is recorded with your
   name in the operation log, and lasts until Git renders another image for the service.
+  With `writeBack: git`, approving also approves the same upgrade for every other Application that reads one of
+  the app's values files (the apps of an ApplicationSet sharing a `values.yaml`, say), runs the same image and
+  is offered the same tag, so the shared file is edited once instead of each app's own file. The toast, the
+  CLI and the API's `also` name those apps, and each one's operation log records it.
 - **Skip** (`--skip`, `{"choice": "skip"}`) ignores the offered tag until a newer one appears.
 - **Not upgradable from composecd:** a digest pinned in Git without `writeBack: git` (change the tag in Git),
   and a service whose update is held (decide that first). Its offer is still reported.

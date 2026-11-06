@@ -556,6 +556,9 @@ A decision lasts until the service's image (or its source) in Git changes.`,
 				}
 				if upgrade {
 					fmt.Fprintf(out, "Approved the upgrade of %s/%s to %s (%s).\n", args[0], args[1], u.Tag, images.Short(u.Digest))
+					if len(u.Also) > 0 {
+						fmt.Fprintf(out, "Also approved for %s, which share its values.\n", strings.Join(u.Also, ", "))
+					}
 				} else {
 					fmt.Fprintf(out, "Skipped %s for %s/%s until a newer tag.\n", u.Tag, args[0], args[1])
 				}

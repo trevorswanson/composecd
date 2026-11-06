@@ -194,6 +194,8 @@ func (c *Controller) writeBackJobs(names []string) []*wbJob {
 		for _, a := range objs.Applications {
 			names = append(names, a.Metadata.Name)
 		}
+	} else {
+		names = withReaders(objs, names)
 	}
 	sort.Strings(names)
 	var jobs []*wbJob
@@ -244,6 +246,49 @@ func (c *Controller) writeBackJobs(names []string) []*wbJob {
 		}
 	}
 	return jobs
+}
+
+// withReaders is names and every Application reading a values file one of
+// them reads, so that one app's write-back plans its co-readers' too: a file
+// they share is edited only when they all make the same edit in one run, and
+// planning one app alone would put the key in its own file instead.
+func withReaders(objs *config.Objects, names []string) []string {
+	seen := map[string]bool{}
+	out := slices.Clone(names)
+	for _, n := range names {
+		seen[n] = true
+	}
+	for i := 0; i < len(out); i++ {
+		for _, r := range coReaders(objs, objs.Application(out[i])) {
+			if !seen[r] {
+				seen[r] = true
+				out = append(out, r)
+			}
+		}
+	}
+	return out
+}
+
+// coReaders are the Applications other than app reading one of its values
+// files, sorted.
+func coReaders(objs *config.Objects, app *config.Application) []string {
+	if app == nil {
+		return nil
+	}
+	url := sourceRepo(app)
+	if url == "" {
+		return nil
+	}
+	var out []string
+	for _, p := range appFiles(app) {
+		for _, r := range readers(objs, app, url, p) {
+			if !slices.Contains(out, r) {
+				out = append(out, r)
+			}
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // pinnedCandidate is what write-back writes for s, an image pinned in Git, when

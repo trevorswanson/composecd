@@ -258,6 +258,31 @@ func TestWriteBackFileChoice(t *testing.T) {
 		}
 	})
 
+	t.Run("a values file every reader moves with is edited in place", func(t *testing.T) {
+		// As an ApplicationSet makes them: one app per host, sharing the
+		// values that set the tag, each with an overlay of its own.
+		e, _ := newWriteBackEnv(t, map[string]string{"charts/web/values.yaml": "tag: 1.27.1\n",
+			"charts/web/web.yaml": "# web's own\nreplicas: 2\n", "charts/web/web2.yaml": "# web2's own\nreplicas: 3\n",
+			"composecd/apps.yaml": wbApp("web", "charts/web", ", valueFiles: [web.yaml]") + wbApp("web2", "charts/web", ", valueFiles: [web2.yaml]")},
+			"1.27.1", "1.27.3")
+		e.refresh()
+		e.c.ops.Wait()
+		e.refresh()
+		if got := e.show("charts/web/values.yaml"); got != "tag: 1.27.3\n" {
+			t.Errorf("values.yaml = %q", got)
+		}
+		for f, want := range map[string]string{"web.yaml": "# web's own\nreplicas: 2\n", "web2.yaml": "# web2's own\nreplicas: 3\n"} {
+			if got := e.show("charts/web/" + f); got != want {
+				t.Errorf("%s = %q, want it untouched", f, got)
+			}
+		}
+		for _, a := range []string{"web", "web2"} {
+			if !strings.Contains(e.fake().Running[a], "image: nginx:1.27.3@") {
+				t.Errorf("%s not deployed:\n%s", a, e.fake().Running[a])
+			}
+		}
+	})
+
 	t.Run("a shared file without an app file of its own holds", func(t *testing.T) {
 		e, _ := newWriteBackEnv(t, map[string]string{"charts/web/values.yaml": "tag: 1.27.1\n",
 			"composecd/apps.yaml": wbApp("web", "charts/web", "") + app("web2", "nas", "")}, "1.27.1", "1.27.3")
@@ -509,6 +534,35 @@ func TestWriteBackGitPinnedDigest(t *testing.T) {
 			t.Errorf("values.yaml = %q, want %q", got, want)
 		}
 		deployedFromGit(t, e)
+	})
+
+	t.Run("a pin in values every reader shares is edited there, not in their overlays", func(t *testing.T) {
+		pinned := func(name string) string {
+			return "apiVersion: composecd/v1alpha1\nkind: Application\nmetadata: {name: " + name + "}\nspec:\n" +
+				"  source: {path: charts/web, valueFiles: [" + name + ".yaml]}\n  destination: {host: nas}\n" +
+				"  syncPolicy: {automated: {}, options: {wait: false}, imageUpdates: {enabled: true, writeBack: git}}\n---\n"
+		}
+		values := "tag: '1@" + digestA + "'\n"
+		e, reg := newWriteBackEnv(t, map[string]string{"charts/web/values.yaml": values,
+			"charts/web/web.yaml": "replicas: 2\n", "charts/web/web2.yaml": "replicas: 3\n",
+			"composecd/apps.yaml": pinned("web") + pinned("web2")})
+		reg.set(nginx1, digestB)
+		e.refresh()
+		e.c.ops.Wait()
+		e.refresh()
+		if got, want := e.show("charts/web/values.yaml"), strings.Replace(values, digestA, digestB, 1); got != want {
+			t.Errorf("values.yaml = %q, want %q", got, want)
+		}
+		for f, want := range map[string]string{"web.yaml": "replicas: 2\n", "web2.yaml": "replicas: 3\n"} {
+			if got := e.show("charts/web/" + f); got != want {
+				t.Errorf("%s = %q, want it untouched", f, got)
+			}
+		}
+		for _, a := range []string{"web", "web2"} {
+			if !strings.Contains(e.fake().Running[a], "image: nginx:1@"+digestB+"\n") {
+				t.Errorf("%s not deployed:\n%s", a, e.fake().Running[a])
+			}
+		}
 	})
 
 	t.Run("a pin committed to a branch for review deploys once merged", func(t *testing.T) {
