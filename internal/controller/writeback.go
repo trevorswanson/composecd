@@ -217,9 +217,18 @@ func (c *Controller) writeBackJobs(names []string) []*wbJob {
 			c.Log.Error("reading image digests", "error", err)
 			continue
 		}
+		upgrades, err := c.Store.ImageUpgrades(name)
+		if err != nil {
+			c.Log.Error("reading image upgrades", "app", name, "error", err)
+			continue
+		}
 		for _, s := range svcs[name] {
 			if s.Pinned {
-				if cand := pinnedCandidate(s, digests[s.Ref.Name()].Digest); cand != "" {
+				cand := pinnedCandidate(s, digests[s.Ref.Name()].Digest)
+				if u, ok := upgrades[s.Name]; ok && u.Choice == store.UpgradeApprove && u.Image == s.Image && s.Offers() {
+					cand = upgradeCandidate(s, u, digests)
+				}
+				if cand != "" {
 					jobs = append(jobs, &wbJob{app: app, svc: s, tag: cand})
 				}
 				continue

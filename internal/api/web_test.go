@@ -50,6 +50,9 @@ func (s *webStub) App(name string) (controller.AppStatus, error) {
 			Held: "the tag is set in an encrypted file", File: "apps/media/values.yaml", Key: "worker.tag", Note: "held: the tag is set in an encrypted file"},
 		{Service: "proxy", Image: "caddy:2.8.0", Strategy: "semver", Tag: "2.8.0", Candidate: "2.8.4", WriteBack: "git", Diverged: true, Applicable: true,
 			Decision: "memory", DecidedBy: "admin", Note: "applied in memory by admin, diverging from Git, which says 2.8.0"},
+		{Service: "n8n", Image: "n8nio/n8n:3.0.1@sha256:ffffffffffffffff", Strategy: "digest", Tag: "3.0.1", Pin: controller.PinGit,
+			Digest: "sha256:ffffffffffffffff", Latest: "sha256:ffffffffffffffff",
+			Offer: &controller.OfferStatus{Tag: "3.1.0", Digest: "sha256:9999999999999999", Constraint: "*", Upgradable: true, WriteBack: "git"}},
 	}
 	return a, err
 }
@@ -148,6 +151,19 @@ func TestWebPagesAndActions(t *testing.T) {
 		auth.CSRFHeader: b.csrf, "HX-Request": "true"}); code != 400 || !strings.Contains(body, "invalid choice") {
 		t.Errorf("bad decision: %d %s", code, body)
 	}
+	// An offered upgrade waits for an admin, who confirms it.
+	if !strings.Contains(body, "Available: 3.1.0") || !strings.Contains(body, `name="choice" value="upgrade"`) || !strings.Contains(body, `name="choice" value="skip"`) ||
+		!strings.Contains(body, "composecd commits 3.1.0 to Git, and it deploys from there") {
+		t.Errorf("offer on the images tab: %s", body)
+	}
+	if code, _, body := b.do("POST", "/ui/apps/media/image-upgrade", "service=web&choice=upgrade&tag=2.0.0", map[string]string{"Content-Type": "application/x-www-form-urlencoded",
+		auth.CSRFHeader: b.csrf, "HX-Request": "true"}); code != 200 || !strings.Contains(body, "Approved the upgrade of web to 2.0.0") {
+		t.Errorf("upgrade: %d %s", code, body)
+	}
+	if code, _, body := b.do("POST", "/ui/apps/media/image-upgrade", "service=web&choice=upgrade&tag=9.9.9", map[string]string{"Content-Type": "application/x-www-form-urlencoded",
+		auth.CSRFHeader: b.csrf, "HX-Request": "true"}); code != 409 || !strings.Contains(body, "offered tag changed") {
+		t.Errorf("stale upgrade: %d %s", code, body)
+	}
 	if code, _, _ := b.do("POST", "/ui/apps/media/image-decision", "service=db&choice=dismiss", map[string]string{"Content-Type": "application/x-www-form-urlencoded",
 		auth.CSRFHeader: b.csrf, "HX-Request": "true"}); code != 409 {
 		t.Errorf("decision on an update that isn't held: %d", code)
@@ -176,7 +192,8 @@ func TestWebPagesAndActions(t *testing.T) {
 		t.Fatalf("readonly action: %d", code)
 	}
 	// A readonly user sees a held update but can't decide it.
-	if _, _, body = g.do("GET", "/apps/media?tab=images", "", nil); !strings.Contains(body, "the tag is set in an encrypted file") || strings.Contains(body, "Apply in memory") {
+	if _, _, body = g.do("GET", "/apps/media?tab=images", "", nil); !strings.Contains(body, "the tag is set in an encrypted file") || strings.Contains(body, "Apply in memory") ||
+		!strings.Contains(body, "Available: 3.1.0") || strings.Contains(body, `value="upgrade"`) {
 		t.Errorf("readonly images tab: %s", body)
 	}
 	if code, _, _ := g.do("POST", "/ui/apps/media/image-decision", "csrf="+g.csrf+"&service=web&choice=memory", map[string]string{"Content-Type": "application/x-www-form-urlencoded"}); code != 403 {

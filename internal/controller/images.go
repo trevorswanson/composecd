@@ -104,10 +104,40 @@ type ImageStatus struct {
 	// Diverged is true while an update applied in memory makes the deployment
 	// differ from what Git renders.
 	Diverged bool `json:"diverged,omitempty"`
+	// Offer is a newer tag than the strategy moves to, which the service's
+	// offer found and only an admin's approval applies.
+	Offer *OfferStatus `json:"offer,omitempty"`
+	// Approved is the tag an admin approved an upgrade to, and ApprovedBy who.
+	// It deploys as a strategy's pick would, until Git renders it.
+	Approved   string `json:"approved,omitempty"`
+	ApprovedBy string `json:"approvedBy,omitempty"`
 	// fingerprint and repo are what a decision about a held candidate
 	// records: see imageFingerprint.
 	fingerprint, repo string
 }
+
+// OfferStatus is a newer tag a service's offer found.
+type OfferStatus struct {
+	Tag string `json:"tag"`
+	// Digest is what Tag resolved to.
+	Digest string `json:"digest,omitempty"`
+	// Constraint is the offer's semver constraint.
+	Constraint string    `json:"constraint,omitempty"`
+	CheckedAt  time.Time `json:"checkedAt,omitzero"`
+	// Upgradable is true when an admin can approve the upgrade from composecd;
+	// Note says why not otherwise.
+	Upgradable bool   `json:"upgradable,omitempty"`
+	Note       string `json:"note,omitempty"`
+	// WriteBack is "git" when an approved upgrade is committed to Git.
+	WriteBack string `json:"writeBack,omitempty"`
+	// Skipped is true when an admin skipped Tag (SkippedBy), until a newer one.
+	Skipped   bool   `json:"skipped,omitempty"`
+	SkippedBy string `json:"skippedBy,omitempty"`
+}
+
+// offerPinnedNote is why an upgrade of an image pinned in Git can't be
+// approved without write-back.
+const offerPinnedNote = "the digest is pinned in Git; change the tag there to upgrade, or set writeBack: git"
 
 // pinResult is what pinImages learned about an app's images.
 type pinResult struct {
@@ -137,10 +167,44 @@ func (c *Controller) pinImages(ctx context.Context, app *config.Application, ren
 		res.warnings = append(res.warnings, "reading images: "+err.Error())
 		return res
 	}
-	c.rememberImages(name, svcs)
 	if !slices.ContainsFunc(svcs, func(s images.Service) bool { return s.Enabled }) {
+		c.rememberImages(name, svcs)
 		return res
 	}
+	// An approved upgrade moves the service to exactly its tag, as a
+	// strategy's pick would, while Git renders the image it was approved for.
+	upgrades, err := c.Store.ImageUpgrades(name)
+	if err != nil {
+		res.warnings = append(res.warnings, "reading image upgrades: "+err.Error())
+	}
+	approved := map[string]store.ImageUpgrade{}
+	strategies := map[string]string{}
+	for i, s := range svcs {
+		u, ok := upgrades[s.Name]
+		if !ok {
+			continue
+		}
+		if u.Image != s.Image || !s.Offers() {
+			c.Log.Info("dropping an image upgrade decision", "app", name, "service", s.Name, "tag", u.Tag)
+			if err := c.Store.DeleteImageUpgrade(name, s.Name); err != nil {
+				c.Log.Error("dropping an image upgrade decision", "app", name, "service", s.Name, "error", err)
+			}
+			delete(upgrades, s.Name)
+			continue
+		}
+		if u.Choice != store.UpgradeApprove {
+			continue
+		}
+		if s.Pinned && !app.Spec.SyncPolicy.ImageUpdates.WritesBack() {
+			continue
+		}
+		approved[s.Name] = u
+		if s.Eligible() {
+			strategies[s.Name] = s.Policy.Name()
+			svcs[i].Policy = s.Policy.Approved(u.Tag)
+		}
+	}
+	c.rememberImages(name, svcs)
 
 	// Strategies that never picked for the image Git renders now pick first.
 	picks, err := c.Store.ImageTags(name)
@@ -260,6 +324,12 @@ func (c *Controller) pinImages(ctx context.Context, app *config.Application, ren
 			continue
 		}
 		st := ImageStatus{Service: s.Name, Image: s.Image, Note: s.Skip, Strategy: s.Policy.Name()}
+		if n, ok := strategies[s.Name]; ok {
+			st.Strategy = n
+		}
+		if u, ok := approved[s.Name]; ok {
+			st.Approved, st.ApprovedBy = u.Tag, u.User
+		}
 		if s.Skip != "" {
 			res.statuses = append(res.statuses, st)
 			continue
@@ -269,7 +339,7 @@ func (c *Controller) pinImages(ctx context.Context, app *config.Application, ren
 		if tag != s.Ref.Tag {
 			want, st.Candidate = images.WithTag(s.Image, tag), tag
 		}
-		if s.Policy.Strategy == images.StrategySemver {
+		if _, ok := strategies[s.Name]; !ok && s.Policy.Strategy == images.StrategySemver {
 			st.Constraint, _ = s.Policy.ConstraintFor(s.Ref.Tag)
 		}
 		entry := cache[refOf(s).Name()]
@@ -293,6 +363,20 @@ func (c *Controller) pinImages(ctx context.Context, app *config.Application, ren
 		}
 		if s.Pinned {
 			st.Pin, st.Digest = PinGit, s.Ref.Digest
+			if u, ok := approved[s.Name]; ok && app.Spec.SyncPolicy.ImageUpdates.WritesBack() {
+				// The approved upgrade is committed where Git pins the digest.
+				st.Candidate, st.UpdateAvailable = u.Tag, true
+				if cand := upgradeCandidate(s, u, cache); cand == "" {
+					st.Note = "resolving " + u.Tag + " before writing it to Git"
+				} else {
+					showPinnedWriteBack(&st, c.pinnedWriteBackView(ctx, app, prep, s, cand))
+					if strings.HasPrefix(st.Note, "writing the digest ") {
+						st.Note = "writing the upgrade to " + u.Tag + " to Git"
+					}
+				}
+				res.statuses = append(res.statuses, st)
+				continue
+			}
 			if st.Latest != "" && st.Latest != st.Digest {
 				st.UpdateAvailable, st.Note = true, gitPinNote
 				// With write-back, the new digest is committed where Git pins
@@ -347,11 +431,95 @@ func (c *Controller) pinImages(ctx context.Context, app *config.Application, ren
 			showWriteBack(&res.statuses[i], v)
 		}
 	}
+	res.warnings = append(res.warnings, c.showOffers(app, svcs, res.statuses, upgrades, cache)...)
 	if res.manifest, err = images.Override(rendered, res.pins); err != nil {
 		res.warnings = append(res.warnings, "pinning images: "+err.Error())
 		res.manifest, res.pins, res.reasons = rendered, nil, nil
 	}
 	return res
+}
+
+// upgradeCandidate is what write-back writes for s, an image pinned in Git,
+// for the upgrade u approved: its tag at the digest the registry last served
+// for it (or served when it was approved).
+func upgradeCandidate(s images.Service, u store.ImageUpgrade, cache map[string]store.ImageDigest) string {
+	r := s.Ref
+	r.Tag, r.Digest = u.Tag, ""
+	d := cache[r.Name()].Digest
+	if d == "" {
+		d = u.Digest
+	}
+	if d == "" {
+		return ""
+	}
+	return u.Tag + "@" + d
+}
+
+// showOffers shows on statuses the newer tags the offers of app's svcs found
+// beyond what each service deploys, dropping skips a newer tag replaces.
+func (c *Controller) showOffers(app *config.Application, svcs []images.Service, statuses []ImageStatus,
+	upgrades map[string]store.ImageUpgrade, cache map[string]store.ImageDigest) []string {
+	name := app.Metadata.Name
+	if !slices.ContainsFunc(svcs, images.Service.Offers) {
+		return nil
+	}
+	offers, err := c.Store.ImageOffers(name)
+	if err != nil {
+		return []string{"reading image offers: " + err.Error()}
+	}
+	byName := map[string]images.Service{}
+	for _, s := range svcs {
+		byName[s.Name] = s
+	}
+	for i := range statuses {
+		st := &statuses[i]
+		s, ok := byName[st.Service]
+		if !ok || !s.Offers() {
+			continue
+		}
+		osvc := offerService(s)
+		p, ok := offers[s.Name]
+		if !ok || !pickedFor(p, osvc) {
+			continue
+		}
+		if p.Error != "" && st.Error == "" {
+			st.Error = "offer: " + p.Error
+		}
+		current := st.Candidate
+		if current == "" {
+			current = s.Ref.Tag
+		}
+		if p.Tag == "" || !images.Newer(p.Tag, current) {
+			continue
+		}
+		o := &OfferStatus{Tag: p.Tag, Digest: p.Digest, Constraint: osvc.Policy.Constraint, CheckedAt: p.CheckedAt, Upgradable: true}
+		if app.Spec.SyncPolicy.ImageUpdates.WritesBack() {
+			o.WriteBack = config.WriteBackGit
+		}
+		r := osvc.Ref
+		r.Tag = p.Tag
+		if d := cache[r.Name()].Digest; d != "" {
+			o.Digest = d
+		}
+		switch {
+		case s.Pinned && !app.Spec.SyncPolicy.ImageUpdates.WritesBack():
+			o.Upgradable, o.Note = false, offerPinnedNote
+		case st.Held != "":
+			o.Upgradable, o.Note = false, "an update is held for the service; decide it first"
+		}
+		if u, ok := upgrades[s.Name]; ok && u.Choice == store.UpgradeSkip {
+			if u.Tag == p.Tag {
+				o.Skipped, o.SkippedBy = true, u.User
+			} else if images.Newer(p.Tag, u.Tag) {
+				c.Log.Info("dropping an image upgrade decision", "app", name, "service", s.Name, "reason", "a newer tag "+p.Tag+" replaces "+u.Tag)
+				if err := c.Store.DeleteImageUpgrade(name, s.Name); err != nil {
+					c.Log.Error("dropping an image upgrade decision", "app", name, "service", s.Name, "error", err)
+				}
+			}
+		}
+		st.Offer = o
+	}
+	return nil
 }
 
 // showWriteBack shows on st how writing its candidate to Git stands.
@@ -550,6 +718,9 @@ func (c *Controller) checkImages(ctx context.Context, only string) ImageCheck {
 			if !svc.Checked() {
 				continue
 			}
+			if svc.Offers() && (only == "" || only == name) {
+				jobs = append(jobs, tagJob{app: name, svc: offerService(svc), offer: true})
+			}
 			if svc.MovesTags() {
 				if only == "" || only == name {
 					jobs = append(jobs, tagJob{app: name, svc: svc})
@@ -624,10 +795,22 @@ func (c *Controller) checkImages(ctx context.Context, only string) ImageCheck {
 	return check
 }
 
-// tagJob is a service whose strategy picks its tag.
+// tagJob is a service whose strategy picks its tag, or, with offer set, whose
+// offer looks for a newer one (svc is then offerService's).
 type tagJob struct {
-	app string
-	svc images.Service
+	app   string
+	svc   images.Service
+	offer bool
+}
+
+// offerService is s as its offer sees it: with the offer's policy, and Git's
+// tag without the digest Git may pin.
+func offerService(s images.Service) images.Service {
+	if s.Policy.Offer != nil {
+		s.Policy = *s.Policy.Offer
+	}
+	s.Ref.Digest = ""
+	return s
 }
 
 // tagChoice is the tag a strategy picked for a service: Git's own when
@@ -794,13 +977,17 @@ func (c *Controller) recordTags(choices []tagChoice) ([]string, map[string]bool)
 	prevs := map[string]map[string]store.ImageTag{}
 	now := time.Now()
 	for _, ch := range choices {
-		if prevs[ch.app] == nil {
-			if prevs[ch.app], err = c.Store.ImageTags(ch.app); err != nil {
+		get, set, key := c.Store.ImageTags, c.Store.SetImageTag, ch.app
+		if ch.offer {
+			get, set, key = c.Store.ImageOffers, c.Store.SetImageOffer, ch.app+"\x00offer"
+		}
+		if prevs[key] == nil {
+			if prevs[key], err = get(ch.app); err != nil {
 				c.Log.Error("reading image tags", "app", ch.app, "error", err)
 				continue
 			}
 		}
-		prev, ok := prevs[ch.app][ch.svc.Name]
+		prev, ok := prevs[key][ch.svc.Name]
 		same := ok && pickedFor(prev, ch.svc)
 		t := store.ImageTag{App: ch.app, Service: ch.svc.Name, Image: ch.svc.Image, Policy: ch.svc.Policy.Fingerprint(),
 			CheckedAt: now, Truncated: ch.truncated}
@@ -818,14 +1005,18 @@ func (c *Controller) recordTags(choices []tagChoice) ([]string, map[string]bool)
 		default:
 			if t.Tag != ch.tag {
 				t.PickedAt = now
-				if ch.tag != ch.svc.Ref.Tag {
+				if ch.offer {
+					if ch.tag != ch.svc.Ref.Tag {
+						c.Log.Info("image upgrade offered", "app", ch.app, "service", ch.svc.Name, "tag", ch.tag)
+					}
+				} else if ch.tag != ch.svc.Ref.Tag {
 					moved = append(moved, fmt.Sprintf("%s/%s: %s", ch.app, ch.svc.Name, ch.tag))
 					c.Log.Info("image tag picked", "app", ch.app, "service", ch.svc.Name, "from", t.Tag, "to", ch.tag)
 				}
 			}
 			t.Tag, t.Digest = ch.tag, entry.Digest
 		}
-		if err := c.Store.SetImageTag(t); err != nil {
+		if err := set(t); err != nil {
 			c.Log.Error("recording an image tag", "app", ch.app, "service", ch.svc.Name, "error", err)
 			continue
 		}
@@ -890,7 +1081,25 @@ func (c *Controller) notifyImages(prev, st *AppStatus) {
 			held[im.Service+"@"+im.Candidate] = true
 		}
 	}
+	offered := map[string]bool{}
+	for _, im := range prev.Images {
+		if im.Offer != nil {
+			offered[im.Service+"@"+im.Offer.Tag] = true
+		}
+	}
 	for _, im := range st.Images {
+		if o := im.Offer; o != nil && !o.Skipped && !offered[im.Service+"@"+o.Tag] {
+			from := im.Candidate
+			if from == "" {
+				from = im.Tag
+			}
+			msg := fmt.Sprintf("%s: %s (%s): %s available, beyond %s; nothing deploys it until an admin approves the upgrade",
+				st.Name, images.Repo(im.Image), im.Service, o.Tag, from)
+			if !o.Upgradable {
+				msg = fmt.Sprintf("%s: %s (%s): %s available, beyond %s (%s)", st.Name, images.Repo(im.Image), im.Service, o.Tag, from, o.Note)
+			}
+			c.notify(Event{Type: config.EventImageAvailable, App: st.Name, Host: st.Host, Message: msg})
+		}
 		if im.Held != "" && !held[im.Service+"@"+im.Candidate] {
 			msg := fmt.Sprintf("%s: %s (%s): %s can't be written to Git: %s. Nothing deploys it until an admin applies it in memory or dismisses it",
 				st.Name, images.Repo(im.Image), im.Service, im.Candidate, im.Held)
@@ -914,4 +1123,79 @@ func (c *Controller) notifyImages(prev, st *AppStatus) {
 		}
 		c.notify(Event{Type: config.EventImageUpdate, App: st.Name, Host: st.Host, Message: msg})
 	}
+}
+
+// ErrNoOffer is an upgrade decision about a service no newer tag is offered for.
+var ErrNoOffer = errors.New("no upgrade is offered for this service")
+
+// ErrOfferChanged is an upgrade decision naming another tag than the one offered.
+var ErrOfferChanged = errors.New("the offered tag changed")
+
+// ErrNotUpgradable is an approval of an offered tag composecd can't apply.
+var ErrNotUpgradable = errors.New("composecd can't apply this upgrade")
+
+// DecideUpgrade records an admin's decision about the tag app's service's offer
+// found: approve the upgrade (store.UpgradeApprove), which deploys it as a
+// strategy's pick would (written to Git with writeBack: git), or skip it until
+// a newer tag (store.UpgradeSkip). tag, when set, must be the tag offered, so a
+// newer offer isn't approved unseen. It is logged as an operation, and the app
+// reconciles.
+func (c *Controller) DecideUpgrade(app, service, choice, tag, user string) (*store.ImageUpgrade, error) {
+	a, err := c.application(app)
+	if err != nil {
+		return nil, err
+	}
+	if choice != store.UpgradeApprove && choice != store.UpgradeSkip {
+		return nil, fmt.Errorf("choice %q must be %s or %s", choice, store.UpgradeApprove, store.UpgradeSkip)
+	}
+	c.mu.RLock()
+	var im *ImageStatus
+	if s, ok := c.apps[app]; ok {
+		for i := range s.status.Images {
+			if s.status.Images[i].Service == service {
+				cp := s.status.Images[i]
+				im = &cp
+			}
+		}
+	}
+	c.mu.RUnlock()
+	switch {
+	case im == nil:
+		return nil, fmt.Errorf("service %q of %s: %w", service, app, ErrNotFound)
+	case im.Offer == nil:
+		return nil, fmt.Errorf("%s/%s: %w", app, service, ErrNoOffer)
+	case tag != "" && tag != im.Offer.Tag:
+		return nil, fmt.Errorf("%s/%s: %w: %s is offered now, not %s", app, service, ErrOfferChanged, im.Offer.Tag, tag)
+	case choice == store.UpgradeApprove && !im.Offer.Upgradable:
+		return nil, fmt.Errorf("%s/%s: %w to %s: %s", app, service, ErrNotUpgradable, im.Offer.Tag, im.Offer.Note)
+	}
+	o := im.Offer
+	u := store.ImageUpgrade{App: app, Service: service, Image: im.Image, Tag: o.Tag, Digest: o.Digest, Choice: choice, User: user, DecidedAt: time.Now()}
+	if err := c.Store.SetImageUpgrade(u); err != nil {
+		return nil, err
+	}
+	from := im.Candidate
+	if from == "" {
+		from = im.Tag
+	}
+	repo := images.Repo(im.Image)
+	msg := fmt.Sprintf("%s (%s): skipped %s until a newer tag; it stays on %s", repo, service, o.Tag, from)
+	if choice == store.UpgradeApprove {
+		how := "it deploys on the next sync"
+		if a.Spec.SyncPolicy.ImageUpdates.WritesBack() {
+			how = "it is written to Git, and deploys from there"
+		}
+		msg = fmt.Sprintf("%s (%s): approved the upgrade from %s to %s (%s); %s", repo, service, from, o.Tag, images.Short(o.Digest), how)
+	}
+	op := &store.Operation{App: app, Kind: store.KindImageDecision, Trigger: store.TriggerManual, User: user, StartedAt: u.DecidedAt}
+	if err := c.Store.StartOperation(op); err == nil {
+		op.Phase, op.Message, op.Log = store.PhaseSucceeded, msg, msg+"\n"
+		if err := c.Store.FinishOperation(op); err != nil {
+			c.Log.Error("recording an image upgrade", "app", app, "error", err)
+		}
+	}
+	c.Log.Info("image upgrade decision", "app", app, "service", service, "choice", choice, "tag", o.Tag, "user", user)
+	c.bumpGeneration()
+	c.reconcileAsync(a, false)
+	return &u, nil
 }

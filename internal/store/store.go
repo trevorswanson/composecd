@@ -225,6 +225,36 @@ func migrate(db *sql.DB) error {
 	)`); err != nil {
 		return err
 	}
+	// The newer tag each service's offer found, as image_tags.
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS image_offers (
+		app        TEXT NOT NULL,
+		service    TEXT NOT NULL,
+		image      TEXT NOT NULL,
+		policy     TEXT NOT NULL DEFAULT '',
+		tag        TEXT NOT NULL DEFAULT '',
+		digest     TEXT NOT NULL DEFAULT '',
+		picked_at  TEXT,
+		checked_at TEXT NOT NULL,
+		truncated  INTEGER NOT NULL DEFAULT 0,
+		error      TEXT NOT NULL DEFAULT '',
+		PRIMARY KEY (app, service)
+	)`); err != nil {
+		return err
+	}
+	// What an admin decided about an offered upgrade.
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS image_upgrades (
+		app        TEXT NOT NULL,
+		service    TEXT NOT NULL,
+		image      TEXT NOT NULL,
+		tag        TEXT NOT NULL,
+		digest     TEXT NOT NULL DEFAULT '',
+		choice     TEXT NOT NULL,
+		user       TEXT NOT NULL DEFAULT '',
+		decided_at TEXT NOT NULL,
+		PRIMARY KEY (app, service)
+	)`); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -499,8 +529,32 @@ type ImageTag struct {
 
 // ImageTags returns app's picked tags, by service.
 func (s *Store) ImageTags(app string) (map[string]ImageTag, error) {
-	rows, err := s.db.Query(`SELECT app, service, image, policy, tag, digest, picked_at, checked_at, truncated, error
-		FROM image_tags WHERE app = ?`, app)
+	return s.imageTags(imageTagsTable, app)
+}
+
+// ImageOffers returns the newer tags app's offers found, by service.
+func (s *Store) ImageOffers(app string) (map[string]ImageTag, error) {
+	return s.imageTags(imageOffersTable, app)
+}
+
+// tagTable is the queries of a table shaped as image_tags.
+type tagTable struct{ query, upsert string }
+
+const (
+	tagColumns = `app, service, image, policy, tag, digest, picked_at, checked_at, truncated, error`
+	tagUpsert  = ` (` + tagColumns + `) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT (app, service) DO UPDATE SET image = excluded.image, policy = excluded.policy, tag = excluded.tag,
+		digest = excluded.digest, picked_at = excluded.picked_at, checked_at = excluded.checked_at,
+		truncated = excluded.truncated, error = excluded.error`
+)
+
+var (
+	imageTagsTable   = tagTable{`SELECT ` + tagColumns + ` FROM image_tags WHERE app = ?`, `INSERT INTO image_tags` + tagUpsert}
+	imageOffersTable = tagTable{`SELECT ` + tagColumns + ` FROM image_offers WHERE app = ?`, `INSERT INTO image_offers` + tagUpsert}
+)
+
+func (s *Store) imageTags(table tagTable, app string) (map[string]ImageTag, error) {
+	rows, err := s.db.Query(table.query, app)
 	if err != nil {
 		return nil, err
 	}
@@ -529,16 +583,17 @@ func (s *Store) ImageTags(app string) (map[string]ImageTag, error) {
 }
 
 // SetImageTag records t, replacing what was stored for its app and service.
-func (s *Store) SetImageTag(t ImageTag) error {
+func (s *Store) SetImageTag(t ImageTag) error { return s.setImageTag(imageTagsTable, t) }
+
+// SetImageOffer records t, the tag a service's offer found.
+func (s *Store) SetImageOffer(t ImageTag) error { return s.setImageTag(imageOffersTable, t) }
+
+func (s *Store) setImageTag(table tagTable, t ImageTag) error {
 	var picked interface{}
 	if !t.PickedAt.IsZero() {
 		picked = formatTime(t.PickedAt)
 	}
-	_, err := s.db.Exec(`INSERT INTO image_tags (app, service, image, policy, tag, digest, picked_at, checked_at, truncated, error)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT (app, service) DO UPDATE SET image = excluded.image, policy = excluded.policy, tag = excluded.tag,
-		digest = excluded.digest, picked_at = excluded.picked_at, checked_at = excluded.checked_at,
-		truncated = excluded.truncated, error = excluded.error`,
+	_, err := s.db.Exec(table.upsert,
 		t.App, t.Service, t.Image, t.Policy, t.Tag, t.Digest, picked, formatTime(t.CheckedAt), boolInt(t.Truncated), t.Error)
 	return err
 }
@@ -612,6 +667,72 @@ func (s *Store) SetImageDecision(d ImageDecision) error {
 // DeleteImageDecision forgets the decision about app's service.
 func (s *Store) DeleteImageDecision(app, service string) error {
 	_, err := s.db.Exec(`DELETE FROM image_decisions WHERE app = ? AND service = ?`, app, service)
+	return err
+}
+
+// Upgrade choices.
+const (
+	// UpgradeApprove moves a service to the offered tag.
+	UpgradeApprove = "upgrade"
+	// UpgradeSkip ignores the offered tag until a newer one.
+	UpgradeSkip = "skip"
+)
+
+// ImageUpgrade is what an admin decided about a tag a service's offer found.
+// It holds while Git renders Image for the service.
+type ImageUpgrade struct {
+	App     string `json:"app"`
+	Service string `json:"service"`
+	// Image is Git's image when the decision was made.
+	Image string `json:"image"`
+	// Tag is the tag offered, and Digest what it resolved to.
+	Tag    string `json:"tag"`
+	Digest string `json:"digest,omitempty"`
+	// Choice is UpgradeApprove or UpgradeSkip.
+	Choice    string    `json:"choice"`
+	User      string    `json:"user,omitempty"`
+	DecidedAt time.Time `json:"decidedAt"`
+}
+
+// ImageUpgrades returns app's upgrade decisions, by service.
+func (s *Store) ImageUpgrades(app string) (map[string]ImageUpgrade, error) {
+	rows, err := s.db.Query(`SELECT app, service, image, tag, digest, choice, user, decided_at
+		FROM image_upgrades WHERE app = ?`, app)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]ImageUpgrade{}
+	for rows.Next() {
+		var u ImageUpgrade
+		var at string
+		if err := rows.Scan(&u.App, &u.Service, &u.Image, &u.Tag, &u.Digest, &u.Choice, &u.User, &at); err != nil {
+			return nil, err
+		}
+		if u.DecidedAt, err = parseTime(at); err != nil {
+			return nil, err
+		}
+		out[u.Service] = u
+	}
+	return out, rows.Err()
+}
+
+// SetImageUpgrade records u, replacing an earlier decision for its service.
+func (s *Store) SetImageUpgrade(u ImageUpgrade) error {
+	if u.DecidedAt.IsZero() {
+		u.DecidedAt = time.Now()
+	}
+	_, err := s.db.Exec(`INSERT INTO image_upgrades (app, service, image, tag, digest, choice, user, decided_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT (app, service) DO UPDATE SET image = excluded.image, tag = excluded.tag, digest = excluded.digest,
+		choice = excluded.choice, user = excluded.user, decided_at = excluded.decided_at`,
+		u.App, u.Service, u.Image, u.Tag, u.Digest, u.Choice, u.User, formatTime(u.DecidedAt))
+	return err
+}
+
+// DeleteImageUpgrade forgets the upgrade decision about app's service.
+func (s *Store) DeleteImageUpgrade(app, service string) error {
+	_, err := s.db.Exec(`DELETE FROM image_upgrades WHERE app = ? AND service = ?`, app, service)
 	return err
 }
 

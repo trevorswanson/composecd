@@ -56,7 +56,7 @@ var registry = []Feature{
 	{Scope: Server, Path: "notifications[].url", Title: "URL", Help: "The endpoint.", Secret: true},
 	{Scope: Server, Path: "notifications[].urlFile", Title: "URL file", Help: "Reads the URL from a file, for URLs that are secrets."},
 	{Scope: Server, Path: "notifications[].tokenFile", Title: "Token file", Help: "An ntfy access token or a Gotify application token."},
-	{Scope: Server, Path: "notifications[].events", Title: "Events", Help: "Which events to send.", Default: "sync-failed, health-degraded, host-down, prune, host-disk, write-back-blocked"},
+	{Scope: Server, Path: "notifications[].events", Title: "Events", Help: "Which events to send.", Default: "sync-failed, health-degraded, host-down, prune, host-disk, write-back-blocked, image-available"},
 	{Scope: Server, Path: "notifications[].applications", Title: "Applications", Help: "Name globs of the apps whose events are sent. Host events are always sent.", Default: "every app"},
 
 	{Scope: Server, Group: "Secrets", Doc: "encrypted-values-with-sops", Path: "sopsAgeKeyFile", Title: "SOPS age key file", Help: "Decrypts SOPS-encrypted value files (*.sops.yaml) for Applications.", Default: "SOPS off", Example: "/run/secrets/age-key.txt"},
@@ -146,6 +146,11 @@ var registry = []Feature{
 	{Scope: Application, Group: "Image updates", Doc: "strategies", Path: "spec.syncPolicy.imageUpdates.allowTags", Title: "Allowed tags", Help: "A regular expression tags must match (required for newest-build).", Default: "any", Example: `'^\d+\.\d+\.\d+$'`},
 	{Scope: Application, Group: "Image updates", Doc: "strategies", Path: "spec.syncPolicy.imageUpdates.ignoreTags", Title: "Ignored tags", Help: "Globs of tags never picked.", Default: "none", Example: `["*-rc*"]`},
 	{Scope: Application, Group: "Image updates", Doc: "write-back-to-git", Path: "spec.syncPolicy.imageUpdates.writeBack", Options: []string{config.WriteBackMemory, config.WriteBackGit}, Title: "Write-back", Help: "memory applies a picked tag in memory; git commits it, so Git stays the record of what runs. git also commits new digests for images Git pins (nginx:1.27@sha256:…), which are otherwise only reported.", Default: config.WriteBackMemory, Example: config.WriteBackGit},
+	{Scope: Application, Group: "Image updates", Doc: "upgrade-offers", Path: "spec.syncPolicy.imageUpdates.offer", Title: "Upgrade offers", Help: "Looks for newer semver tags than the strategy moves to, and reports them as upgrades an admin approves. Nothing is applied until one is.", Default: "off", Example: "constraint: \">=3\""},
+	{Scope: Application, Group: "Image updates", Doc: "upgrade-offers", Path: "spec.syncPolicy.imageUpdates.offer.strategy", Options: []string{"semver"}, Title: "Offer strategy", Default: "semver"},
+	{Scope: Application, Group: "Image updates", Doc: "upgrade-offers", Path: "spec.syncPolicy.imageUpdates.offer.constraint", Title: "Offer constraint", Help: "A semver constraint the offered tags match.", Default: "any newer release, majors included", Example: `">=3"`},
+	{Scope: Application, Group: "Image updates", Doc: "upgrade-offers", Path: "spec.syncPolicy.imageUpdates.offer.allowTags", Title: "Offer allowed tags", Help: "A regular expression offered tags must match.", Default: "any", Example: `'^\d+\.\d+\.\d+$'`},
+	{Scope: Application, Group: "Image updates", Doc: "upgrade-offers", Path: "spec.syncPolicy.imageUpdates.offer.ignoreTags", Title: "Offer ignored tags", Help: "Globs of tags never offered.", Default: "none", Example: `["*-rc*"]`},
 
 	{Scope: Application, Group: "Reading other Applications", Doc: "reading-other-applications", Path: "spec.permissions.env", Title: "Read environment", Help: "Apps (app or app/service globs) whose services' environment this chart may read with lookup, secrets masked.", Default: "identity and labels only", Example: `["*"]`},
 	{Scope: Application, Group: "Reading other Applications", Doc: "reading-other-applications", Path: "spec.permissions.configs", Title: "Read configs", Help: "Apps whose mounted configs this chart may read.", Default: "none", Example: "[traefik]"},

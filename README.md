@@ -372,6 +372,7 @@ host maintenance, a retry or self-heal backoff, or a failed sync waiting for a c
 | `app operations NAME`, `operation list`, `operation get ID` | Sync and rollback history, with each operation's output. |
 | `app refresh NAME`, `refresh` | Fetch and reconcile now instead of waiting for the interval. |
 | `app check-images NAME`, `app check-images --all` | Ask registries for image tags' digests, and strategies' newer tags, now instead of on `imageUpdates.schedule` (admin). See [Image updates](#image-updates). |
+| `app image-decision NAME SERVICE --upgrade\|--skip [--tag TAG]` | Approve or skip an offered upgrade (admin). See [Upgrade offers](#upgrade-offers). |
 | `host list` | Reachability, engine versions, maintenance and orphaned releases. |
 | `host unmanaged NAME` | Unmanaged/orphaned releases and plain Compose projects, including config paths. `-o json\|yaml` |
 | `adopt HOST RELEASE` | Export Application YAML with saved user values (admin); warnings go to stderr. |
@@ -1087,7 +1088,8 @@ syncPolicy:
 - **An outage never downgrades.** When Git's tag or the policy changes while the registry can't be reached, a
   deployed tag the policy still accepts, and that is newer than Git's, is kept until a check succeeds.
 - **Never moved:** digests pinned in Git (still reported, and with `writeBack: git` updated in Git to the new
-  digest of the same tag), `${VAR}` images, `build:` services and hooks.
+  digest of the same tag), `${VAR}` images, `build:` services and hooks. An [upgrade offer](#upgrade-offers)
+  you approve can move them.
 
 [The example](examples/image-updates/README.md) follows patch releases of whoami.
 
@@ -1168,6 +1170,43 @@ and why write-back can't make it, for the same reasons as above (most often, the
 template, `image: redis:7@sha256:…`, rather than in the values). Change the digest in Git, or move it into the
 values so write-back can.
 
+### Upgrade offers
+
+A strategy applies what it picks on its own. An **offer** looks further, and only reports what it finds: the
+strategy keeps applying (new digests of Git's tag, say), while a newer release waits for an admin to approve it.
+
+```yaml
+syncPolicy:
+  imageUpdates:
+    enabled: true
+    strategy: digest                # applied on its own, as above
+    writeBack: git
+    offer:                          # reported; applied only once approved
+      constraint: ">=1.27"          # semver; default: any newer release, majors included
+      allowTags: '^\d+\.\d+\.\d+$'    # regexp offered tags must match
+      ignoreTags: ["*-rc*"]         # globs of tags never offered
+```
+
+- **What is offered.** On the schedule and on **Check images** (never on a refresh), composecd lists the tags of
+  each service whose tag is a semantic version, and picks the highest the offer allows, as `semver` does. When
+  that is newer than what the service deploys (Git's tag, or the strategy's pick), the image shows
+  **Available: 1.28.0** in the **images** tab, `app get` and the API (`offer`), and an `image-available`
+  notification is sent once per tag. The app stays Synced: an offer is never a reason to sync.
+- **Upgrade.** An admin presses **Upgrade** and confirms (or runs
+  `composecd app image-decision NAME SERVICE --upgrade --tag 1.28.0`, or
+  `POST /api/v1/apps/{name}/images/{service}/decision` with `{"choice": "upgrade", "tag": "1.28.0"}`). The tag
+  given must be the one offered, so a newer offer isn't approved unseen. The service then moves to exactly that
+  tag, pinned to its digest, as a strategy's pick does: with `writeBack: git` it is committed to Git (for an image
+  Git pins, as `tag@digest` where Git pins it) and deploys from there; otherwise the app goes OutOfSync and
+  deploys it on the next sync, automatic or not, while Git keeps its tag. The approval is recorded with your
+  name in the operation log, and lasts until Git renders another image for the service.
+- **Skip** (`--skip`, `{"choice": "skip"}`) ignores the offered tag until a newer one appears.
+- **Not upgradable from composecd:** a digest pinned in Git without `writeBack: git` (change the tag in Git),
+  and a service whose update is held (decide that first). Its offer is still reported.
+- **Per service.** The labels `composecd.image-updates.offer` (`"true"` or `"false"`),
+  `composecd.image-updates.offer.constraint` and `composecd.image-updates.offer.allow-tags` beat the
+  Application.
+
 ## Webhooks, notifications and metrics
 
 **Webhooks.** Set `webhook.secretFile` in `composecd.yaml`, then add a push webhook in your Git server that
@@ -1183,7 +1222,7 @@ notifications:
     type: ntfy                    # ntfy, gotify, discord, slack or webhook (JSON POST of the event)
     url: https://ntfy.example.lan/homelab
     tokenFile: /run/secrets/ntfy-token
-    events: [sync-failed, health-degraded, host-down, prune, host-disk, write-back-blocked]   # the default
+    events: [sync-failed, health-degraded, host-down, prune, host-disk, write-back-blocked, image-available]   # the default
   - name: chat
     type: discord
     urlFile: /run/secrets/discord-webhook
@@ -1194,8 +1233,9 @@ notifications:
 The events are `sync-succeeded`, `sync-failed` (which also covers failed rollbacks, heals and prunes),
 `self-healed`, `prune`, `health-degraded` and `out-of-sync`, each sent when an app enters that state,
 `host-down`, `host-disk` (a host's disk past `housekeeping.diskWarning`), `image-update` (a new digest for a
-service's tag, including one pinned in Git, or a newer tag its strategy picked), and `write-back-blocked` (a
-picked tag that can't be written to Git and waits for an admin's decision).
+service's tag, including one pinned in Git, or a newer tag its strategy picked), `write-back-blocked` (a
+picked tag that can't be written to Git and waits for an admin's decision), and `image-available` (a newer tag
+an [upgrade offer](#upgrade-offers) found, which waits for an admin to approve it).
 
 **Metrics.** `GET /metrics` serves Prometheus metrics:
 - `composecd_app_sync_status` and `composecd_app_health_status`, one series per app with its current status;

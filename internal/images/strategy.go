@@ -39,6 +39,32 @@ type Policy struct {
 	AllowTags string `json:"allowTags,omitempty"`
 	// IgnoreTags are path.Match globs of tags never picked.
 	IgnoreTags []string `json:"ignoreTags,omitempty"`
+	// Offer, when set, is a wider semver policy whose newer tags are only
+	// reported, as upgrades an admin may approve; it never applies on its own.
+	Offer *Policy `json:"offer,omitempty"`
+}
+
+// DefaultOfferConstraint is an offer's constraint when it names none: any
+// newer release, majors included, since nothing is applied unapproved.
+const DefaultOfferConstraint = "*"
+
+// NewOffer is the offer policy with constraint, allowTags and ignoreTags
+// (semver; constraint "" is DefaultOfferConstraint).
+func NewOffer(constraint, allowTags string, ignoreTags []string) *Policy {
+	if constraint == "" {
+		constraint = DefaultOfferConstraint
+	}
+	return &Policy{Strategy: StrategySemver, Constraint: constraint, AllowTags: allowTags, IgnoreTags: ignoreTags}
+}
+
+// Approved is the policy that moves a service to exactly tag, an upgrade an
+// admin approved, keeping p's offer.
+func (p Policy) Approved(tag string) Policy {
+	c := tag
+	if v, err := semver.NewVersion(tag); err == nil {
+		c = v.String()
+	}
+	return Policy{Strategy: StrategySemver, Constraint: "=" + c, AllowTags: "^" + regexp.QuoteMeta(tag) + "$", Offer: p.Offer}
 }
 
 // Name is the strategy, with digest for "".
@@ -83,7 +109,30 @@ func (p Policy) Validate() error {
 			errs = append(errs, fmt.Errorf("ignoreTags %q: %v", g, err))
 		}
 	}
+	if o := p.Offer; o != nil {
+		switch {
+		case o.Strategy != StrategySemver:
+			errs = append(errs, fmt.Errorf("offer: strategy %q must be %s", o.Strategy, StrategySemver))
+		case o.Offer != nil:
+			errs = append(errs, errors.New("offer: an offer can't have an offer"))
+		default:
+			if err := o.Validate(); err != nil {
+				errs = append(errs, fmt.Errorf("offer: %w", err))
+			}
+		}
+	}
 	return errors.Join(errs...)
+}
+
+// Newer is true when tag is a semantic version greater than current's; a
+// current that isn't one is older than any.
+func Newer(tag, current string) bool {
+	v, err := semver.NewVersion(tag)
+	if err != nil {
+		return false
+	}
+	c, err := semver.NewVersion(current)
+	return err != nil || v.GreaterThan(c)
 }
 
 // Fingerprint identifies the policy, so a pick made under another is redone.

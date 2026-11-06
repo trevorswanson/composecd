@@ -216,15 +216,21 @@ func New(c Controller, o Options) http.Handler {
 	act("POST /api/v1/apps/{name}/images/{service}/decision", func(r *http.Request, p *auth.Principal) (int, interface{}, error) {
 		var body struct {
 			Choice string `json:"choice"`
+			// Tag is the offered tag an upgrade or skip is about.
+			Tag string `json:"tag"`
 		}
 		if err := decode(r, &body); err != nil {
 			return 0, nil, err
 		}
-		if body.Choice != store.DecisionMemory && body.Choice != store.DecisionDismiss {
-			return 0, nil, badRequest("choice must be %s or %s", store.DecisionMemory, store.DecisionDismiss)
+		switch body.Choice {
+		case store.DecisionMemory, store.DecisionDismiss:
+			d, err := c.DecideImage(r.PathValue("name"), r.PathValue("service"), body.Choice, p.Name)
+			return http.StatusOK, d, err
+		case store.UpgradeApprove, store.UpgradeSkip:
+			u, err := c.DecideUpgrade(r.PathValue("name"), r.PathValue("service"), body.Choice, body.Tag, p.Name)
+			return http.StatusOK, u, err
 		}
-		d, err := c.DecideImage(r.PathValue("name"), r.PathValue("service"), body.Choice, p.Name)
-		return http.StatusOK, d, err
+		return 0, nil, badRequest("choice must be %s, %s, %s or %s", store.DecisionMemory, store.DecisionDismiss, store.UpgradeApprove, store.UpgradeSkip)
 	})
 	// Edits to the root repository: plan one to see its diff, then commit
 	// that plan with its token.
@@ -325,7 +331,8 @@ func (s *server) json(need auth.Role, h handler) http.HandlerFunc {
 			case errors.Is(err, store.ErrExists):
 				status = http.StatusConflict
 			case errors.Is(err, controller.ErrBusy), errors.Is(err, controller.ErrBlocked), errors.Is(err, controller.ErrAdoptionBlocked),
-				errors.Is(err, controller.ErrSelf), errors.Is(err, controller.ErrHostBusy), errors.Is(err, controller.ErrNotHeld),
+				errors.Is(err, controller.ErrSelf), errors.Is(err, controller.ErrHostBusy), errors.Is(err, controller.ErrNotHeld), errors.Is(err, controller.ErrNoOffer),
+				errors.Is(err, controller.ErrOfferChanged), errors.Is(err, controller.ErrNotUpgradable),
 				errors.Is(err, controller.ErrEditStale), errors.Is(err, controller.ErrNoChange):
 				status = http.StatusConflict
 			default:

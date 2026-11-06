@@ -145,14 +145,17 @@ const (
 	// EventWriteBackBlocked is an image update that can't be written to Git,
 	// held until an admin decides.
 	EventWriteBackBlocked = "write-back-blocked"
+	// EventImageAvailable is a newer tag an offer found, which waits for an
+	// admin to approve the upgrade.
+	EventImageAvailable = "image-available"
 )
 
 // AllEvents lists every notification event.
 var AllEvents = []string{EventSyncSucceeded, EventSyncFailed, EventHealed, EventPruned, EventHealthDegraded, EventOutOfSync, EventHostDown, EventImageUpdate, EventHostDisk,
-	EventWriteBackBlocked}
+	EventWriteBackBlocked, EventImageAvailable}
 
 // DefaultEvents are sent when a notifier lists none.
-var DefaultEvents = []string{EventSyncFailed, EventHealthDegraded, EventHostDown, EventPruned, EventHostDisk, EventWriteBackBlocked}
+var DefaultEvents = []string{EventSyncFailed, EventHealthDegraded, EventHostDown, EventPruned, EventHostDisk, EventWriteBackBlocked, EventImageAvailable}
 
 // Notifier types.
 var notifierTypes = map[string]bool{"webhook": true, "ntfy": true, "gotify": true, "discord": true, "slack": true}

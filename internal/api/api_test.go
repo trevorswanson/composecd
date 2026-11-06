@@ -170,6 +170,19 @@ func (s *stub) DecideImage(app, service, choice, user string) (*store.ImageDecis
 	return &store.ImageDecision{App: app, Service: service, Candidate: "1.27.3", Choice: choice, User: user}, nil
 }
 
+func (s *stub) DecideUpgrade(app, service, choice, tag, user string) (*store.ImageUpgrade, error) {
+	switch {
+	case app != "media":
+		return nil, fmt.Errorf("application %q: %w", app, controller.ErrNotFound)
+	case service != "web":
+		return nil, fmt.Errorf("%s/%s: %w", app, service, controller.ErrNoOffer)
+	case tag != "" && tag != "2.0.0":
+		return nil, fmt.Errorf("%s/%s: %w", app, service, controller.ErrOfferChanged)
+	}
+	s.calls = append(s.calls, fmt.Sprintf("upgrade %s/%s %s %s by %s", app, service, choice, tag, user))
+	return &store.ImageUpgrade{App: app, Service: service, Tag: "2.0.0", Choice: choice, User: user}, nil
+}
+
 // ImageUpdateCommit knows the commits starting with "c0de".
 func (s *stub) ImageUpdateCommit(sha string) bool { return strings.HasPrefix(sha, "c0de") }
 
@@ -292,6 +305,10 @@ func TestAPI(t *testing.T) {
 		{"POST", "/api/v1/apps/media/images/web/decision", `{"choice": "yolo"}`, 400, `choice must be`},
 		{"POST", "/api/v1/apps/media/images/db/decision", `{"choice": "memory"}`, 409, `no image update is held`},
 		{"POST", "/api/v1/apps/nope/images/web/decision", `{"choice": "memory"}`, 404, `not found`},
+		{"POST", "/api/v1/apps/media/images/web/decision", `{"choice": "upgrade", "tag": "2.0.0"}`, 200, `"choice": "upgrade"`},
+		{"POST", "/api/v1/apps/media/images/web/decision", `{"choice": "skip"}`, 200, `"tag": "2.0.0"`},
+		{"POST", "/api/v1/apps/media/images/web/decision", `{"choice": "upgrade", "tag": "3.0.0"}`, 409, `offered tag changed`},
+		{"POST", "/api/v1/apps/media/images/db/decision", `{"choice": "upgrade"}`, 409, `no upgrade is offered`},
 		{"GET", "/api/v1/operations/7", "", 200, `"log": "done"`},
 		{"GET", "/api/v1/operations/9", "", 404, `not found`},
 		{"GET", "/api/v1/operations/x", "", 400, `invalid operation id`},
@@ -313,7 +330,7 @@ func TestAPI(t *testing.T) {
 			t.Errorf("%s %s: %d %s, want %d containing %q", tc.method, tc.path, status, body, tc.status, tc.contains)
 		}
 	}
-	want := "operations media 5;sync media;sync busy;rollback media 2;pause media maintenance (by admin);resume media;refresh media;refresh all;check-images media;check-images ;decide media/web memory by admin;decide media/web dismiss by admin;operations  0;" +
+	want := "operations media 5;sync media;sync busy;rollback media 2;pause media maintenance (by admin);resume media;refresh media;refresh all;check-images media;check-images ;decide media/web memory by admin;decide media/web dismiss by admin;upgrade media/web upgrade 2.0.0 by admin;upgrade media/web skip  by admin;operations  0;" +
 		"host-object nas container loose false;host-object nas image docker.io/library/nginx:1 false;host-object nas image docker.io/library/nginx:1 false;" +
 		"host-object nas service web false;host-object nas container gone false;host-object nope container loose false"
 	if got := strings.Join(st.calls, ";"); got != want {
